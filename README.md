@@ -8,34 +8,34 @@ Open `Flua.app` and use **Discover** for local featured shelves or **Browse** to
 
 Use the inspector to adjust speed, dimming, volume, and image fit. Right-click a backdrop or use **Add to Playlist** to organize it. Create playlists with the **+** beside Playlists, then use **Playlist Options** for that playlist’s interval, shuffle mode, or duplication. Use the previous/next controls for navigation; right-click an item inside a playlist to move it earlier or later. Global rotation defaults, fullscreen pause, battery pause, Low Power Mode pause and login startup are in Settings. Text edits save when you press Return. Combine category, color, motion intensity, resolution and aspect filters in any library view; click inspector tags to open exact-tag results. The inspector shows source media facts and trimmed duration. Manage hidden tags in Settings → Blocked tags; this preserves files, playlists and playback assignments.
 
-The menu-bar drop icon provides pause/resume, next scene, stop, and quit. Closing the library window keeps wallpapers playing. **Stop** removes the selected desktop overlays. **Quit** removes every overlay and reveals your existing system wallpaper. Per-display selections restore the next time Flua opens.
+The menu-bar icon provides pause/resume, next scene in each active playlist, stop, and quit. Closing the library window keeps wallpapers playing. **Stop** removes the selected desktop overlays. **Quit** removes every overlay and reveals your existing system wallpaper. Saved display assignments restore the next time Flua opens.
 
 Data lives in `~/Library/Application Support/Flua/`. The bundle identifier is `local.flua.desktop`. All library data and settings are stored locally; the app does not connect to a remote service. Native fullscreen detection uses the system window inventory; display sleep and session lock pause playback. Procedural scenes render at up to 24 fps with a bounded drawing surface; CPU use varies by scene and display.
 
 ## Video editing and portable scenes
 
-Select an imported video and click **Edit and export video…**. Set the trim start/end, choose a thumbnail frame and edit scene metadata. **Save to library** keeps the source intact and saves the playback range. Export creates a new trimmed MP4, a preview of up to five seconds, or a PNG thumbnail. Quality presets select original resolution, 1080p, 720p or 480p; **Include audio** controls the exported audio track. Preview audio is muted.
+Select an imported video and click **Edit and export video…**. Set the trim start/end, choose a thumbnail frame and edit scene metadata. **Save to library** keeps the source intact and saves the playback range. Export writes a trimmed MP4, a preview of up to five seconds, or a PNG thumbnail. Quality presets use AVFoundation’s highest-quality, 1080p, 720p or 480p export settings; **Include audio** controls the exported audio track. Export does not apply the desktop speed, dimming, volume or fit settings. Preview audio is muted. MP4 and PNG exports preserve the source but can replace an existing destination selected in the save dialog.
 
 **Export scene package…** creates a new `.flua` folder with the edited video, thumbnail and a JSON manifest. It can be imported into another Flua library. Existing destination folders are preserved. Packages use a JSON manifest that identifies the video asset and scene metadata.
 
 ## Scope
 
-| Capability                                                  | Included                                                                       |
-| ----------------------------------------------------------- | ------------------------------------------------------------------------------ |
-| Loop local videos and display images                        | Yes; formats supported by macOS                                                |
-| Unlimited local scenes, combined filters, tags, favorites             | Yes                                                                            |
-| Original animated scenes                                    | Aurora, cosmos, ocean, ember                                                   |
-| Named playlists, per-playlist timing/shuffle, history, reorder | Yes                                                                         |
-| Video trim, metadata, thumbnail, MP4/preview export         | Yes; audio preservation and removal tested                                     |
-| Video manifest import and portable scene export             | Yes; runtime scene kinds remain unsupported                                    |
-| Independent display selection, persistent display identity  | Yes; one display tested on this host                                           |
-| Speed, dimming, volume, fit/fill                            | Yes                                                                            |
-| Sleep/lock/fullscreen/battery pause controls                | Implemented; real sleep/lock/battery transitions not simulated in verification |
-| Menu bar and start at login                                 | Implemented; login registration left to user, not enabled during tests         |
-| Native animated Lock Screen provider                        | Standalone experimental image/video provider; system activation unverified     |
-| System-audio-reactive, Rive, or Metal scene editor          | No                                                                             |
+| Capability | Included |
+|---|---|
+| Loop local videos and display images | Yes; formats supported by macOS |
+| Unlimited local scenes, combined filters, tags, favorites | Yes |
+| Original animated scenes | Aurora, cosmos, ocean, ember |
+| Named playlists, per-playlist timing/shuffle, history, reorder | Yes |
+| Video trim, metadata, thumbnail, MP4/preview export | Yes; audio preservation and removal covered by smoke tests |
+| Video manifest import and portable scene export | Yes; runtime scene kinds remain unsupported |
+| Independent display selection, persistent display identity | Yes; one display tested on this host |
+| Speed, dimming, volume, fit/fill | Yes |
+| Sleep/lock/fullscreen/battery pause controls | Implemented; real sleep/lock/battery transitions not simulated in verification |
+| Menu bar and start at login | Implemented; login registration left to user, not enabled during tests |
+| Native animated Lock Screen provider | Experimental: test-video motion verified on the real Lock Screen on macOS 27.0.1; library and setup UI not connected |
+| System-audio-reactive, Rive, or Metal scene editor | No |
 
-Flua renders desktop wallpapers in click-through windows. A separate experimental image/video provider uses private macOS wallpaper interfaces. Its standalone tests exercise requests, rendering, snapshots and settings, while system-host activation and library integration remain unfinished. See [feature status](docs/FEATURES.md) and the [provider documentation](experimental/WallpaperExtension/README.md).
+Flua renders desktop wallpapers in click-through windows. A separate experimental image/video provider uses private macOS wallpaper interfaces. Real-host selection, scoped media access, video looping and visible Lock Screen motion were verified on macOS 27.0.1. The prototype is not installed by Flua, and library integration and setup controls remain unfinished. See [feature status](docs/FEATURES.md) and the [provider documentation](experimental/WallpaperExtension/README.md).
 
 ## Build and verify
 
@@ -57,7 +57,7 @@ open -n build/Flua.app --args \
   --smoke-test /absolute/path/to/fresh-test-results
 ```
 
-Results are saved as `smoke-results.json` and library/editor window screenshots. Screenshots fall back to drawing the app’s own view when this test app lacks screen-capture access; no screen-capture permission is requested. The verified run checked actual AVFoundation playback, repeated video loops, pause/resume, image/video import, all four scene types, desktop window visibility and mouse pass-through, cleanup, unchanged system wallpaper, persistence, trimmed playback/export, audio inclusion/removal, scene package roundtrip, thumbnail export and editor presentation. Library checks also cover import facts, rotated video dimensions, legacy metadata backfill, combined filters, clickable tags and blocked-tag visibility in Discover. Fresh results are generated under `build/verification/`.
+Results are saved as `smoke-results.json` and library/editor window screenshots. Screenshots fall back to drawing the app’s own view when this test app lacks screen-capture access; no screen-capture permission is requested. The smoke runner checks actual AVFoundation playback, repeated video loops, pause/resume, image/video import, all four scene types, desktop window visibility and mouse pass-through, cleanup, unchanged system wallpaper, persistence, trimmed playback/export, audio inclusion/removal, scene package roundtrip, thumbnail export and editor presentation. Library checks also cover import facts, rotated video dimensions, legacy metadata backfill, combined filters, clickable tags and blocked-tag visibility in Discover. `make smoke` generates fresh results under `build/verification/`; a manual launch writes them to the supplied results directory.
 
 Physical multi-monitor behavior, real fullscreen transitions, automatic sleep/wake, battery transitions, and login startup still need real-world validation. The app uses public macOS desktop-window APIs, so OS changes can affect how Spaces or desktop icons interact with overlays.
 

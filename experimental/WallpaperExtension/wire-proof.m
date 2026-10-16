@@ -9,6 +9,7 @@
 - (void)snapshotWithId:(id)identifier reply:(void (^)(id, NSError *))reply;
 - (void)provideSettingsViewModelsWithContentTypes:(id)types reply:(void (^)(id, NSError *))reply;
 - (void)invalidateWithId:(id)identifier reply:(void (^)(NSError *))reply;
+- (void)isChoiceDownloadedWith:(id)choice reply:(void (^)(NSNumber *, NSError *))reply;
 @end
 
 @interface WireCoder : NSCoder
@@ -96,6 +97,7 @@ int main(void) {
         __block dispatch_semaphore_t pending = dispatch_semaphore_create(0);
         __block NSString *failure = @"";
         __block BOOL acquired = NO, updated = NO, snapshotted = NO, catalog = NO, invalidated = NO;
+        __block BOOL downloaded = NO;
         id<FSWireProxy> proxy = [client remoteObjectProxyWithErrorHandler:^(NSError *error) {
             failure = error.description;
             dispatch_semaphore_signal(pending);
@@ -167,9 +169,21 @@ int main(void) {
                               }];
             complete = Wait(pending);
         }
+        if (complete && catalog) {
+            pending = dispatch_semaphore_create(0);
+            NSDictionary *choice = FSSettingsModel()[@"desktop"][@"groups"][0][@"items"][0][@"choice"][@"id"];
+            [proxy isChoiceDownloadedWith:Box(@"WallpaperChoiceIDXPC", @"WallpaperChoiceID", choice)
+                                    reply:^(NSNumber *value, NSError *error) {
+                                        downloaded = error == nil && [value isKindOfClass:NSNumber.class] && value.boolValue;
+                                        if (!downloaded)
+                                            failure = error.description ?: @"Invalid download status";
+                                        dispatch_semaphore_signal(pending);
+                                    }];
+            complete = Wait(pending);
+        }
         [client invalidate];
         [listener invalidate];
-        BOOL ok = complete && acquired && updated && snapshotted && catalog && invalidated;
+        BOOL ok = complete && acquired && updated && snapshotted && catalog && invalidated && downloaded;
         if (!complete && failure.length == 0)
             failure = @"Timed out";
         NSDictionary *result = @{
@@ -178,6 +192,7 @@ int main(void) {
             @"updateLockedSuspendedRoundtrip" : @(updated),
             @"snapshotSurfaceRoundtrip" : @(snapshotted),
             @"settingsCatalogRoundtrip" : @(catalog),
+            @"downloadStatusRoundtrip" : @(downloaded),
             @"invalidateRoundtrip" : @(invalidated),
             @"failure" : failure,
             @"systemActivationPerformed" : @NO

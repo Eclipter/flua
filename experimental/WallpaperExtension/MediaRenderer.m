@@ -20,6 +20,7 @@
 @property BOOL suspended;
 @property BOOL disposed;
 @property NSString *fit;
+@property BOOL reportedPlaybackFailure;
 @end
 @implementation FSMediaRenderer
 - (instancetype)initWithWidth:(NSUInteger)width height:(NSUInteger)height configuration:(NSDictionary *)configuration
@@ -124,9 +125,18 @@
     _layer.contents=nil; _layer.contents=(__bridge id)_surface;
     [CATransaction commit]; [CATransaction flush];
     _frameCount++;
+    if (_frameCount == 2 || _frameCount == 90)
+        NSLog(@"Flua frames=%lu loops=%ld time=%.3f scopedFiles=%lu activeScopes=%lu",
+              (unsigned long)_frameCount, (long)self.loopCount, self.playbackTime,
+              (unsigned long)self.scopedFileCount, (unsigned long)self.activeScopeCount);
 }
 - (void)tick {
     if (_disposed || _suspended) return;
+    if (!_reportedPlaybackFailure && _player.currentItem.status == AVPlayerItemStatusFailed) {
+        _reportedPlaybackFailure = YES;
+        NSError *error = _player.currentItem.error;
+        NSLog(@"Flua playback failed: %@ (%ld)", error.domain, (long)error.code);
+    }
     // AVPlayerLooper does not preserve template output attachments on every clone.
     // Attach an independent output to each item as it becomes current.
     AVPlayerItemVideoOutput *output;

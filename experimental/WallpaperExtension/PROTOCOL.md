@@ -1,6 +1,6 @@
 # Wallpaper provider protocol
 
-This document describes the experimental provider implementation and its standalone tests. It uses private macOS framework interfaces; system-host activation remains unverified.
+This document describes the experimental provider implementation and its standalone tests. It uses private macOS framework interfaces. Real-host selection, scoped fixture access, looping video and Lock Screen motion passed on the tested OS; library integration and broader system validation remain unfinished. See the [feasibility result and restoration procedure](README.md#real-host-feasibility-result).
 
 ## Entrypoint and connection
 
@@ -13,11 +13,11 @@ The extension plist declares:
 <dict><key>EXExtensionPointIdentifier</key><string>com.apple.wallpaper</string></dict>
 ```
 
-Public `ExtensionFoundation.AppExtension` supplies `main()`. Its configuration can be `ConnectionHandler(onConnection:)`. The handler loads the system WallpaperExtensionKit, obtains the runtime protocol named `WallpaperExtensionKit.WallpaperExtensionXPCProtocol`, and constructs `NSXPCInterface` from it.
+Public `ExtensionFoundation.AppExtension` supplies Swift `main()`, but the executable must start at `_NSExtensionMain` to bootstrap ExtensionFoundation first. The build passes `-Xlinker -e -Xlinker _NSExtensionMain` and retains the Swift entrypoint. `verify-entrypoint.sh` checks both symbols. The Swift configuration uses `ConnectionHandler(onConnection:)`. The handler loads the system WallpaperExtensionKit, obtains the runtime protocol named `WallpaperExtensionKit.WallpaperExtensionXPCProtocol`, and constructs `NSXPCInterface` from it.
 
-The prototype exports an object implementing the protocol selectors and supplies allowed secure-coding classes for the five tested methods. It resumes each accepted connection. Registration, sandbox/team entitlement acceptance, host audit validation, and system selection are separate steps and remain untested.
+The prototype exports an object implementing the protocol selectors and supplies allowed secure-coding classes for the core lifecycle methods. It resumes each accepted connection. A disposable sandbox-signed copy inside a Launch Services-registered app passed WallpaperAgent selection, rendering and lock/unlock updates after correcting the executable entrypoint and download-status reply. Explicit host audit validation is not implemented.
 
-The prototype has an ad-hoc signature. Sandbox entitlements and host authorization still need validation.
+The default build has an ad-hoc signature without sandbox entitlements and is rejected by PlugInKit. The disposable host checks added only `com.apple.security.app-sandbox`; that allowed registration and rendering in a recognized containing app. External image/video access was granted through host-supplied file wrappers, without a broad file-access entitlement.
 
 ## Core selectors and reply blocks
 
@@ -36,11 +36,15 @@ These signatures passed the anonymous-XPC integration test:
                     reply:(void (^)(NSError *error))reply;
 - (void)provideSettingsViewModelsWithContentTypes:(id)types
                                             reply:(void (^)(id models, NSError *error))reply;
+- (void)isChoiceDownloadedWith:(id)choice
+                         reply:(void (^)(NSNumber *downloaded, NSError *error))reply;
 ```
 
 Raw Objective-C protocol encodings for acquire/update are `v40@0:8@16@24@?32`; snapshot/invalidate/settings are `v32@0:8@16@?24`. The generic block encoding does not establish its arguments by itself; the reply signatures above are exercised by the serialization tests.
 
 The protocol also declares choice-download, choice-add/remove, migration, shuffle, debug, and notification methods. The prototype responds with explicit minimal/no-op/unsupported results for them. Those auxiliary request classes and callbacks have not all been exercised over XPC.
+
+`isChoiceDownloadedWith:reply:` takes `WallpaperChoiceIDXPC` and returns a boxed `NSNumber`, not a primitive `BOOL`. The runtime interface reports the reply signature `v@?@"NSNumber"@"NSError"`. Returning primitive `YES` made NSXPC treat address `0x1` as an object and crash during system selection. The wire test now transfers a real choice ID and verifies the boxed true result; the old implementation fails that test with `SIGSEGV`.
 
 The proxy-side protocol includes `pingWithId:`, `updateSettingsViewModels:reply:`, `requestReadOnlyAccessTo:reply:`, and `invalidateSnapshotsWithReply:`. The prototype does not yet use those host callbacks.
 
@@ -51,13 +55,14 @@ Apple's concrete wrapper classes expose `initWithCoder:` and `encodeWithCoder:`.
 | Wrapper class | NSCoder key | Stored value |
 | --- | --- | --- |
 | `WallpaperIDXPC` | `WallpaperID` | NSData containing JSON `{"id":"UUID"}` |
+| `WallpaperChoiceIDXPC` | `WallpaperChoiceID` | NSData containing the JSON choice ID and descriptor |
 | `WallpaperUpdateRequestXPC` | `WallpaperUpdateRequest` | NSData containing update JSON |
 | `WallpaperRemoteContextXPC` | `UInt32` | NSData containing a JSON number, the CAContext ID |
 | `WallpaperSettingsViewModelsXPC` | `WallpaperSettingsViewModels` | NSData containing catalog JSON |
 | `WallpaperCreationRequestXPC` | `files`, `cacheDirectory`, `codable` | Array of `NSSecurityScopedURLWrapper`, optional wrapper, NSData containing creation JSON |
 | `WallpaperSnapshotXPC` | `surface` | XPC object created by `IOSurfaceCreateXPCObject` |
 
-The JSON wrappers roundtripped successfully through Apple's real decoders. They use JSON, not a property list. `WallpaperCreationRequestXPC` was initially exercised with an empty file array and no cache directory. The later media test also supplies a real `NSSecurityScopedURLWrapper` per image/video URL, verifies its roundtrip and keeps the wrapper alive until invalidation. Its `startAccessingSecurityScopedResource` leases are balanced on cleanup. This standalone unsandboxed test does not establish authorization in the real extension sandbox.
+The JSON wrappers use JSON, not a property list. The anonymous-XPC test exercises `WallpaperCreationRequestXPC` with an empty file array and no cache directory. The direct media test supplies a real `NSSecurityScopedURLWrapper` per image/video URL, checks that encoding the creation request exposes one file URL and that the renderer retains one wrapper until invalidation. Its `startAccessingSecurityScopedResource` leases are balanced on cleanup. A separate real-host probe advertised external fixture URLs in the choice descriptor's `files` array and selected `fileIndex:0`. Direct reading before transfer was denied; host-created image/video sessions then reported one wrapper and one active scope, with video reaching 90 rendered frames and three loops.
 
 Snapshot decoding specifically expects an `NSXPCCoder` and calls `decodeXPCObjectForKey:` for `surface`. A small `NSXPCCoder` subclass can supply that XPC object to construct Apple's real snapshot wrapper. On the receiving side `encodeWithCoder:` exposes the same object, and `IOSurfaceLookupFromXPCObject` recovers its dimensions. This was verified over the anonymous connection.
 
@@ -94,9 +99,11 @@ The prototype preserves supplied size as the layer/surface dimensions. How all r
 
 Acquire reads the opaque identifier and creation JSON, allocates a BGRA IOSurface, fills an original gradient, and assigns it to `CALayer.contents`. It calls `+[CAContext remoteContextWithOptions:]`, sets the root layer, flushes the transaction, reads `contextId`, and replies with `WallpaperRemoteContextXPC` containing that UInt32.
 
-The standalone context proof returned a valid context and nonzero ID, with its IOSurface attached. It invalidated the context afterwards. This confirms local remote-context construction, not that WindowServer displayed it on the lock screen.
+The standalone context proof returned a valid context and nonzero ID, with its IOSurface attached. It invalidated the context afterwards. Separately, WallpaperAgent acquired real desktop and preview contexts and snapshots; the user confirmed visible video motion during an actual Lock Screen test.
 
-A session retains its context and layer. Update stores the presentation mode and changes layer speed for suspension. Snapshot wraps the retained surface. Invalidation releases the session and calls `CAContext.invalidate`. These handlers run on the main queue. `MediaRenderer.m` now feeds original image and video frames into the destination surface using CIContext and AVPlayerItemVideoOutput. It attaches a video output to each AVPlayerLooper clone as that item becomes current; output attachments cannot be assumed to survive cloning. Image fitting and video orientation are handled explicitly. The media tests verify changed pixel checksums, multiple frames, at least one loop, stable paused frames, resumption and scope cleanup.
+A session retains its context and layer. Update stores the presentation mode, changes layer speed and suspends or resumes the media renderer. It does not resize the destination surface or apply updated scale, color space or appearance. Snapshot wraps the retained surface. Invalidation disposes the renderer and removes the session; session deallocation calls `CAContext.invalidate`. These handlers run on the main queue. `MediaRenderer.m` feeds original image and video frames into the destination surface using CIContext and AVPlayerItemVideoOutput. It attaches a video output to each AVPlayerLooper clone as that item becomes current; output attachments cannot be assumed to survive cloning. Image fitting and video orientation are handled explicitly. The media tests check changed video pixel checksums, multiple frames, at least one loop, stable paused frames, resumption and scope cleanup.
+
+The prototype logs acquired contexts, numeric locked/idle/suspended flags, frame/loop counts and scope counts without media paths. Frame progress is logged only at frames 2 and 90, and a failed player item is logged once. These diagnostics distinguish a delivered first frame from continued playback during host checks.
 
 ## Settings catalog
 
@@ -104,13 +111,13 @@ A nonempty desktop and screen-saver model successfully decoded and roundtripped 
 
 An item contains `id:{"id":"..."}`, `groupID`, `localizedName`, thumbnail `{"image":{"url":"file:///...png"}}`, `choice`, `contentBadge:{"none":{}}`, `showInTopLevel`, `sortOrder`, `disposability:{"none":{}}`, and an empty context menu. The choice contains `id:{"descriptor":{"provider":"org.flua.wallpaper.prototype","files":[],"configuration":""}}`, `localizedDescription`, thumbnail, `isDownloaded:true`, and `options:[]`.
 
-`FSSettingsModel()` is the exact executable example. The decoder accepted the object, and the receiving test found one desktop group and one screen-saver group. This does not prove that System Settings rendered, selected, or correctly themed the catalog. Live catalog refresh, host permission callbacks, previews, video thumbnails, and persistent choices remain untested.
+`FSSettingsModel()` is the exact executable example. The decoder accepted the object, and the receiving test found one desktop group and one screen-saver group. Real-host checks displayed and selected the fixtures, delivered snapshots and created desktop and idle-preview contexts. Theme correctness, live catalog refresh callbacks, video thumbnails and durable production choices remain untested.
 
-## Remaining integration work
+## Integration status
 
-1. Validate the separately signed bundle with the real extension host, without replacing another provider's selection.
-2. Establish the correct Flua signing/entitlement/registration setup and inspect any host rejection.
+1. System selection and frame delivery passed for the original fixtures on the tested OS.
+2. Sandboxed access passed for external image/video fixtures using the host's file wrappers.
 3. Connect the main Flua library and catalog refresh to the implemented image/video provider sessions.
-4. Verify actual desktop, locked, idle, screen-saver, preview, multi-display, sleep/wake, and Retina/HDR behavior.
-5. Implement settings refresh callbacks and real content choices, including real sandbox authorization and nonempty file transfer through the system host.
+4. Expand beyond the observed host rendering and brief Lock Screen test: verify actual idle/screen-saver transitions, long-duration locking, multi-display, sleep/wake, and Retina/HDR behavior.
+5. Implement settings refresh callbacks and durable library choices using the demonstrated file-wrapper access.
 6. Add recovery and restoration only after their state transitions are observed and independently tested.

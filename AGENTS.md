@@ -13,6 +13,7 @@
 - `Library.swift`: library operations, persistence coordination, imports, and playback actions.
 - `Model.swift`: Codable state and playlist behavior.
 - `LibraryPaths.swift`: application-support directory resolution.
+- `MediaFacts.swift`: local image/video inspection and thumbnail color classification.
 - `Engine.swift`: per-display desktop windows and AVFoundation playback.
 - `SceneView.swift`: built-in procedural scenes.
 - `Editor.swift`: video preview and export.
@@ -26,11 +27,12 @@
 - Preserve backward compatibility for persisted Codable data. Existing libraries must continue to load without migration-related data loss.
 - Treat file paths, manifests, and ZIP contents as untrusted input. Keep path-containment and archive validation at import boundaries.
 - Never use a developer's real `~/Library/Application Support/Flua/` data for tests. Use a new disposable directory with `--data-dir`.
-- Preserve source media during import and editing. Export to a new destination and do not overwrite an existing destination unless the task explicitly changes that behavior.
+- Preserve source media during import, editing and export. Replacing an existing export destination is allowed with explicit user consent, such as confirmation in the save dialog. Never replace files silently.
 - Keep UI and user-facing documentation in English, matching the existing application.
 - Follow `.editorconfig`: four spaces in Swift, tabs in `Makefile`, LF endings, and a final newline.
 - Do not edit generated `.build/`, `build/`, `dist/`, or `experimental/**/Built/` artifacts.
-- Do not commit, push, notarize, register login items, or activate the experimental system provider unless explicitly requested.
+- Do not commit, push, notarize, or register login items unless explicitly requested.
+- Reversible OS integration checks are authorized when needed to implement or verify the requested task, including temporary registration, selection and activation of the experimental system provider. No separate confirmation is needed for these checks. Use disposable fixtures, record the affected system settings and establish a rollback procedure before changing them, then restore the previous settings and registration state on completion or failure. Ask before irreversible changes or when reliable restoration cannot be established.
 
 ## Validation
 

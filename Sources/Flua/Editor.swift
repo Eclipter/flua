@@ -354,7 +354,7 @@ extension Library {
         let thumbnailTime = min(max(0, edit.thumbnail - edit.start), max(0, clip.duration.seconds - 1.0 / 600))
         try await VideoTools.thumbnail(source: video, time: thumbnailTime).write(to: staging.appendingPathComponent("thumbnail.png"))
         let metadata = wallpaper.metadata ?? SceneMetadata()
-        let manifest: [String: Any] = ["type": "video", "title": wallpaper.title, "details": metadata.details, "categoryIdentifier": metadata.category, "linkTitle": metadata.creditTitle, "linkURL": metadata.creditURL, "color": wallpaper.color, "motionIntensity": wallpaper.motion, "tags": normalizedTags(wallpaper.tags), "files": ["asset": "asset.mp4", "largeThumbnail": "thumbnail.png"], "thumbnailTimestamp": thumbnailTime, "duration": clip.duration.seconds, "createdBy": "Flua 1.1"]
+        let manifest: [String: Any] = ["type": "video", "title": wallpaper.title, "details": metadata.details, "categoryIdentifier": metadata.category, "linkTitle": metadata.creditTitle, "linkURL": metadata.creditURL, "color": wallpaper.color, "motionIntensity": wallpaper.motion, "tags": normalizedTags(wallpaper.tags), "files": ["asset": "asset.mp4", "largeThumbnail": "thumbnail.png"], "thumbnailTimestamp": thumbnailTime, "duration": clip.duration.seconds, "createdBy": "Flua 1.2"]
         try JSONSerialization.data(withJSONObject: manifest, options: [.prettyPrinted, .sortedKeys]).write(to: staging.appendingPathComponent("manifest.json"))
         try fm.moveItem(at: staging, to: destination)
     }

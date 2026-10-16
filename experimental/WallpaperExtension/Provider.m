@@ -262,6 +262,9 @@ NSDictionary *FSInspectSettings(id settings) { return FSJSON(settings, @"Wallpap
             return;
         }
         self.sessions[[self key:ident]] = s;
+        NSLog(@"Flua acquired locked=%d idle=%d preview=%d context=%u frames=%lu scopedFiles=%lu activeScopes=%lu",
+              [s.mode isEqual:@"locked"], [s.mode isEqual:@"idle"], [payload[@"isPreview"] boolValue], cid, (unsigned long)renderer.frameCount,
+              (unsigned long)renderer.scopedFileCount, (unsigned long)renderer.activeScopeCount);
         reply(box, nil);
     } @catch (NSException *e) {
         reply(nil, FSError(e.reason));
@@ -284,6 +287,9 @@ NSDictionary *FSInspectSettings(id settings) { return FSJSON(settings, @"Wallpap
     BOOL suspended = p[@"activityState"][@"suspended"] != nil;
     s.root.speed = suspended ? 0 : 1;
     [s.renderer setPlaybackSuspended:suspended];
+    NSLog(@"Flua updated locked=%d idle=%d suspended=%d frames=%lu loops=%ld",
+          [s.mode isEqual:@"locked"], [s.mode isEqual:@"idle"], suspended,
+          (unsigned long)s.renderer.frameCount, (long)s.renderer.loopCount);
     reply(nil);
 }
 - (void)invalidateWithId:(id)ident reply:(void (^)(NSError *))reply {
@@ -337,8 +343,8 @@ NSDictionary *FSInspectSettings(id settings) { return FSJSON(settings, @"Wallpap
 - (void)invokeContextMenuActionWithMenuItemID:(id)item groupItemID:(id)group reply:(void (^)(NSError *))reply {
     reply(FSError(@"No context-menu actions"));
 }
-- (void)isChoiceDownloadedWith:(id)choice reply:(void (^)(BOOL, NSError *))reply {
-    reply(YES, nil);
+- (void)isChoiceDownloadedWith:(id)choice reply:(void (^)(NSNumber *, NSError *))reply {
+    reply(@YES, nil);
 }
 - (id)downloadWithChoiceID:(id)choice reply:(void (^)(NSError *))reply {
     reply(nil);
