@@ -41,9 +41,9 @@ Repeat `make native-test` after provider changes before running host checks. Tem
 
 ## 4. Connect the library to the provider and System Settings
 
-1. Publish a small versioned local catalog containing stable IDs, configuration, thumbnails and references to durable library-owned assets. Write it atomically instead of exposing partially saved application state.
-2. Give the provider the read access proven in step 1. Validate catalog versions, IDs and asset containment, and obtain media access through the host's supported file-wrapper mechanism.
-3. Populate the desktop and screen-saver catalogs from eligible library entries. Respect blocked tags and reflect imports, metadata edits and removals through host refresh callbacks.
+1. Publish a small versioned local catalog containing stable IDs, configuration, thumbnails and references to durable library-owned assets. Write it atomically instead of exposing partially saved application state. **Done.** `catalog.json` is written beside `library.json`. It lists image and video files under `Media/`, and omits procedural scenes, blocked tags and unsafe filenames. Video rows still use the prototype thumbnail.
+2. Give the provider the read access proven in step 1. Validate catalog versions, IDs and asset containment, and obtain media access through the host's supported file-wrapper mechanism. Validation and file-wrapper playback are implemented for a harness-supplied catalog. The sandboxed provider still cannot read the live library directory. On macOS 27.0.1 a disposable registration was visible to PlugInKit, but WallpaperAgent did not request the catalog, and writing a choice into `Index.plist` by hand was ignored. The wallpaper store was restored.
+3. Populate the desktop and screen-saver catalogs from eligible library entries. Respect blocked tags and reflect imports, metadata edits and removals through host refresh callbacks. Video entries now use the host's video badge so a selection can play on the Lock Screen; still entries stay desktop-only. A new host selection with that badge has not been observed.
 4. Resolve per-display desktop/Lock Screen choices and host idle requests without adding a third independent assignment surface unless required by the host.
 5. Keep selected assets and configurations available after Flua exits. Handle missing media, stale choices and incompatible catalog data with a usable still fallback or a recoverable error.
 

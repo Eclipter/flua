@@ -32,10 +32,10 @@ Select an imported video and click **Edit and export video…**. Set the trim st
 | Speed, dimming, volume, fit/fill | Yes |
 | Sleep/lock/fullscreen/battery pause controls | Implemented; real sleep/lock/battery transitions not simulated in verification |
 | Menu bar and start at login | Implemented; login registration left to user, not enabled during tests |
-| Native animated Lock Screen provider | Experimental: test-video motion verified on the real Lock Screen on macOS 27.0.1; library and setup UI not connected |
+| Native animated Lock Screen provider | Experimental: test-video motion verified on the real Lock Screen on macOS 27.0.1. Flua writes a local image/video catalog; the provider and setup UI are not installed or connected |
 | System-audio-reactive, Rive, or Metal scene editor | No |
 
-Flua renders desktop wallpapers in click-through windows. A separate experimental image/video provider uses private macOS wallpaper interfaces. Real-host selection, scoped media access, video looping and visible Lock Screen motion were verified on macOS 27.0.1. The prototype is not installed by Flua, and library integration and setup controls remain unfinished. See [feature status](docs/FEATURES.md) and the [provider documentation](experimental/WallpaperExtension/README.md).
+Flua renders desktop wallpapers in click-through windows. A separate experimental image/video provider uses private macOS wallpaper interfaces. Real-host selection, scoped media access, video looping and visible Lock Screen motion were verified on macOS 27.0.1. The prototype is not installed by Flua. A library save writes `catalog.json` for image and video files; setup controls and Lock Screen selection remain unfinished. See [feature status](docs/FEATURES.md) and the [provider documentation](experimental/WallpaperExtension/README.md).
 
 ## Build and verify
 
