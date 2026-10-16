@@ -125,16 +125,71 @@ static NSError *FSError(NSString *message) {
                                code:1
                            userInfo:@{NSLocalizedDescriptionKey : message}];
 }
+static NSString *FSProviderIdentifier(void) {
+    NSString *ident = NSBundle.mainBundle.bundleIdentifier;
+    return ident.length ? ident : @"org.flua.wallpaper.prototype";
+}
+static NSString *FSEncodeConfiguration(NSDictionary *configuration) {
+    return [[NSJSONSerialization dataWithJSONObject:configuration options:0 error:nil] base64EncodedStringWithOptions:0] ?: @"";
+}
+// A library file is accepted only as Media/<name> inside the catalog root.
+// shortcut: rows reuse the bundled prototype thumbnail, replace it when still frames exist.
+static NSURL *FSContainedMediaURL(NSString *root, NSString *relative) {
+    if (![relative isKindOfClass:NSString.class] || relative.length < 7 || ![relative hasPrefix:@"Media/"]) return nil;
+    if ([relative rangeOfString:@".."].location != NSNotFound || [relative containsString:@"//"]) return nil;
+    NSString *name = relative.lastPathComponent;
+    if (!name.length || [name isEqual:@"."] || [name isEqual:@".."]) return nil;
+    if (![relative isEqualToString:[@"Media" stringByAppendingPathComponent:name]]) return nil;
+    NSString *media = [root.stringByStandardizingPath stringByAppendingPathComponent:@"Media"];
+    NSString *full = [media stringByAppendingPathComponent:name].stringByStandardizingPath;
+    if (![full hasPrefix:[media.stringByStandardizingPath stringByAppendingString:@"/"]]) return nil;
+    return [NSURL fileURLWithPath:full];
+}
+static NSArray *FSLibraryChoices(NSString **directRead) {
+    NSString *path = NSProcessInfo.processInfo.environment[@"FLUA_CATALOG"];
+    BOOL bundled = NO;
+    if (!path.length) {
+        path = [NSBundle.mainBundle URLForResource:@"catalog" withExtension:@"json"].path;
+        bundled = path.length > 0;
+    }
+    NSData *data = path.length ? [NSData dataWithContentsOfFile:path] : nil;
+    NSDictionary *json = data ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
+    if (![json isKindOfClass:NSDictionary.class] || [json[@"version"] integerValue] != 1 || ![json[@"items"] isKindOfClass:NSArray.class])
+        return @[];
+    NSString *parent = path.stringByDeletingLastPathComponent.stringByStandardizingPath;
+    NSString *root = json[@"root"];
+    if ([root isKindOfClass:NSString.class] && root.length) {
+        if (![root hasPrefix:@"/"] || [root rangeOfString:@".."].location != NSNotFound) return @[];
+        root = root.stringByStandardizingPath;
+        if (!bundled && ![root isEqualToString:parent]) return @[];
+    } else root = parent;
+    NSMutableArray *choices = NSMutableArray.new;
+    for (id entry in json[@"items"]) {
+        if (![entry isKindOfClass:NSDictionary.class]) continue;
+        NSString *kind = entry[@"kind"], *ident = entry[@"id"], *title = entry[@"title"];
+        if (![kind isEqual:@"image"] && ![kind isEqual:@"video"]) continue;
+        if (![ident isKindOfClass:NSString.class] || !ident.length) continue;
+        if (![title isKindOfClass:NSString.class] || !title.length) title = ident;
+        NSURL *file = FSContainedMediaURL(root, entry[@"file"]);
+        if (!file) continue;
+        [choices addObject:@{@"id" : ident, @"title" : title, @"kind" : kind, @"url" : file,
+                             @"fit" : [entry[@"fit"] isEqual:@"fit"] ? @"fit" : @"fill"}];
+    }
+    if (directRead && choices.count)
+        *directRead = [[NSFileManager defaultManager] isReadableFileAtPath:[choices[0][@"url"] path]] ? @"yes" : @"no";
+    return choices;
+}
 NSDictionary *FSSettingsModel(void) {
     NSURL *thumbnail = [NSBundle.mainBundle URLForResource:@"PrototypeThumbnail" withExtension:@"png"];
     if (!thumbnail)
         thumbnail = [[NSBundle.mainBundle.executableURL URLByDeletingLastPathComponent]
             URLByAppendingPathComponent:@"PrototypeThumbnail.png"];
     NSDictionary *image = @{@"image" : @{@"url" : thumbnail.absoluteString ?: @""}};
+    NSString *provider = FSProviderIdentifier();
     NSDictionary *choice = @{
         @"id" : @{
             @"descriptor" :
-                @{@"provider" : @"org.flua.wallpaper.prototype", @"files" : @[], @"configuration" : @""}
+                @{@"provider" : provider, @"files" : @[], @"configuration" : @""}
         },
         @"localizedDescription" : @"Original Flua procedural gradient",
         @"thumbnail" : image,
@@ -157,17 +212,34 @@ NSDictionary *FSSettingsModel(void) {
     for (NSString *kind in @[@"image",@"video"]) {
         NSString *name=[kind isEqual:@"video"] ? @"Flua Motion" : @"Flua Still";
         NSDictionary *configuration=@{@"version":@1,@"kind":kind,@"source":@"bundle",@"fit":@"fill"};
-        NSString *encoded=[[NSJSONSerialization dataWithJSONObject:configuration options:0 error:nil] base64EncodedStringWithOptions:0];
+        NSString *encoded=FSEncodeConfiguration(configuration);
         NSMutableDictionary *mediaChoice=[choice mutableCopy];
-        mediaChoice[@"id"]=@{@"descriptor":@{@"provider":@"org.flua.wallpaper.prototype",@"files":@[],@"configuration":encoded}};
+        mediaChoice[@"id"]=@{@"descriptor":@{@"provider":provider,@"files":@[],@"configuration":encoded}};
         mediaChoice[@"localizedDescription"]=name;
         NSMutableDictionary *mediaItem=[item mutableCopy];
         mediaItem[@"id"]=@{@"id":[@"org.flua.prototype." stringByAppendingString:kind]};
         mediaItem[@"localizedName"]=name;
         mediaItem[@"choice"]=mediaChoice;
         mediaItem[@"sortOrder"]=@(items.count);
+        // The settings host plays a `video` badge on the Lock Screen. `none` stays on the desktop only.
+        if ([kind isEqual:@"video"]) mediaItem[@"contentBadge"]=@{@"video":@{}};
         [items addObject:mediaItem];
     }
+    NSString *directRead = nil;
+    for (NSDictionary *library in FSLibraryChoices(&directRead)) {
+        NSString *encoded = FSEncodeConfiguration(@{@"version":@1,@"kind":library[@"kind"],@"fileIndex":@0,@"fit":library[@"fit"]});
+        NSMutableDictionary *mediaChoice=[choice mutableCopy];
+        mediaChoice[@"id"]=@{@"descriptor":@{@"provider":provider,@"files":@[((NSURL *)library[@"url"]).absoluteString],@"configuration":encoded}};
+        mediaChoice[@"localizedDescription"]=library[@"title"];
+        NSMutableDictionary *mediaItem=[item mutableCopy];
+        mediaItem[@"id"]=@{@"id":[@"org.flua.library." stringByAppendingString:library[@"id"]]};
+        mediaItem[@"localizedName"]=library[@"title"];
+        mediaItem[@"choice"]=mediaChoice;
+        mediaItem[@"sortOrder"]=@(items.count);
+        if ([library[@"kind"] isEqual:@"video"]) mediaItem[@"contentBadge"]=@{@"video":@{}};
+        [items addObject:mediaItem];
+    }
+    if (directRead) NSLog(@"Flua catalog items=%lu directRead=%@", (unsigned long)(items.count - 3), directRead);
     NSDictionary *group = @{
         @"id" : @{@"id" : @"org.flua.prototype"},
         @"localizedName" : @"Flua",
@@ -487,9 +559,13 @@ int FSProviderSelfTest(void) {
         [p provideSettingsViewModelsWithContentTypes:nil
                                                reply:^(id result, NSError *error) {
                                                    NSDictionary *model = FSInspectSettings(result);
-                                                   settingsOK = error == nil &&
+                                                   NSArray *groups = model[@"desktop"][@"groups"];
+                                                   NSArray *items = groups.count ? groups[0][@"items"] : @[];
+                                                   settingsOK = error == nil && items.count >= 3 &&
                                                                 [model[@"desktop"][@"groups"] count] == 1 &&
-                                                                [model[@"screenSaver"][@"groups"] count] == 1;
+                                                                [model[@"screenSaver"][@"groups"] count] == 1 &&
+                                                                [items[1][@"contentBadge"][@"none"] isKindOfClass:NSDictionary.class] &&
+                                                                [items[2][@"contentBadge"][@"video"] isKindOfClass:NSDictionary.class];
                                                }];
         NSDictionary *out = @{
             @"settingsCatalog" : @(settingsOK),
@@ -555,9 +631,38 @@ int main(int argc,const char **argv) { @autoreleasepool {
         BOOL success=acquired && wrappers && before && after && paused && resumed && disposed && (![kind isEqual:@"video"] || (motion && loops>=1));
         results[kind]=@{@"ok":@(success),@"acquired":@(acquired),@"nonemptyScopedFiles":@(wrappers),@"motion":@(motion),@"suspendedStable":@(paused),@"resumed":@(resumed),@"loopCount":@(loops),@"frames":@(finalFrames),@"disposed":@(disposed),@"error":errorText,@"snapshot":after ?: @{}};
     }
+    NSURL *catalogRoot=[dir URLByAppendingPathComponent:@"library" isDirectory:YES];
+    [[NSFileManager defaultManager] createDirectoryAtURL:[catalogRoot URLByAppendingPathComponent:@"Media"] withIntermediateDirectories:YES attributes:nil error:nil];
+    NSURL *catalogFile=[catalogRoot URLByAppendingPathComponent:@"catalog.json"];
+    NSDictionary *catalog=@{@"version":@1,@"items":@[
+        @{@"id":@"escape",@"title":@"Escape",@"kind":@"video",@"file":@"Media/../secret.mov",@"fit":@"fill"},
+        @{@"id":@"clip",@"title":@"Clip",@"kind":@"video",@"file":@"Media/clip.mov",@"fit":@"fill"},
+        @{@"id":@"scene",@"title":@"Scene",@"kind":@"aurora",@"file":@"Media/scene.mov",@"fit":@"fill"}
+    ]};
+    NSData *catalogData=[NSJSONSerialization dataWithJSONObject:catalog options:0 error:nil];
+    [catalogData writeToURL:catalogFile atomically:YES];
+    setenv("FLUA_CATALOG", catalogFile.path.UTF8String, 1);
+    NSArray *listed=FSSettingsModel()[@"screenSaver"][@"groups"][0][@"items"];
+    NSDictionary *descriptor=listed.lastObject[@"choice"][@"id"][@"descriptor"];
+    NSData *configData=[[NSData alloc] initWithBase64EncodedString:descriptor[@"configuration"] options:0];
+    NSDictionary *config=[NSJSONSerialization JSONObjectWithData:configData options:0 error:nil];
+    BOOL listedClip=listed.count==4 && [listed.lastObject[@"localizedName"] isEqual:@"Clip"] && [descriptor[@"files"] count]==1
+        && [config[@"kind"] isEqual:@"video"] && [config[@"fileIndex"] integerValue]==0 && ![config[@"source"] isEqual:@"bundle"]
+        && [listed[1][@"contentBadge"][@"none"] isKindOfClass:NSDictionary.class]
+        && [listed[2][@"contentBadge"][@"video"] isKindOfClass:NSDictionary.class]
+        && [listed.lastObject[@"contentBadge"][@"video"] isKindOfClass:NSDictionary.class];
+    NSMutableDictionary *foreign=[catalog mutableCopy];
+    foreign[@"root"]=@"/tmp/not-the-library";
+    [[NSJSONSerialization dataWithJSONObject:foreign options:0 error:nil] writeToURL:catalogFile atomically:YES];
+    BOOL rejectedRoot=[FSSettingsModel()[@"desktop"][@"groups"][0][@"items"] count]==3;
+    foreign[@"version"]=@2; foreign[@"root"]=catalogRoot.path;
+    [[NSJSONSerialization dataWithJSONObject:foreign options:0 error:nil] writeToURL:catalogFile atomically:YES];
+    BOOL rejectedVersion=[FSSettingsModel()[@"desktop"][@"groups"][0][@"items"] count]==3;
+    unsetenv("FLUA_CATALOG");
+    results[@"catalog"]=@{@"ok":@(listedClip && rejectedRoot && rejectedVersion),@"listedClip":@(listedClip),@"rejectedRoot":@(rejectedRoot),@"rejectedVersion":@(rejectedVersion)};
     results[@"systemActivationPerformed"]=@NO;
     results[@"sandboxAuthorizationVerified"]=@NO;
     NSData *json=[NSJSONSerialization dataWithJSONObject:results options:NSJSONWritingPrettyPrinted error:nil];fwrite(json.bytes,1,json.length,stdout);puts("");
-    return [results[@"image"][@"ok"] boolValue] && [results[@"video"][@"ok"] boolValue] ? 0:2;
+    return [results[@"image"][@"ok"] boolValue] && [results[@"video"][@"ok"] boolValue] && [results[@"catalog"][@"ok"] boolValue] ? 0:2;
 } }
 #endif

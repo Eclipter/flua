@@ -297,14 +297,36 @@ enum LibraryError: LocalizedError {
     }
 }
 
+struct ProviderCatalog: Codable, Equatable {
+    struct Item: Codable, Equatable {
+        var id: String
+        var title: String
+        var kind: String
+        var file: String
+        var fit: String
+    }
+    var version = 1
+    var items: [Item] = []
+}
+
+func providerCatalog(from state: LibraryState) -> ProviderCatalog {
+    ProviderCatalog(items: state.wallpapers.compactMap { wallpaper in
+        guard wallpaper.kind == "image" || wallpaper.kind == "video", !state.isBlocked(wallpaper),
+              let name = wallpaper.file, name == (name as NSString).lastPathComponent, name != ".", name != ".." else { return nil }
+        return .init(id: wallpaper.id, title: wallpaper.title, kind: wallpaper.kind, file: "Media/\(name)", fit: wallpaper.fit ? "fit" : "fill")
+    })
+}
+
 final class LibraryDisk {
     let root: URL
     let assets: URL
     let manifest: URL
+    let catalog: URL
     init(root: URL) throws {
         self.root = root
         assets = root.appendingPathComponent("Media", isDirectory: true)
         manifest = root.appendingPathComponent("library.json")
+        catalog = root.appendingPathComponent("catalog.json")
         try FileManager.default.createDirectory(at: assets, withIntermediateDirectories: true)
     }
     func load() throws -> LibraryState {
@@ -316,6 +338,7 @@ final class LibraryDisk {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         try encoder.encode(state).write(to: manifest, options: .atomic)
+        try encoder.encode(providerCatalog(from: state)).write(to: catalog, options: .atomic)
     }
     func url(for wallpaper: Wallpaper) -> URL? {
         guard let name = wallpaper.file,

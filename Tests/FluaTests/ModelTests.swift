@@ -87,7 +87,32 @@ import Foundation
         state.playlists = [Playlist(id: "empty", name: "Empty")]
         state.displays["display-C"] = DisplayAssignment(desktop: SurfaceAssignment(playlistID: "empty"))
         precondition(state.advance(display: "display-C", force: true) == nil)
-        print("PASS: global, per-playlist and mirrored scheduling, 100 shuffle transitions, removal cleanup, persistence, path validation, corrupt-library preservation, empty playlists")
+        try catalogTests(dir.appendingPathComponent("catalog-case"))
+        print("PASS: global, per-playlist and mirrored scheduling, 100 shuffle transitions, removal cleanup, persistence, path validation, corrupt-library preservation, empty playlists, provider catalog")
+    }
+    static func catalogTests(_ root: URL) throws {
+        let disk = try LibraryDisk(root: root)
+        var state = LibraryState()
+        state.blockedTags = ["hidden"]
+        state.wallpapers = [
+            Wallpaper(id: "clip", title: "Clip", kind: "video", file: "clip.mov", fit: true),
+            Wallpaper(id: "pic", title: "Pic", kind: "image", file: "pic.png"),
+            Wallpaper(id: "aurora", title: "Northern lights", kind: "aurora"),
+            Wallpaper(id: "escape", title: "Escape", kind: "video", file: "../secret.mov"),
+            Wallpaper(id: "hidden-pic", title: "Hidden", kind: "image", file: "hidden.png", tags: "hidden")
+        ]
+        let catalog = providerCatalog(from: state)
+        precondition(catalog == ProviderCatalog(items: [
+            .init(id: "clip", title: "Clip", kind: "video", file: "Media/clip.mov", fit: "fit"),
+            .init(id: "pic", title: "Pic", kind: "image", file: "Media/pic.png", fit: "fill")
+        ]))
+        try disk.save(state)
+        let saved = try JSONDecoder().decode(ProviderCatalog.self, from: Data(contentsOf: disk.catalog))
+        precondition(saved == catalog)
+        try Data("broken".utf8).write(to: disk.manifest)
+        do { _ = try disk.load(); preconditionFailure("Corrupt library accepted") } catch LibraryError.invalidLibrary {}
+        let preserved = try JSONDecoder().decode(ProviderCatalog.self, from: Data(contentsOf: disk.catalog))
+        precondition(preserved == catalog)
     }
     static func surfaceAssignmentTests(disk: LibraryDisk) throws {
         let start = Date(timeIntervalSinceReferenceDate: 42)
