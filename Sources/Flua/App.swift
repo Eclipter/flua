@@ -9,8 +9,8 @@ final class ViewState: ObservableObject {
     @Published var dragOver = false
     @Published var draftTitle = ""
     @Published var draftTags = ""
-    @Published var browseKind = "all"
-    @Published var browseSort = "name"
+    @Published var draftCategory = ""
+    @Published var blockedTagDraft = ""
 }
 
 
@@ -126,17 +126,7 @@ struct LibraryView: View {
             Button("Cancel", role: .cancel) { ui.deleting = nil }
         } message: { Text("The scene will be removed from playlists and stopped on any display. Imported files are kept in Flua’s media folder.") }
     }
-    private var displayed: [Wallpaper] {
-        var values = library.visible
-        if library.section == "browse", ui.browseKind != "all" {
-            values = values.filter { ui.browseKind == "animated" ? $0.kind != "image" : $0.kind == "image" }
-        }
-        if library.section == "browse" {
-            if ui.browseSort == "name" { values.sort { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending } }
-            else if ui.browseSort == "favorites" { values.sort { $0.favorite && !$1.favorite } }
-        }
-        return values
-    }
+    private var displayed: [Wallpaper] { library.visible }
     private var libraryContent: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
@@ -163,9 +153,9 @@ struct LibraryView: View {
                         Button { library.startPlaylist(id) } label: { Label("Play", systemImage: "play.fill") }.buttonStyle(.borderedProminent)
                     }
                 }
-                if library.section == "browse" { browseToolbar }
+                browseToolbar
                 if displayed.isEmpty {
-                    ContentUnavailableView("No Backdrops Available", systemImage: "photo.on.rectangle.angled", description: Text("Import a video or image, or adjust your search and filters."))
+                    ContentUnavailableView("No Backdrops Available", systemImage: "photo.on.rectangle.angled", description: Text("Import media or clear your search and filters. Hidden tags can be adjusted in Settings → Blocked tags."))
                         .frame(maxWidth: .infinity, minHeight: 300)
                 } else {
                     LazyVGrid(columns: [GridItem(.adaptive(minimum: 230), spacing: 18)], spacing: 18) {
@@ -179,10 +169,14 @@ struct LibraryView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 30) {
                 Text("Discover").font(.largeTitle.bold())
-                discoverShelf("Featured", wallpapers: Array(library.state.wallpapers.prefix(3)), large: true)
-                discoverShelf("Animated", wallpapers: library.state.wallpapers.filter { $0.kind != "image" })
-                if library.state.wallpapers.contains(where: { $0.file != nil }) {
-                    discoverShelf("Your Backdrops", wallpapers: library.state.wallpapers.filter { $0.file != nil })
+                browseToolbar
+                if library.eligible.isEmpty {
+                    ContentUnavailableView("No Backdrops Available", systemImage: "photo.on.rectangle.angled", description: Text("Clear filters or adjust Settings → Blocked tags to show hidden content."))
+                }
+                discoverShelf("Featured", wallpapers: Array(library.eligible.prefix(3)), large: true)
+                discoverShelf("Animated", wallpapers: library.eligible.filter { $0.kind != "image" })
+                if library.eligible.contains(where: { $0.file != nil }) {
+                    discoverShelf("Your Backdrops", wallpapers: library.eligible.filter { $0.file != nil })
                 }
             }.padding(28)
         }
@@ -201,14 +195,44 @@ struct LibraryView: View {
         }
     }
     private var browseToolbar: some View {
-        HStack {
-            Picker("Motion", selection: $ui.browseKind) {
-                Text("All").tag("all"); Text("Animated").tag("animated"); Text("Still").tag("still")
-            }.pickerStyle(.segmented).frame(width: 260)
-            Spacer()
-            Picker("Sort By", selection: $ui.browseSort) {
-                Text("Name").tag("name"); Text("Favorites First").tag("favorites")
-            }.frame(width: 190)
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Picker("Playback type", selection: $library.filter.kind) {
+                    Text("All").tag("all"); Text("Animated").tag("animated"); Text("Still").tag("still")
+                }.pickerStyle(.segmented).frame(width: 230)
+                Spacer()
+                if library.section == "browse" {
+                    Picker("Sort By", selection: $library.browseSort) {
+                        Text("Name").tag("name"); Text("Favorites First").tag("favorites")
+                    }.frame(width: 180)
+                }
+            }
+            ScrollView(.horizontal) {
+                HStack {
+                    FilterMenu(title: "Category", choices: Array(Set(LibraryChoices.categories + library.state.wallpapers.filter { !library.state.isBlocked($0) }.map(\.category))).sorted(), selection: $library.filter.categories)
+                    FilterMenu(title: "Color", choices: LibraryChoices.colors, selection: $library.filter.colors)
+                    FilterMenu(title: "Motion", choices: LibraryChoices.motions, selection: $library.filter.motions)
+                    FilterMenu(title: "Resolution", choices: LibraryChoices.resolutions, selection: $library.filter.resolutions)
+                    FilterMenu(title: "Aspect", choices: LibraryChoices.aspects, selection: $library.filter.aspects)
+                }
+            }
+            if library.filter.activeCount > 0 || !library.query.isEmpty {
+                HStack {
+                    Text("\(library.filter.activeCount) selected · \(library.eligible.count) matches").font(.caption).foregroundStyle(.secondary)
+                    Spacer()
+                    Button("Clear filters") { library.clearFilters() }
+                }
+                if !library.filter.tags.isEmpty {
+                    ScrollView(.horizontal) {
+                        HStack {
+                            ForEach(library.filter.tags.sorted(), id: \.self) { tag in
+                                Button { library.filter.tags.remove(tag) } label: { Label(tag, systemImage: "xmark.circle") }
+                                    .help("Remove tag filter: " + tag)
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
     private func wallpaperCard(_ w: Wallpaper) -> some View {
@@ -390,6 +414,7 @@ struct InspectorView: View {
                         }
                         Button { library.applySelected() } label: { Label("Play Backdrop", systemImage: "play.fill").frame(maxWidth: .infinity).padding(.vertical, 7) }.buttonStyle(.borderedProminent)
                     }
+                    mediaFacts(w)
                     Divider().opacity(0.3)
                     if w.kind == "video", let source = library.disk.url(for: w) {
                         Button { VideoEditorWindow.open(wallpaper: w, source: source, library: library) } label: {
@@ -409,6 +434,23 @@ struct InspectorView: View {
                         Text("ORGANIZE").font(.system(size: 9, weight: .semibold)).tracking(1.5).foregroundStyle(.secondary)
                         TextField("Scene name", text: $ui.draftTitle).onSubmit { var v = library.selected ?? w; if !ui.draftTitle.trimmingCharacters(in: .whitespaces).isEmpty { v.title = ui.draftTitle; library.edit(v) } }
                         TextField("Tags, separated by commas", text: $ui.draftTags).onSubmit { var v = library.selected ?? w; v.tags = ui.draftTags; library.edit(v) }
+                        TextField("Category", text: $ui.draftCategory).onSubmit {
+                            var value = library.selected ?? w
+                            if value.metadata == nil { value.metadata = SceneMetadata() }
+                            value.metadata?.category = ui.draftCategory.trimmingCharacters(in: .whitespacesAndNewlines)
+                            library.edit(value)
+                        }
+                        Picker("Color", selection: classificationBinding(\.color, w)) {
+                            ForEach(LibraryChoices.colors, id: \.self) { Text($0).tag($0) }
+                        }
+                        Picker("Motion intensity", selection: classificationBinding(\.motion, w)) {
+                            ForEach(LibraryChoices.motions, id: \.self) { Text($0).tag($0) }
+                        }
+                        LazyVGrid(columns: [GridItem(.adaptive(minimum: 65))], alignment: .leading) {
+                            ForEach(normalizedTags(w.tags), id: \.self) { tag in
+                                Button(tag) { library.filterTag(tag) }.help("Filter library by tag: " + tag)
+                            }
+                        }
                         Text("Press Return to save text edits.").font(.system(size: 9)).foregroundStyle(.tertiary)
                         Menu {
                             ForEach(library.state.playlists) { p in Button((p.items.contains(w.id) ? "✓ " : "") + p.name) { library.toggleInPlaylist(w.id, p.id) } }
@@ -416,10 +458,33 @@ struct InspectorView: View {
                     }.textFieldStyle(.roundedBorder)
                     Text("Desktop playback • No subscription").font(.system(size: 9)).foregroundStyle(.tertiary).frame(maxWidth: .infinity).padding(.top, 10)
                 }.padding(20)
-                .onAppear { ui.draftTitle = w.title; ui.draftTags = w.tags }
-                .onChange(of: w.id) { _, _ in ui.draftTitle = w.title; ui.draftTags = w.tags }
+                .onAppear { ui.draftTitle = w.title; ui.draftTags = w.tags; ui.draftCategory = w.metadata?.category ?? "" }
+                .onChange(of: w.id) { _, _ in ui.draftTitle = w.title; ui.draftTags = w.tags; ui.draftCategory = w.metadata?.category ?? "" }
             } else { ContentUnavailableView("Select a scene", systemImage: "sparkles").padding(.top, 100) }
         }
+    }
+    private func mediaFacts(_ w: Wallpaper) -> some View {
+        VStack(alignment: .leading, spacing: 7) {
+            LabeledContent("Resolution", value: w.file == nil ? "Not applicable" : w.mediaFacts.flatMap { $0.hasDimensions ? "\($0.width!) × \($0.height!)" : nil } ?? "Unknown")
+            LabeledContent("File size", value: w.file == nil ? "Not applicable" : w.mediaFacts?.bytes.flatMap { $0 >= 0 ? ByteCountFormatter.string(fromByteCount: $0, countStyle: .file) : nil } ?? "Unknown")
+            LabeledContent("Source duration", value: w.kind == "video" ? formattedDuration(w.mediaFacts?.sourceDuration) : "Not applicable")
+            if let source = w.mediaFacts?.sourceDuration, let edited = w.editedDuration, abs(source - edited) > 0.001 {
+                LabeledContent("Trimmed duration", value: formattedDuration(edited))
+            }
+            LabeledContent("Date added", value: w.dateAdded?.formatted(date: .abbreviated, time: .omitted) ?? "Unknown")
+        }.font(.caption).textSelection(.enabled)
+    }
+    private func formattedDuration(_ seconds: Double?) -> String {
+        guard let seconds, seconds.isFinite, seconds > 0 else { return "Unknown" }
+        return Duration.seconds(seconds).formatted(.units(allowed: [.hours, .minutes, .seconds], width: .abbreviated, fractionalPart: .show(length: 2)))
+    }
+    private func classificationBinding(_ key: WritableKeyPath<SceneMetadata, String?>, _ w: Wallpaper) -> Binding<String> {
+        Binding(get: { let value = library.state.item(w.id) ?? w; return key == \.color ? value.color : value.motion }, set: { value in
+            var updated = library.state.item(w.id) ?? w
+            if updated.metadata == nil { updated.metadata = SceneMetadata() }
+            updated.metadata?[keyPath: key] = value
+            library.edit(updated)
+        })
     }
     private func binding<T>(_ key: WritableKeyPath<Wallpaper, T>, _ original: Wallpaper) -> Binding<T> {
         Binding(get: { (library.state.item(original.id) ?? original)[keyPath: key] }, set: { newValue in var v = library.state.item(original.id) ?? original; v[keyPath: key] = newValue; library.edit(v) })
@@ -430,7 +495,12 @@ struct InspectorView: View {
 }
 
 struct SettingsView: View {
+    @StateObject private var ui = ViewState()
     @EnvironmentObject var library: Library
+    private func addBlockedTags() {
+        library.blockTags(ui.blockedTagDraft)
+        ui.blockedTagDraft = ""
+    }
     var body: some View {
         Form {
             Section("Playback") {
@@ -449,6 +519,26 @@ struct SettingsView: View {
                 }
                 Toggle("Shuffle playlists", isOn: $library.state.shuffle)
             }
+            Section("Blocked tags") {
+                HStack {
+                    TextField("Tags, separated by commas", text: $ui.blockedTagDraft).onSubmit { addBlockedTags() }
+                    Button("Block") { addBlockedTags() }.disabled(normalizedTags(ui.blockedTagDraft).isEmpty)
+                }
+                if !library.state.blockedTags.isEmpty {
+                    ScrollView {
+                        VStack {
+                            ForEach(library.state.blockedTags, id: \.self) { tag in
+                                HStack {
+                                    Text(tag)
+                                    Spacer()
+                                    Button("Unblock") { library.unblockTag(tag) }.accessibilityLabel("Unblock " + tag)
+                                }
+                            }
+                        }
+                    }.frame(maxHeight: 110)
+                }
+                Text("Matching tags hide backdrops throughout the library. Files, playlists and playback assignments are preserved.").font(.caption).foregroundStyle(.secondary)
+            }
             Section("General") {
                 Toggle("Open at login", isOn: Binding(get: { library.loginEnabled() }, set: { library.setLogin($0) }))
                 Button("Show media folder in Finder") { NSWorkspace.shared.open(library.disk.assets) }
@@ -463,5 +553,26 @@ struct SettingsView: View {
             .onChange(of: library.state.pauseOnBattery) { _, _ in library.settingChanged() }
             .onChange(of: library.state.interval) { _, _ in library.save() }
             .onChange(of: library.state.shuffle) { _, _ in library.save() }
+    }
+}
+
+struct FilterMenu: View {
+    let title: String
+    let choices: [String]
+    @Binding var selection: Set<String>
+
+    var body: some View {
+        Menu {
+            ForEach(choices, id: \.self) { value in
+                Toggle(value, isOn: Binding(get: { selection.contains(value) }, set: { included in
+                    if included { selection.insert(value) } else { selection.remove(value) }
+                }))
+            }
+        } label: {
+            Text(selection.isEmpty ? title : title + ": " + selection.sorted().joined(separator: ", "))
+                .lineLimit(1)
+        }
+        .fixedSize()
+        .accessibilityLabel(title + " filter")
     }
 }

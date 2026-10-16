@@ -77,6 +77,7 @@ import Foundation
         precondition(restored.wallpapers == state.wallpapers && restored.playlists == state.playlists && restored.displays == state.displays && restored.displayMode == "perDisplay")
         precondition(disk.url(for: Wallpaper(title: "bad", kind: "video", file: "../../secret")) == nil)
         precondition(disk.url(for: Wallpaper(title: "good", kind: "video", file: "clip.mp4"))!.deletingLastPathComponent() == disk.assets)
+        try browsingTests(disk: disk)
         let invalid = Data("not valid json".utf8)
         try invalid.write(to: disk.manifest)
         do { _ = try disk.load(); preconditionFailure("Corrupt library accepted") } catch LibraryError.invalidLibrary {}
@@ -87,4 +88,89 @@ import Foundation
         precondition(state.advance(display: "display-C", force: true) == nil)
         print("PASS: global, per-playlist and mirrored scheduling, 100 shuffle transitions, removal cleanup, persistence, path validation, corrupt-library preservation, empty playlists")
     }
+    static func browsingTests(disk: LibraryDisk) throws {
+        precondition(normalizedTags(" Nature, , NATURE, natural, BLUE ") == ["nature", "natural", "blue"])
+        var old = LibraryState.initial
+        for i in old.wallpapers.indices { old.wallpapers[i].metadata = nil }
+        old.wallpapers.append(Wallpaper(id: "legacy", title: "Existing import", kind: "video", file: "retained.mov",
+                                       videoEdit: VideoEdit(start: 1, end: 3), metadata: SceneMetadata(details: "Original", category: "Custom")))
+        old.playlists[0].items.append("legacy")
+        old.displays["saved-display"] = DisplayAssignment(wallpaperID: "legacy", playlistID: "ambient", index: 4,
+                                                         changedAt: Date(timeIntervalSince1970: 1000), history: ["ocean", "aurora"])
+        var object = try JSONSerialization.jsonObject(with: JSONEncoder().encode(old)) as! [String: Any]
+        object.removeValue(forKey: "blockedTags")
+        let legacy = try JSONDecoder().decode(LibraryState.self, from: JSONSerialization.data(withJSONObject: object))
+        precondition(legacy.blockedTags.isEmpty && legacy.wallpapers == old.wallpapers && legacy.playlists == old.playlists && legacy.displays == old.displays)
+        let date = Date(timeIntervalSince1970: 123456)
+        var state = LibraryState()
+        let video = Wallpaper(id: "video", title: "A video", kind: "video", file: "source.mp4", tags: "Nature, ocean", favorite: true,
+                              videoEdit: VideoEdit(start: 2, end: 7), metadata: SceneMetadata(category: "Nature", color: "Blue", motion: "Low"),
+                              mediaFacts: MediaFacts(width: 3840, height: 2160, bytes: 1234, sourceDuration: 10), dateAdded: date)
+        let image = Wallpaper(id: "image", title: "B image", kind: "image", file: "image.png", tags: "natural, red",
+                              metadata: SceneMetadata(category: "Abstract", color: "Red", motion: "High"), mediaFacts: MediaFacts(width: 2560, height: 1080))
+        let unknown = Wallpaper(id: "unknown", title: "C unknown", kind: "ocean", tags: " Nature, RED ")
+        state.wallpapers = [video, image, unknown]
+        state.playlists = [Playlist(id: "ordered", name: "Order", items: ["unknown", "image", "video"])]
+        state.displays = ["display": DisplayAssignment(wallpaperID: "video", playlistID: "ordered", index: 2, history: ["image"])]
+        var filter = LibraryFilter()
+        filter.tags = ["nature"]
+        precondition(state.browsing(section: "all", filter: filter).map(\.id) == ["video", "unknown"])
+        filter.colors = ["Blue", "Unknown"]
+        filter.categories = ["nature", "Unknown"]
+        filter.motions = ["Low", "Unknown"]
+        precondition(state.browsing(section: "all", filter: filter).map(\.id) == ["video", "unknown"])
+        filter.resolutions = ["4K+"]
+        filter.aspects = ["Standard"]
+        precondition(state.browsing(section: "all", filter: filter).map(\.id) == ["video"])
+        precondition(state.browsing(section: "all", query: "missing", filter: filter).isEmpty)
+        filter.kind = "still"
+        precondition(state.browsing(section: "all", filter: filter).isEmpty)
+        filter = LibraryFilter()
+        precondition(filter.activeCount == 0)
+        precondition(state.browsing(section: "all", filter: filter).count == 3)
+        precondition(state.browsing(section: "favorites").map(\.id) == ["video"])
+        precondition(state.browsing(section: "imports").map(\.id) == ["video", "image"])
+        precondition(state.browsing(section: "playlist:ordered", sort: "favorites").map(\.id) == ["unknown", "image", "video"])
+        filter.tags = ["red", "OCEAN"]
+        precondition(state.browsing(section: "all", filter: filter).count == 3)
+        filter = LibraryFilter()
+        filter.resolutions = ["Unknown"]
+        filter.aspects = ["Unknown"]
+        filter.colors = ["Unknown"]
+        filter.motions = ["Unknown"]
+        precondition(state.browsing(section: "all", filter: filter).map(\.id) == ["unknown"])
+        precondition(video.editedDuration == 5 && image.editedDuration == nil)
+        var invalidVideo = video
+        invalidVideo.videoEdit?.start = 11
+        precondition(invalidVideo.editedDuration == nil)
+        for (width, height, resolution, aspect) in [
+            (1279, 720, "Below 720p", "Standard"), (1280, 720, "720p", "Standard"),
+            (1920, 1080, "1080p", "Standard"), (2560, 1440, "1440p", "Standard"),
+            (2160, 3840, "4K+", "Portrait"), (3840, 1080, "1080p", "Ultrawide"),
+            (100, 100, "Below 720p", "Square"), (200, 100, "Below 720p", "Ultrawide")
+        ] {
+            let facts = MediaFacts(width: width, height: height)
+            precondition(facts.resolution == resolution && facts.aspect == aspect)
+        }
+        precondition(MediaFacts(width: -1, height: 100).resolution == "Unknown")
+        precondition(MediaFacts().aspect == "Unknown")
+        precondition(classifiedColor(red: 1, green: 0, blue: 0) == "Red")
+        precondition(classifiedColor(red: 0, green: 0, blue: 1) == "Blue")
+        precondition(classifiedColor(red: 0, green: 1, blue: 0) == "Green")
+        precondition(classifiedColor(red: 0.5, green: 0.5, blue: 0.5) == "Neutral")
+        state.blockedTags = [" NATURE ", "nature", "red"]
+        for section in ["discover", "browse", "all", "favorites", "imports", "playlist:ordered"] {
+            precondition(state.browsing(section: section).isEmpty)
+        }
+        let assignments = state.displays, playlists = state.playlists
+        try disk.save(state)
+        var restored = try disk.load()
+        precondition(restored.blockedTags == ["nature", "red"] && restored.wallpapers == state.wallpapers)
+        precondition(restored.displays == assignments && restored.playlists == playlists)
+        restored.blockedTags = []
+        precondition(restored.browsing(section: "playlist:ordered").map(\.id) == ["unknown", "image", "video"])
+        precondition(restored.item("video")?.dateAdded == date && restored.item("video")?.mediaFacts?.sourceDuration == 10)
+        print("PASS: legacy metadata and blocked tags, media facts roundtrip, filter combinations/Unknown/reset, exact tags, buckets, color classification, playlist order, blocking and unblocking without assignment changes")
+    }
+
 }

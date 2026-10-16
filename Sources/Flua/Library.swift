@@ -9,6 +9,8 @@ final class Library: ObservableObject {
     @Published var selection: String? = "aurora"
     @Published var section: String = "discover"
     @Published var query = ""
+    @Published var filter = LibraryFilter()
+    @Published var browseSort = "name"
     @Published var display = "all"
     @Published var screens = NSScreen.screens
     @Published var error: String?
@@ -27,7 +29,7 @@ final class Library: ObservableObject {
         disk = try LibraryDisk(root: root)
         do { state = try disk.load() }
         catch { state = .initial; saveBlocked = true; self.error = error.localizedDescription }
-        selection = state.wallpapers.first?.id
+        selection = state.wallpapers.first(where: { !state.isBlocked($0) })?.id
         display = initialDisplaySelection(mode: state.displayMode, displayIDs: screens.map(displayID))
         engine.onError = { [weak self] in self?.error = $0 }
         syncEngine()
@@ -46,22 +48,28 @@ final class Library: ObservableObject {
             guard let self else { return }
             if self.restoreAssignments() { self.save() }
             self.makeThumbnails()
+            self.backfillMetadata()
         }
     }
     var selected: Wallpaper? { state.item(selection) }
-    var visible: [Wallpaper] {
-        let filtered = state.wallpapers.filter { w in
-            let matches: Bool
-            if section == "favorites" { matches = w.favorite }
-            else if section == "imports" { matches = w.file != nil }
-            else if section.hasPrefix("playlist:") { matches = state.playlist(String(section.dropFirst(9)))?.items.contains(w.id) ?? false }
-            else { matches = true }
-            return matches && (query.isEmpty || (w.title + " " + w.tags + " " + w.kind).localizedCaseInsensitiveContains(query))
-        }
-        if section.hasPrefix("playlist:"), let playlist = state.playlist(String(section.dropFirst(9))) {
-            return playlist.items.compactMap { id in filtered.first { $0.id == id } }
-        }
-        return filtered
+    var visible: [Wallpaper] { state.browsing(section: section, query: query, filter: filter, sort: browseSort) }
+    var eligible: [Wallpaper] { state.browsing(section: "all", query: query, filter: filter) }
+    func filterTag(_ tag: String) {
+        filter.tags.formUnion(normalizedTags(tag))
+        section = "browse"
+    }
+    func clearFilters() { filter = LibraryFilter(); query = "" }
+    func blockTags(_ text: String) {
+        state.blockedTags = normalizedTags((state.blockedTags + normalizedTags(text)).joined(separator: ","))
+        clearBlockedSelection()
+        save()
+    }
+    func unblockTag(_ tag: String) {
+        state.blockedTags.removeAll { normalizedTags($0) == normalizedTags(tag) }
+        save()
+    }
+    private func clearBlockedSelection() {
+        if let w = selected, state.isBlocked(w) { selection = nil }
     }
     var sectionTitle: String {
         if section == "browse" { return "Browse" }
@@ -162,8 +170,15 @@ final class Library: ObservableObject {
     }
     func edit(_ value: Wallpaper) {
         guard let i = state.wallpapers.firstIndex(where: { $0.id == value.id }) else { return }
-        state.wallpapers[i] = value
-        engine.update(value)
+        var updated = value
+        updated.mediaFacts = state.wallpapers[i].mediaFacts
+        updated.dateAdded = state.wallpapers[i].dateAdded
+        if updated.metadata == nil { updated.metadata = state.wallpapers[i].metadata }
+        if updated.metadata?.color == nil { updated.metadata?.color = state.wallpapers[i].metadata?.color }
+        if updated.metadata?.motion == nil { updated.metadata?.motion = state.wallpapers[i].metadata?.motion }
+        state.wallpapers[i] = updated
+        engine.update(updated)
+        clearBlockedSelection()
         save()
     }
     func favorite(_ w: Wallpaper) { var value = w; value.favorite.toggle(); edit(value) }
@@ -214,7 +229,7 @@ final class Library: ObservableObject {
         save()
         // Retain the imported file so accidental removal never destroys the user's media.
         thumbnails.removeValue(forKey: w.id)
-        selection = state.wallpapers.first?.id
+        selection = state.wallpapers.first(where: { !state.isBlocked($0) })?.id
     }
     func chooseMedia() {
         let panel = NSOpenPanel()
@@ -274,14 +289,24 @@ final class Library: ObservableObject {
                         w.metadata = SceneMetadata(details: manifest["details"] as? String ?? "",
                                                    category: manifest["categoryIdentifier"] as? String ?? "",
                                                    creditTitle: manifest["linkTitle"] as? String ?? "",
-                                                   creditURL: manifest["linkURL"] as? String ?? "")
+                                                   creditURL: manifest["linkURL"] as? String ?? "",
+                                                   color: manifest["color"] as? String,
+                                                   motion: manifest["motionIntensity"] as? String)
                         if let timestamp = manifest["thumbnailTimestamp"] as? Double, timestamp.isFinite, timestamp >= 0 {
                             w.videoEdit = VideoEdit(thumbnail: timestamp)
                         }
                     }
+                    let thumbnail = w.videoEdit?.thumbnail ?? 0
+                    let inspection = await Task.detached(priority: .utility) {
+                        await MediaInspection.load(url: dest, kind: kind, thumbnail: thumbnail)
+                    }.value
+                    w.mediaFacts = inspection.facts
+                    w.dateAdded = Date()
+                    if w.metadata == nil { w.metadata = SceneMetadata() }
+                    if w.metadata?.color == nil { w.metadata?.color = inspection.color }
                     self.state.wallpapers.append(w)
                     if firstAdded == nil { firstAdded = w }
-                    self.selection = id
+                    self.selection = self.state.isBlocked(w) ? nil : id
                     if self.section.hasPrefix("playlist:"), let i = self.state.playlists.firstIndex(where: { $0.id == String(self.section.dropFirst(9)) }) { self.state.playlists[i].items.append(id) }
                     self.generateThumbnail(w)
                     added += 1
@@ -295,6 +320,42 @@ final class Library: ObservableObject {
                 VideoEditorWindow.open(wallpaper: w, source: source, library: self)
             }
             if !failures.isEmpty { self.error = failures.joined(separator: "\n") }
+        }
+    }
+    func backfillMetadata() {
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            for wallpaper in self.state.wallpapers {
+                if wallpaper.file == nil {
+                    if let curated = LibraryState.initial.item(wallpaper.id), curated.kind == wallpaper.kind,
+                       let i = self.state.wallpapers.firstIndex(where: { $0.id == wallpaper.id }) {
+                        var metadata = self.state.wallpapers[i].metadata ?? SceneMetadata()
+                        if metadata.category.isEmpty { metadata.category = curated.category }
+                        if metadata.color == nil { metadata.color = curated.color }
+                        if metadata.motion == nil { metadata.motion = curated.motion }
+                        if self.state.wallpapers[i].metadata != metadata { self.state.wallpapers[i].metadata = metadata; self.save() }
+                    }
+                    continue
+                }
+                let facts = wallpaper.mediaFacts
+                guard facts?.bytes == nil || facts?.hasDimensions != true || (wallpaper.kind == "video" && facts?.sourceDuration == nil) else { continue }
+                guard let url = self.disk.url(for: wallpaper) else { continue }
+                let inspection = await Task.detached(priority: .utility) {
+                    await MediaInspection.load(url: url, kind: wallpaper.kind, thumbnail: wallpaper.videoEdit?.thumbnail ?? 0)
+                }.value
+                guard let i = self.state.wallpapers.firstIndex(where: { $0.id == wallpaper.id }) else { continue }
+                var measured = inspection.facts
+                let previous = self.state.wallpapers[i].mediaFacts
+                measured.width = measured.width ?? previous?.width
+                measured.height = measured.height ?? previous?.height
+                measured.bytes = measured.bytes ?? previous?.bytes
+                measured.sourceDuration = measured.sourceDuration ?? previous?.sourceDuration
+                guard measured != MediaFacts() else { continue }
+                self.state.wallpapers[i].mediaFacts = measured
+                if self.state.wallpapers[i].metadata == nil { self.state.wallpapers[i].metadata = SceneMetadata() }
+                if self.state.wallpapers[i].metadata?.color == nil { self.state.wallpapers[i].metadata?.color = inspection.color }
+                self.save()
+            }
         }
     }
     func makeThumbnails() { for w in state.wallpapers { generateThumbnail(w) } }
