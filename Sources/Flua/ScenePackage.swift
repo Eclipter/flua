@@ -58,10 +58,10 @@ struct ScenePackage {
                 explicitManifest = source
                 root = source.deletingLastPathComponent()
             } else {
-                guard source.pathExtension.lowercased() == "zip",
+                guard ["zip", "bdpkg"].contains(source.pathExtension.lowercased()),
                       attributes[.type] as? FileAttributeType == .typeRegular,
                       (attributes[.size] as? NSNumber)?.intValue ?? Int.max <= maxArchive else {
-                    throw ScenePackageError.invalid("choose a package folder or a .zip archive smaller than 512 MB.")
+                    throw ScenePackageError.invalid("choose a package folder, .zip, or .bdpkg archive smaller than 512 MB.")
                 }
                 let temporary = try canonicalExisting(fm.temporaryDirectory).appendingPathComponent("Flua-Package-" + UUID().uuidString, isDirectory: true)
                 try fm.createDirectory(at: temporary, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])

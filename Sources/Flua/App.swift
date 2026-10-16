@@ -456,7 +456,7 @@ struct SettingsView: View {
             }
             Section("About") {
                 Text("Flua 0.1.0 • Independent native wallpaper app").font(.callout)
-                Text("Video editing, package import, animated scenes, per-display playback and playlists. Hosted community, interactive scene runtimes and native Lock Screen activation are still in development.").font(.caption).foregroundStyle(.secondary)
+                Text("Discover, browse, create, edit, playlists and per-display playback are built in. Everything in your library remains local.").font(.caption).foregroundStyle(.secondary)
             }
         }.formStyle(.grouped).padding(8)
             .onChange(of: library.state.pauseOnFullscreen) { _, _ in library.settingChanged() }

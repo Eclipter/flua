@@ -39,7 +39,28 @@
 			<array>
 				<string>public.movie</string>
 				<string>public.image</string>
+				<string>local.flua.scene-package</string>
 			</array>
+		</dict>
+	</array>
+	<key>UTImportedTypeDeclarations</key>
+	<array>
+		<dict>
+			<key>UTTypeIdentifier</key>
+			<string>local.flua.scene-package</string>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.data</string>
+			</array>
+			<key>UTTypeDescription</key>
+			<string>Flua scene package</string>
+			<key>UTTypeTagSpecification</key>
+			<dict>
+				<key>public.filename-extension</key>
+				<array>
+					<string>bdpkg</string>
+				</array>
+			</dict>
 		</dict>
 	</array>
 </dict>
