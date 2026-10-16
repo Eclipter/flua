@@ -1,0 +1,10 @@
+# Local builds and generated test artifacts
+.build/
+build/
+dist/
+work/
+experimental/**/Built/
+.DS_Store
+*.xcuserstate
+xcuserdata/
+.swiftpm/xcode/
