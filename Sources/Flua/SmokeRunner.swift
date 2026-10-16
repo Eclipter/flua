@@ -144,20 +144,22 @@ enum SmokeRunner {
             library.stop()
             results["libraryStop"] = library.state.displays.isEmpty && library.engine.activeCount == 0
             library.selection = "aurora"
-            library.section = "all"
-            library.activity = "Ready. Your collection, without limits."
+            library.section = "discover"
             await pause(0.5)
-            if let window = NSApp.windows.first(where: { $0.title == "Flua" }), let view = window.contentView,
-               let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) {
-                view.cacheDisplay(in: view.bounds, to: bitmap)
-                if let data = bitmap.representation(using: .png, properties: [:]) {
-                    try data.write(to: out.appendingPathComponent("Flua-preview.png"))
-                    capture(window, to: out.appendingPathComponent("Flua-preview.png"))
-                    results["windowSnapshot"] = true
+            if let window = NSApp.windows.first(where: { $0.title == "Flua" }) {
+                results["discoverWindow"] = true
+                if let view = window.contentView, let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) {
+                    view.cacheDisplay(in: view.bounds, to: bitmap)
+                    if let data = bitmap.representation(using: .png, properties: [:]) {
+                        let destination = out.appendingPathComponent("Flua-discover.png")
+                        try data.write(to: destination)
+                        capture(window, to: destination)
+                        results["windowSnapshot"] = (try? Data(contentsOf: destination))?.isEmpty == false
+                    }
                 }
             }
             results["libraryRoundTrip"] = try library.disk.load().wallpapers == library.state.wallpapers
-            let required = ["imageImport", "videoImport", "videoReady", "videoPlaying", "videoLooped", "videoPaused", "videoResumed", "liveAdjustmentPreservesTime", "liveAdjustmentSpeed", "render_image", "render_aurora", "render_cosmos", "render_ocean", "render_ember", "desktopWindowVisible", "desktopIgnoresMouse", "desktopCleanup", "systemWallpaperPreserved", "libraryApply", "playlistStart", "playlistNext", "libraryStop", "libraryRoundTrip", "windowSnapshot", "videoInformation", "trimmedPlayback", "trimmedExport", "thumbnailExport", "rejectInvalidTrim", "preserveSourceOnExport", "packageRoundTrip", "editorPersistence", "editorWindow", "audioExport", "muteExport"]
+            let required = ["imageImport", "videoImport", "videoReady", "videoPlaying", "videoLooped", "videoPaused", "videoResumed", "liveAdjustmentPreservesTime", "liveAdjustmentSpeed", "render_image", "render_aurora", "render_cosmos", "render_ocean", "render_ember", "desktopWindowVisible", "desktopIgnoresMouse", "desktopCleanup", "systemWallpaperPreserved", "libraryApply", "playlistStart", "playlistNext", "libraryStop", "libraryRoundTrip", "discoverWindow", "windowSnapshot", "videoInformation", "trimmedPlayback", "trimmedExport", "thumbnailExport", "rejectInvalidTrim", "preserveSourceOnExport", "packageRoundTrip", "editorPersistence", "editorWindow", "audioExport", "muteExport"]
             for key in required where results[key] as? Bool != true { failures.append(key) }
         } catch { failures.append(String(reflecting: error)) }
         results["failures"] = failures

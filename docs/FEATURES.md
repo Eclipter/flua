@@ -6,12 +6,12 @@ Flua provides local desktop wallpapers, a media library and video export. The ex
 |---|---|---|
 | Video/image wallpapers | Local videos and images | Playback, looping, pause/resume and overlay cleanup covered by smoke tests |
 | Procedural wallpapers | Aurora, cosmos, ocean and ember | Four locally rendered scenes |
-| Displays | Per-display selection and restoration | Stable display UUIDs; physical multi-display testing remains |
-| Library | Favorites, tags, search and local persistence | Model and smoke tests |
-| Playlists | Timed rotation, shuffle, previous history and reorder | Model scheduling/history and runtime tests |
+| Displays | Mirrored or per-display selection and restoration | Stable display UUIDs; physical multi-display testing remains |
+| Library | Discover shelves, browse filters, favorites, tags, search and local persistence | Model and smoke tests; no hosted catalog |
+| Playlists | Per-playlist timing and shuffle, duplication, previous history and reorder | Model scheduling/history and runtime tests |
 | Playback controls | Speed, volume, dimming and fit | Live changes and trimmed playback covered by smoke tests |
 | Power controls | Sleep/lock, battery, fullscreen and Low Power Mode | Physical power/session transitions still need validation |
-| Video editor | Preview, trim, thumbnail and metadata | Editor presentation and saved edits covered by smoke tests |
+| Video editor | Create flow, preview, trim, thumbnail and metadata | Editor presentation and saved edits covered by smoke tests |
 | Video export | MP4, quality presets, optional audio, preview and PNG | Duration, audio tracks and thumbnail decoding checked by smoke tests |
 | Scene packages | Manifest folders, JSON and ZIP imports; `.flua` folder exports | Roundtrip, path validation and malicious archive tests |
 | Native provider | Experimental image/video `.appex` | Standalone lifecycle, XPC serialization and rendering tests; system-host activation, sandbox authorization, Retina/HDR and library integration remain |

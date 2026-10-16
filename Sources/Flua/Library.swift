@@ -7,7 +7,7 @@ import UniformTypeIdentifiers
 final class Library: ObservableObject {
     @Published var state: LibraryState
     @Published var selection: String? = "aurora"
-    @Published var section: String = "all"
+    @Published var section: String = "discover"
     @Published var query = ""
     @Published var display = "all"
     @Published var screens = NSScreen.screens
@@ -225,7 +225,16 @@ final class Library: ObservableObject {
         panel.message = "Import videos, images, video manifest folders, or .zip packages. Flua stores its own copies."
         panel.begin { [weak self] response in if response == .OK { self?.importMedia(panel.urls) } }
     }
-    func importMedia(_ urls: [URL]) {
+    func createBackdrop() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.movie]
+        panel.allowsMultipleSelection = false
+        panel.message = "Choose a video to create a Flua backdrop. The source file will not be changed."
+        panel.begin { [weak self] response in
+            if response == .OK { self?.importMedia(panel.urls, openEditor: true) }
+        }
+    }
+    func importMedia(_ urls: [URL], openEditor: Bool = false) {
         guard !saveBlocked else { error = LibraryError.invalidLibrary.localizedDescription; return }
         let taskID = UUID()
         importTasks.insert(taskID)
@@ -234,6 +243,7 @@ final class Library: ObservableObject {
             guard let self else { return }
             var failures: [String] = []
             var added = 0
+            var firstAdded: Wallpaper?
             for url in urls {
                 do {
                     let isDirectory = (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true
@@ -270,6 +280,7 @@ final class Library: ObservableObject {
                         }
                     }
                     self.state.wallpapers.append(w)
+                    if firstAdded == nil { firstAdded = w }
                     self.selection = id
                     if self.section.hasPrefix("playlist:"), let i = self.state.playlists.firstIndex(where: { $0.id == String(self.section.dropFirst(9)) }) { self.state.playlists[i].items.append(id) }
                     self.generateThumbnail(w)
@@ -280,6 +291,9 @@ final class Library: ObservableObject {
             self.importing = !self.importTasks.isEmpty
             self.activity = "Imported \(added) file(s)."
             self.save()
+            if openEditor, let w = firstAdded, w.kind == "video", let source = self.disk.url(for: w) {
+                VideoEditorWindow.open(wallpaper: w, source: source, library: self)
+            }
             if !failures.isEmpty { self.error = failures.joined(separator: "\n") }
         }
     }

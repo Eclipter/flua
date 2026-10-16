@@ -9,10 +9,12 @@ final class ViewState: ObservableObject {
     @Published var dragOver = false
     @Published var draftTitle = ""
     @Published var draftTags = ""
+    @Published var browseKind = "all"
+    @Published var browseSort = "name"
 }
 
 
-let accent = Color(red: 0.64, green: 0.80, blue: 0.65)
+let accent = Color(red: 0.12, green: 0.55, blue: 1)
 
 enum AppContext {
     static let library: Library = {
@@ -56,6 +58,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         .windowStyle(.hiddenTitleBar)
         .commands {
             CommandGroup(after: .newItem) {
+                Button("Create New Flua…") { library.createBackdrop() }.keyboardShortcut("n")
                 Button("Import media or scene package…") { library.chooseMedia() }.keyboardShortcut("i")
             }
             CommandMenu("Playback") {
@@ -66,7 +69,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
         Settings { SettingsView().environmentObject(library).frame(width: 530).preferredColorScheme(.dark) }
-        MenuBarExtra("Flua", systemImage: "mountain.2") { TrayView().environmentObject(library) }
+        MenuBarExtra("Flua", systemImage: "camera.macro") { TrayView().environmentObject(library) }
     }
 }
 
@@ -94,50 +97,8 @@ struct LibraryView: View {
             Divider().opacity(0.25)
             VStack(alignment: .leading, spacing: 0) {
                 header
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 22) {
-                        if library.section == "all" && library.query.isEmpty { banner }
-                        HStack {
-                            Text(library.sectionTitle).font(.title2.bold())
-                            Text("\(library.visible.count)").font(.caption.monospacedDigit()).foregroundStyle(.secondary)
-                            Spacer()
-                            if library.section.hasPrefix("playlist:") {
-                                Button { library.startPlaylist(String(library.section.dropFirst(9))) } label: { Label("Play playlist", systemImage: "play.fill") }.tint(accent)
-                            }
-                        }
-                        if library.visible.isEmpty {
-                            ContentUnavailableView("Room for something new", systemImage: "photo.on.rectangle.angled", description: Text("Import a video or image, or adjust your search."))
-                                .frame(maxWidth: .infinity, minHeight: 300)
-                        } else {
-                            LazyVGrid(columns: [GridItem(.adaptive(minimum: 215), spacing: 18)], spacing: 22) {
-                                ForEach(library.visible) { w in
-                                    WallpaperCard(wallpaper: w, selected: library.selection == w.id)
-                                        .onTapGesture { library.selection = w.id }
-                                        .onTapGesture(count: 2) { library.selection = w.id; library.applySelected() }
-                                        .contextMenu {
-                                            Button("Apply to desktop") { library.selection = w.id; library.applySelected() }
-                                            Button(w.favorite ? "Remove favorite" : "Add favorite") { library.favorite(w) }
-                                            if w.kind == "video", let source = library.disk.url(for: w) {
-                                                Button("Edit video…") { VideoEditorWindow.open(wallpaper: w, source: source, library: library) }
-                                            }
-                                            Menu("Playlists") {
-                                                ForEach(library.state.playlists) { p in
-                                                    Button((p.items.contains(w.id) ? "✓ " : "") + p.name) { library.toggleInPlaylist(w.id, p.id) }
-                                                }
-                                            }
-                                            if library.section.hasPrefix("playlist:") {
-                                                let id = String(library.section.dropFirst(9))
-                                                Button("Move earlier in playlist") { library.moveInPlaylist(w.id, playlist: id, delta: -1) }
-                                                Button("Move later in playlist") { library.moveInPlaylist(w.id, playlist: id, delta: 1) }
-                                            }
-                                            Divider()
-                                            Button("Remove from library…", role: .destructive) { ui.deleting = w }
-                                        }
-                                }
-                            }
-                        }
-                    }.padding(28)
-                }
+                if library.section == "discover" { discoverContent }
+                else { libraryContent }
                 footer
             }.background(Color(red: 0.062, green: 0.075, blue: 0.085))
             Divider().opacity(0.25)
@@ -165,14 +126,134 @@ struct LibraryView: View {
             Button("Cancel", role: .cancel) { ui.deleting = nil }
         } message: { Text("The scene will be removed from playlists and stopped on any display. Imported files are kept in Flua’s media folder.") }
     }
+    private var displayed: [Wallpaper] {
+        var values = library.visible
+        if library.section == "browse", ui.browseKind != "all" {
+            values = values.filter { ui.browseKind == "animated" ? $0.kind != "image" : $0.kind == "image" }
+        }
+        if library.section == "browse" {
+            if ui.browseSort == "name" { values.sort { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending } }
+            else if ui.browseSort == "favorites" { values.sort { $0.favorite && !$1.favorite } }
+        }
+        return values
+    }
+    private var libraryContent: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 22) {
+                HStack {
+                    Text(library.sectionTitle).font(.largeTitle.bold())
+                    Text("\(displayed.count)").font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                    Spacer()
+                    if library.section.hasPrefix("playlist:") {
+                        let id = String(library.section.dropFirst(9))
+                        Menu {
+                            Picker("Change wallpaper", selection: Binding(
+                                get: { library.state.playlist(id)?.interval ?? library.state.interval },
+                                set: { library.updatePlaylist(id, interval: $0) })) {
+                                Text("Every minute").tag(60.0)
+                                Text("Every 5 minutes").tag(300.0)
+                                Text("Every 15 minutes").tag(900.0)
+                                Text("Every hour").tag(3600.0)
+                            }
+                            Toggle("Shuffle", isOn: Binding(
+                                get: { library.state.playlist(id)?.shuffle ?? library.state.shuffle },
+                                set: { library.updatePlaylist(id, shuffle: $0) }))
+                            Button("Duplicate Playlist") { library.duplicatePlaylist(id) }
+                        } label: { Label("Playlist Options", systemImage: "ellipsis.circle") }
+                        Button { library.startPlaylist(id) } label: { Label("Play", systemImage: "play.fill") }.buttonStyle(.borderedProminent)
+                    }
+                }
+                if library.section == "browse" { browseToolbar }
+                if displayed.isEmpty {
+                    ContentUnavailableView("No Backdrops Available", systemImage: "photo.on.rectangle.angled", description: Text("Import a video or image, or adjust your search and filters."))
+                        .frame(maxWidth: .infinity, minHeight: 300)
+                } else {
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 230), spacing: 18)], spacing: 18) {
+                        ForEach(displayed) { wallpaperCard($0) }
+                    }
+                }
+            }.padding(28)
+        }
+    }
+    private var discoverContent: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 30) {
+                Text("Discover").font(.largeTitle.bold())
+                discoverShelf("Featured", wallpapers: Array(library.state.wallpapers.prefix(3)), large: true)
+                discoverShelf("Animated", wallpapers: library.state.wallpapers.filter { $0.kind != "image" })
+                if library.state.wallpapers.contains(where: { $0.file != nil }) {
+                    discoverShelf("Your Backdrops", wallpapers: library.state.wallpapers.filter { $0.file != nil })
+                }
+            }.padding(28)
+        }
+        .background(LinearGradient(colors: [.purple.opacity(0.18), .blue.opacity(0.10), .clear], startPoint: .topLeading, endPoint: .bottomTrailing))
+    }
+    private func discoverShelf(_ title: String, wallpapers: [Wallpaper], large: Bool = false) -> some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack { Text(title).font(.title3.bold()); Spacer(); Button("Show All") { library.section = "browse" }.buttonStyle(.plain).foregroundStyle(.secondary) }
+            ScrollView(.horizontal, showsIndicators: false) {
+                LazyHStack(spacing: 18) {
+                    ForEach(wallpapers) { w in
+                        wallpaperCard(w).frame(width: large ? 310 : 240, height: large ? 194 : 150)
+                    }
+                }
+            }
+        }
+    }
+    private var browseToolbar: some View {
+        HStack {
+            Picker("Motion", selection: $ui.browseKind) {
+                Text("All").tag("all"); Text("Animated").tag("animated"); Text("Still").tag("still")
+            }.pickerStyle(.segmented).frame(width: 260)
+            Spacer()
+            Picker("Sort By", selection: $ui.browseSort) {
+                Text("Name").tag("name"); Text("Favorites First").tag("favorites")
+            }.frame(width: 190)
+        }
+    }
+    private func wallpaperCard(_ w: Wallpaper) -> some View {
+        WallpaperCard(wallpaper: w, selected: library.selection == w.id)
+            .onTapGesture { library.selection = w.id }
+            .onTapGesture(count: 2) { library.selection = w.id; library.applySelected() }
+            .contextMenu {
+                Button("Play Backdrop") { library.selection = w.id; library.applySelected() }
+                Button(w.favorite ? "Remove from Favorites" : "Add to Favorites") { library.favorite(w) }
+                if w.kind == "video", let source = library.disk.url(for: w) {
+                    Button("Edit…") { VideoEditorWindow.open(wallpaper: w, source: source, library: library) }
+                }
+                Menu("Add to Playlist") {
+                    ForEach(library.state.playlists) { p in
+                        Button((p.items.contains(w.id) ? "✓ " : "") + p.name) { library.toggleInPlaylist(w.id, p.id) }
+                    }
+                }
+                if library.section.hasPrefix("playlist:") {
+                    let id = String(library.section.dropFirst(9))
+                    Button("Move Earlier") { library.moveInPlaylist(w.id, playlist: id, delta: -1) }
+                    Button("Move Later") { library.moveInPlaylist(w.id, playlist: id, delta: 1) }
+                }
+                Divider()
+                Button("Remove from Library…", role: .destructive) { ui.deleting = w }
+            }
+    }
     private var sidebar: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 10) {
-                Image(systemName: "mountain.2.fill").font(.title2).foregroundStyle(accent)
+                Image(systemName: "drop.fill").font(.title2).foregroundStyle(accent)
                 Text("Flua").font(.title3.weight(.semibold))
-            }.padding(.top, 46).padding(.bottom, 28)
+            }.padding(.top, 46).padding(.bottom, 10)
+            HStack {
+                Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                TextField("Search", text: $library.query).textFieldStyle(.plain)
+                    .onChange(of: library.query) { _, value in
+                        if !value.isEmpty && library.section == "discover" { library.section = "browse" }
+                    }
+                if !library.query.isEmpty { Button { library.query = "" } label: { Image(systemName: "xmark.circle.fill") }.buttonStyle(.plain) }
+            }.padding(9).background(.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 7)).padding(.bottom, 12)
+            sideButton("Discover", symbol: "sparkles", section: "discover")
+            sideButton("Browse", symbol: "rectangle.grid.2x2", section: "browse")
             Text("LIBRARY").font(.system(size: 10, weight: .semibold, design: .rounded)).tracking(2).foregroundStyle(.secondary)
-            sideButton("All scenes", symbol: "square.grid.2x2", section: "all")
+                .padding(.top, 18)
+            sideButton("All Backdrops", symbol: "books.vertical", section: "all")
             sideButton("Favorites", symbol: "heart", section: "favorites")
             sideButton("Your media", symbol: "film", section: "imports")
             HStack {
@@ -189,15 +270,12 @@ struct LibraryView: View {
                 }
             }
             Spacer()
-            VStack(alignment: .leading, spacing: 7) {
-                Label("Made for your Mac", systemImage: "leaf").font(.caption.weight(.medium)).foregroundStyle(accent)
-                Text("Local. Unlimited. Yours.").font(.caption2).foregroundStyle(.secondary)
-            }.padding(14).frame(maxWidth: .infinity, alignment: .leading).background(.white.opacity(0.035), in: RoundedRectangle(cornerRadius: 12))
+            Button { library.chooseMedia() } label: { Label("Import Scene…", systemImage: "square.and.arrow.down").frame(maxWidth: .infinity, alignment: .leading) }.buttonStyle(.plain).foregroundStyle(.secondary)
             SettingsLink { Label("Settings", systemImage: "gearshape").font(.callout).foregroundStyle(.secondary) }.buttonStyle(.plain).padding(.top, 8)
         }.padding(.horizontal, 18).padding(.bottom, 22)
     }
     private func sideButton(_ title: String, symbol: String, section: String) -> some View {
-        Button { library.section = section } label: {
+        Button { library.section = section; if section == "discover" { library.query = "" } } label: {
             Label(title, systemImage: symbol).font(.system(size: 13, weight: library.section == section ? .semibold : .regular))
                 .frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 10).padding(.horizontal, 10)
                 .foregroundStyle(library.section == section ? accent : .white.opacity(0.65))
@@ -206,35 +284,21 @@ struct LibraryView: View {
     }
     private var header: some View {
         HStack(spacing: 12) {
-            HStack {
-                Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                TextField("Search scenes, moods, tags…", text: $library.query).textFieldStyle(.plain)
-                if !library.query.isEmpty { Button { library.query = "" } label: { Image(systemName: "xmark.circle.fill") }.buttonStyle(.plain) }
-            }.padding(10).background(.white.opacity(0.045), in: RoundedRectangle(cornerRadius: 8))
-            Button { library.chooseMedia() } label: {
-                Label(library.importing ? "Importing…" : "Import", systemImage: "plus").padding(.vertical, 4)
-            }.buttonStyle(.borderedProminent).foregroundStyle(.black).disabled(library.importing)
-        }.padding(.horizontal, 28).padding(.top, 38).padding(.bottom, 16)
-    }
-    private var banner: some View {
-        ZStack(alignment: .leading) {
-            RoundedRectangle(cornerRadius: 16).fill(LinearGradient(colors: [Color(red: 0.12, green: 0.23, blue: 0.22), Color(red: 0.11, green: 0.14, blue: 0.22)], startPoint: .leading, endPoint: .trailing))
-            HStack {
-                VStack(alignment: .leading, spacing: 9) {
-                    Text("A LITTLE MORE ALIVE").font(.system(size: 9, weight: .bold)).tracking(2.5).foregroundStyle(accent)
-                    Text("Find your own atmosphere.").font(.system(size: 25, weight: .medium, design: .serif))
-                    Text("Moving landscapes. Quiet moments. Your desktop.").font(.caption).foregroundStyle(.white.opacity(0.6))
-                }
-                Spacer()
-                Image(systemName: "sparkles").font(.system(size: 48, weight: .ultraLight)).foregroundStyle(accent.opacity(0.65))
-            }.padding(24)
-        }.frame(height: 155)
+            Text("Flua").font(.headline)
+            Spacer()
+            Button { library.chooseMedia() } label: { Label(library.importing ? "Importing…" : "Import", systemImage: "square.and.arrow.down") }.disabled(library.importing)
+            Button { library.createBackdrop() } label: { Label("Create", systemImage: "plus") }.buttonStyle(.borderedProminent)
+        }.padding(.horizontal, 28).padding(.top, 36).padding(.bottom, 14).background(.black.opacity(0.12))
     }
     private var footer: some View {
         HStack(spacing: 9) {
             Circle().fill(library.state.paused ? Color.orange : accent).frame(width: 5, height: 5)
             Text(library.activity).font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(1)
             Spacer()
+            Picker("Display Mode", selection: Binding(get: { library.playbackMode }, set: { library.setPlaybackMode($0) })) {
+                Text("Mirrored").tag("mirrored")
+                Text("Per Display").tag("perDisplay")
+            }.labelsHidden().pickerStyle(.segmented).frame(width: 170)
             Button { library.advancePlaylists(force: true, backwards: true) } label: { Image(systemName: "backward.end.fill") }.help("Previous in playlist")
             Button { library.advancePlaylists(force: true) } label: { Image(systemName: "forward.end.fill") }.help("Next in playlist")
             Button { library.togglePause() } label: { Image(systemName: library.state.paused ? "play.fill" : "pause.fill") }.help("Pause or resume")
@@ -248,18 +312,34 @@ struct WallpaperCard: View {
     let wallpaper: Wallpaper
     let selected: Bool
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            ZStack(alignment: .topTrailing) {
-                GeometryReader { geo in
-                    if let image = library.thumbnails[wallpaper.id] { Image(nsImage: image).resizable().scaledToFill().frame(width: geo.size.width, height: geo.size.height).clipped() }
-                    else { Rectangle().fill(Color.white.opacity(0.03)).overlay(Image(systemName: wallpaper.kind == "video" ? "film" : "photo").foregroundStyle(.secondary)) }
-                }.aspectRatio(16/10, contentMode: .fit)
-                Button { library.favorite(wallpaper) } label: { Image(systemName: wallpaper.favorite ? "heart.fill" : "heart").font(.system(size: 12)).padding(8).background(.black.opacity(0.3), in: Circle()) }.buttonStyle(.plain).padding(9)
-                VStack { Spacer(); HStack { Label(wallpaper.kind == "video" ? "VIDEO" : wallpaper.kind == "image" ? "IMAGE" : "LIVE", systemImage: wallpaper.kind == "image" ? "photo" : "waveform").font(.system(size: 8, weight: .semibold)).padding(.horizontal, 7).padding(.vertical, 5).background(.black.opacity(0.4), in: Capsule()); Spacer() }.padding(10) }
-            }.clipShape(RoundedRectangle(cornerRadius: 11)).overlay(RoundedRectangle(cornerRadius: 11).stroke(selected ? accent : .white.opacity(0.06), lineWidth: selected ? 2 : 1))
-            Text(wallpaper.title).font(.system(size: 13, weight: .medium)).lineLimit(1)
-            Text(wallpaper.file == nil ? "Flua Originals" : "Your collection").font(.system(size: 10)).foregroundStyle(.secondary)
-        }.contentShape(Rectangle())
+        ZStack(alignment: .topTrailing) {
+            GeometryReader { geo in
+                if let image = library.thumbnails[wallpaper.id] {
+                    Image(nsImage: image).resizable().scaledToFill().frame(width: geo.size.width, height: geo.size.height).clipped()
+                } else {
+                    Rectangle().fill(Color.white.opacity(0.03)).overlay(Image(systemName: wallpaper.kind == "video" ? "film" : "photo").foregroundStyle(.secondary))
+                }
+            }
+            LinearGradient(colors: [.clear, .black.opacity(0.78)], startPoint: .center, endPoint: .bottom)
+            Button { library.favorite(wallpaper) } label: {
+                Image(systemName: wallpaper.favorite ? "heart.fill" : "heart").font(.system(size: 12)).padding(8).background(.black.opacity(0.35), in: Circle())
+            }.buttonStyle(.plain).padding(9)
+            VStack {
+                Spacer()
+                HStack(alignment: .bottom) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(wallpaper.title).font(.system(size: 14, weight: .semibold)).lineLimit(1)
+                        Text(wallpaper.kind == "image" ? "Still" : "Animated").font(.system(size: 9)).foregroundStyle(.white.opacity(0.7))
+                    }
+                    Spacer()
+                    Image(systemName: wallpaper.kind == "image" ? "photo" : "play.fill").font(.caption2).foregroundStyle(.white.opacity(0.8))
+                }.padding(12)
+            }
+        }
+        .aspectRatio(16/10, contentMode: .fit)
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .overlay(RoundedRectangle(cornerRadius: 10).stroke(selected ? accent : .white.opacity(0.08), lineWidth: selected ? 2 : 1))
+        .contentShape(Rectangle())
     }
 }
 

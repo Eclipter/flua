@@ -6,9 +6,9 @@ A free native live wallpaper app for Apple Silicon Macs running macOS 15 or late
 
 Open `Flua.app`, choose one of the four animated scenes, choose a display, and click **Apply to desktop**. Use **Import** or drag videos/images, video manifest folders, direct manifests or `.zip` archives into the window to add your own media. Interactive package runtimes are still unsupported. Imported files are copied into Flua’s library; your originals stay where they are.
 
-Use the scene inspector to adjust speed, dimming, volume, and image fit. Right-click a scene or use **Add to playlist** to organize it. Create playlists with the **+** beside Playlists. Select a playlist and click **Play playlist**. Use the previous/next controls for navigation; right-click a scene inside a playlist to move it earlier or later. Rotation interval, shuffle, fullscreen pause, battery pause, Low Power Mode pause and login startup are in Settings. Text edits save when you press Return.
+Use the inspector to adjust speed, dimming, volume, and image fit. Right-click a backdrop or use **Add to Playlist** to organize it. Create playlists with the **+** beside Playlists, then use **Playlist Options** for that playlist’s interval, shuffle mode, or duplication. Use the previous/next controls for navigation; right-click an item inside a playlist to move it earlier or later. Global rotation defaults, fullscreen pause, battery pause, Low Power Mode pause and login startup are in Settings. Text edits save when you press Return.
 
-The menu-bar mountain icon provides pause/resume, next scene, stop, and quit. Closing the library window keeps wallpapers playing. **Stop** removes the selected desktop overlays. **Quit** removes every overlay and reveals your existing system wallpaper. Per-display selections restore the next time Flua opens.
+The menu-bar drop icon provides pause/resume, next scene, stop, and quit. Closing the library window keeps wallpapers playing. **Stop** removes the selected desktop overlays. **Quit** removes every overlay and reveals your existing system wallpaper. Per-display selections restore the next time Flua opens.
 
 Data lives in `~/Library/Application Support/Flua/`. The bundle identifier is `local.flua.desktop`. All library data and settings are stored locally; the app does not connect to a remote service. Native fullscreen detection uses the system window inventory; display sleep and session lock pause playback. Procedural scenes render at up to 24 fps with a bounded drawing surface; CPU use varies by scene and display.
 
@@ -25,7 +25,7 @@ Select an imported video and click **Edit and export video…**. Set the trim st
 | Loop local videos and display images                        | Yes; formats supported by macOS                                                |
 | Unlimited local scenes, search, tags, favorites             | Yes                                                                            |
 | Original animated scenes                                    | Aurora, cosmos, ocean, ember                                                   |
-| Named playlists, timing, shuffle, previous history, reorder | Yes                                                                            |
+| Named playlists, per-playlist timing/shuffle, history, reorder | Yes                                                                         |
 | Video trim, metadata, thumbnail, MP4/preview export         | Yes; audio preservation and removal tested                                     |
 | Video manifest import and portable scene export             | Yes; runtime scene kinds remain unsupported                                    |
 | Independent display selection, persistent display identity  | Yes; one display tested on this host                                           |
