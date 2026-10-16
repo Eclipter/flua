@@ -9,7 +9,7 @@ Planned work below describes future capabilities, not current support. Community
 | Video/image wallpapers | Local videos and images | Playback, looping, pause/resume and overlay cleanup covered by smoke tests |
 | Procedural wallpapers | Aurora, cosmos, ocean and ember | Four locally rendered scenes |
 | Displays | Mirrored or per-display selection and restoration | Stable display UUIDs; physical multi-display testing remains. Planned: separate desktop and Lock Screen assignments on each display, linked or independent selections, and persistent Animated/Still modes for each surface |
-| Library | Discover shelves, browse filters, favorites, tags, search and local persistence | Model and smoke tests; no hosted catalog. Planned: combined category, color, motion intensity, resolution and standard/ultrawide aspect-ratio filters; inspector resolution, file size, duration and date added; clickable tags as search filters; persistent local blocked-tag list to hide matching content |
+| Library | Discover shelves, combined filters, favorites, clickable tags, search, media facts and blocked tags | Model and isolated smoke tests cover category/color/motion/resolution/aspect filters, exact tags, legacy decoding, measured import facts, rotated video, metadata backfill, package classifications and Discover blocking; no hosted catalog |
 | Playlists | Per-playlist timing and shuffle, duplication, previous history and reorder | Model scheduling/history and runtime tests |
 | Playback controls | Speed, volume, dimming and fit | Live changes and trimmed playback covered by smoke tests |
 | Power controls | Sleep/lock, battery, fullscreen and Low Power Mode | Physical power/session transitions still need validation |
@@ -24,3 +24,13 @@ Planned work below describes future capabilities, not current support. Community
 | Login startup | Opt-in | Requires user activation; not enabled during tests |
 
 Run `make test` for model and package validation, `make smoke` for application checks, and `make native-test` for the standalone provider. Application smoke results are written to `build/verification/`; provider results are written to `experimental/WallpaperExtension/Built/`. Standalone provider tests do not establish acceptance by the system wallpaper host.
+
+## Library filtering and metadata
+
+All library views apply blocked tags, search and selected filters. Different filter groups combine with AND; multiple values within a group combine with OR. Tag buttons use complete tags, trimmed and compared without case sensitivity. Clear filters resets search and browsing filters; it preserves blocked tags. Settings → Blocked tags manages the persistent visibility preference without removing files, favorites, playlist entries or playback assignments.
+
+Category accepts user text; the menu includes existing visible categories and Abstract, Nature, Space, Urban and Unknown. Color is derived from the average sRGB thumbnail color and can be edited; it is an approximate classification, not a dominant-color analysis. Motion intensity is Low, Medium, High or Unknown and is curated or explicitly edited/imported rather than inferred from video movement. All missing classifications have an Unknown choice.
+
+Resolution buckets require both the long and short pixel edges to meet 1280×720, 1920×1080, 2560×1440 or 3840×2160; the highest satisfied threshold wins, independent of orientation. Smaller media is Below 720p. Aspect ratio uses width/height: Portrait below 0.95, Square from 0.95 through 1.05, Standard above 1.05 and below 2, and Ultrawide at 2 or above. Media without measurable dimensions uses Unknown.
+
+The inspector shows measured, orientation-corrected dimensions, copied-file size, source duration, trimmed duration when different, and date added. Images have no playback duration; procedural scenes have no source dimensions, file size or source duration. Facts for legacy imports are filled in asynchronously; historical date added remains Unknown. Missing or unreadable media leaves unavailable facts unknown. Packages carry category/color/motion classifications; receiving libraries measure the exported media and record their own import date.

@@ -11,13 +11,13 @@ make release     # dist/Flua-macOS.zip
 make native-test # isolated experimental provider tests, no OS activation
 ```
 
-`Package.swift` supports SwiftPM and opening the source package in Xcode. Use `make build` for a runnable `.app`; `swift build` alone only produces an executable. Model/package tests are standalone executables run by `make test`, not XCTest targets. Smoke tests write only to a fresh directory under `build/verification/`; they briefly create and remove a desktop overlay.
+`Package.swift` supports SwiftPM and opening the source package in Xcode. Use `make build` for a runnable `.app`; `swift build` alone only produces an executable. Model/package tests are standalone executables run by `make test`, not XCTest targets. Smoke tests launch a separate app instance through Launch Services, wait for it to exit, and write only to a fresh directory under `build/verification/`; they briefly create and remove a desktop overlay.
 
 The build script updates the app bundle's modification time after signing so Launch Services can detect changed metadata and icon resources on subsequent launches.
 
 ## Layout
 
-- `Sources/Flua/`: main application, rendering, persistence, importer and editor.
+- `Sources/Flua/`: main application, rendering, persistence, media inspection, importer and editor.
 - `Tests/FluaTests/`: deterministic model, library path and package validation tests.
 - `Resources/`: bundle metadata and original application icon.
 - `scripts/`: reproducible build, test and release entry points.
@@ -36,3 +36,5 @@ The project is a local Git repository; commits and remotes are left to the devel
 The bundle ID is `local.flua.desktop`. Normal launches use `~/Library/Application Support/Flua/`; an explicit `--data-dir` selects a separate library. The app creates its library on first launch and retains existing Flua data. It does not search other application directories. Login startup is opt-in.
 
 Scene exports use `.flua` folders containing a video, thumbnail and JSON manifest. Imports accept manifest folders, direct JSON manifests and ZIP archives. ZIP members and media paths are validated before import; source files remain intact. Interactive scene runtimes are unsupported.
+
+Browsing rules and media bucket boundaries are tested in `ModelTests.swift`. The isolated smoke run additionally measures image/video imports and rotated video, exercises legacy metadata backfill, checks classification preservation through package export/import, and verifies blocked Discover entries and cleared selections. It saves filter, empty-result, Settings, Discover and editor screenshots alongside `smoke-results.json` for visual inspection.

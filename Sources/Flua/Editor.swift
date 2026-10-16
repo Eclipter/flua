@@ -231,6 +231,13 @@ struct VideoEditorView: View {
     private func metadataBinding(_ key: WritableKeyPath<SceneMetadata,String>) -> Binding<String> {
         Binding(get: { model.draft.metadata?[keyPath: key] ?? "" }, set: { value in var m = model.draft.metadata ?? SceneMetadata(); m[keyPath: key] = value; model.draft.metadata = m })
     }
+    private func classificationBinding(_ key: WritableKeyPath<SceneMetadata, String?>) -> Binding<String> {
+        Binding(get: { key == \.color ? model.draft.color : model.draft.motion }, set: { value in
+            var metadata = model.draft.metadata ?? SceneMetadata()
+            metadata[keyPath: key] = value
+            model.draft.metadata = metadata
+        })
+    }
     var body: some View {
         HStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 16) {
@@ -267,6 +274,12 @@ struct VideoEditorView: View {
                 TextField("Title", text: $model.draft.title)
                 TextField("Description", text: metadataBinding(\.details), axis: .vertical).lineLimit(3...5)
                 TextField("Category", text: metadataBinding(\.category))
+                Picker("Color", selection: classificationBinding(\.color)) {
+                    ForEach(LibraryChoices.colors, id: \.self) { Text($0).tag($0) }
+                }
+                Picker("Motion intensity", selection: classificationBinding(\.motion)) {
+                    ForEach(LibraryChoices.motions, id: \.self) { Text($0).tag($0) }
+                }
                 TextField("Tags, separated by commas", text: $model.draft.tags)
                 TextField("Credit title", text: metadataBinding(\.creditTitle))
                 TextField("Credit URL", text: metadataBinding(\.creditURL))
@@ -341,7 +354,7 @@ extension Library {
         let thumbnailTime = min(max(0, edit.thumbnail - edit.start), max(0, clip.duration.seconds - 1.0 / 600))
         try await VideoTools.thumbnail(source: video, time: thumbnailTime).write(to: staging.appendingPathComponent("thumbnail.png"))
         let metadata = wallpaper.metadata ?? SceneMetadata()
-        let manifest: [String: Any] = ["type": "video", "title": wallpaper.title, "details": metadata.details, "categoryIdentifier": metadata.category, "linkTitle": metadata.creditTitle, "linkURL": metadata.creditURL, "tags": wallpaper.tags.split(separator: ",").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }, "files": ["asset": "asset.mp4", "largeThumbnail": "thumbnail.png"], "thumbnailTimestamp": thumbnailTime, "duration": clip.duration.seconds, "createdBy": "Flua 1.1"]
+        let manifest: [String: Any] = ["type": "video", "title": wallpaper.title, "details": metadata.details, "categoryIdentifier": metadata.category, "linkTitle": metadata.creditTitle, "linkURL": metadata.creditURL, "color": wallpaper.color, "motionIntensity": wallpaper.motion, "tags": normalizedTags(wallpaper.tags), "files": ["asset": "asset.mp4", "largeThumbnail": "thumbnail.png"], "thumbnailTimestamp": thumbnailTime, "duration": clip.duration.seconds, "createdBy": "Flua 1.1"]
         try JSONSerialization.data(withJSONObject: manifest, options: [.prettyPrinted, .sortedKeys]).write(to: staging.appendingPathComponent("manifest.json"))
         try fm.moveItem(at: staging, to: destination)
     }

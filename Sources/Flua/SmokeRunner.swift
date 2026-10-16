@@ -1,5 +1,6 @@
 import AppKit
 import AVFoundation
+import SwiftUI
 
 /// Invoked only with --smoke-test <directory>; writes all test state to --data-dir.
 enum SmokeRunner {
@@ -35,6 +36,50 @@ enum SmokeRunner {
             testWindow.orderFront(nil)
             surface.onError = { failures.append($0) }
             let video = videos[0]
+            let copiedBytes = (try FileManager.default.attributesOfItem(atPath: library.disk.url(for: video)!.path)[.size] as? NSNumber)?.int64Value
+            results["importFacts"] = video.mediaFacts?.width == 640 && video.mediaFacts?.height == 360
+                && abs((video.mediaFacts?.sourceDuration ?? 0) - 1) < 0.05
+                && video.mediaFacts?.bytes == copiedBytes
+                && video.dateAdded != nil && video.color != "Unknown"
+                && images[0].mediaFacts?.width == 640 && images[0].mediaFacts?.height == 360
+                && images[0].mediaFacts?.sourceDuration == nil && images[0].dateAdded != nil
+            let rotatedURL = out.appendingPathComponent("rotated.mov")
+            try await Task.detached { try makeVideo(rotatedURL, transform: CGAffineTransform(a: 0, b: 1, c: -1, d: 0, tx: 360, ty: 0)) }.value
+            let rotated = await MediaInspection.load(url: rotatedURL, kind: "video")
+            results["rotatedFacts"] = rotated.facts.width == 360 && rotated.facts.height == 640 && rotated.facts.aspect == "Portrait"
+            let missing = await MediaInspection.load(url: out.appendingPathComponent("missing.mp4"), kind: "video")
+            results["missingFacts"] = missing.facts.bytes == nil && !missing.facts.hasDimensions && missing.facts.sourceDuration == nil && missing.color == nil
+            let legacyRoot = out.appendingPathComponent("legacy-library", isDirectory: true)
+            let legacyDisk = try LibraryDisk(root: legacyRoot)
+            try FileManager.default.copyItem(at: imageURL, to: legacyDisk.assets.appendingPathComponent("old.png"))
+            var legacyState = LibraryState.initial
+            legacyState.wallpapers.append(Wallpaper(id: "legacy-image", title: "Legacy", kind: "image", file: "old.png"))
+            legacyState.wallpapers.append(Wallpaper(id: "legacy-missing", title: "Missing", kind: "video", file: "missing.mov"))
+            try legacyDisk.save(legacyState)
+            let legacyLibrary = try Library(root: legacyRoot)
+            let backfillDeadline = Date().addingTimeInterval(10)
+            while legacyLibrary.state.item("legacy-image")?.mediaFacts == nil && Date() < backfillDeadline { await pause(0.1) }
+            results["legacyBackfill"] = legacyLibrary.state.item("legacy-image")?.mediaFacts?.width == 640
+                && legacyLibrary.state.item("legacy-image")?.dateAdded == nil
+                && legacyLibrary.state.item("legacy-image")?.color != "Unknown"
+            let backfilledColor = legacyLibrary.state.item("legacy-image")?.color
+            var staleDraft = legacyState.item("legacy-image")!
+            staleDraft.metadata = SceneMetadata(details: "Edited before backfill finished")
+            legacyLibrary.edit(staleDraft)
+            results["staleEditPreservesFacts"] = legacyLibrary.state.item("legacy-image")?.mediaFacts?.width == 640
+                && legacyLibrary.state.item("legacy-image")?.dateAdded == nil
+                && legacyLibrary.state.item("legacy-image")?.color == backfilledColor
+                && legacyLibrary.state.item("legacy-image")?.metadata?.details == staleDraft.metadata?.details
+            var unknownColor = legacyLibrary.state.item("legacy-image")!
+            unknownColor.metadata?.color = "Unknown"
+            unknownColor.mediaFacts = nil
+            legacyLibrary.state.wallpapers[legacyLibrary.state.wallpapers.firstIndex(where: { $0.id == unknownColor.id })!] = unknownColor
+            legacyLibrary.backfillMetadata()
+            let unknownBackfillDeadline = Date().addingTimeInterval(10)
+            while legacyLibrary.state.item(unknownColor.id)?.mediaFacts == nil && Date() < unknownBackfillDeadline { await pause(0.1) }
+            results["unknownColorBackfill"] = legacyLibrary.state.item(unknownColor.id)?.mediaFacts?.width == 640
+                && legacyLibrary.state.item(unknownColor.id)?.color == "Unknown"
+            legacyLibrary.tick?.invalidate()
             surface.configure(video, url: library.disk.url(for: video))
             await pause(0.8)
             results["videoReady"] = surface.mediaReady
@@ -65,7 +110,7 @@ enum SmokeRunner {
             results["videoInformation"] = information.width == 640 && information.height == 360 && abs(information.duration - 1) < 0.05
             var edited = video
             edited.videoEdit = VideoEdit(start: 0.25, end: 0.75, thumbnail: 0.5, includeAudio: false, quality: "medium")
-            edited.metadata = SceneMetadata(details: "Portable test scene", category: "Abstract", creditTitle: "Flua", creditURL: "")
+            edited.metadata = SceneMetadata(details: "Portable test scene", category: "Abstract", creditTitle: "Flua", creditURL: "", color: "Purple", motion: "High")
             edited.tags = "test, portable"
             surface.configure(edited, url: library.disk.url(for: edited))
             await pause(0.4)
@@ -97,10 +142,33 @@ enum SmokeRunner {
             catch { results["preserveSourceOnExport"] = FileManager.default.fileExists(atPath: videoURL.path) }
             let packageURL = out.appendingPathComponent("Portable.flua", isDirectory: true)
             try await Library.exportPackage(edited, source: videoURL, destination: packageURL)
+            let manifestURL = packageURL.appendingPathComponent("manifest.json")
+            var manifest = try JSONSerialization.jsonObject(with: Data(contentsOf: manifestURL)) as! [String: Any]
+            manifest["width"] = 99999
+            manifest["height"] = 99999
+            manifest["duration"] = 99999
+            manifest["dateAdded"] = 0
+            manifest["fileSize"] = 99999
+            try JSONSerialization.data(withJSONObject: manifest).write(to: manifestURL)
             library.importMedia([packageURL])
             let packageDeadline = Date().addingTimeInterval(20)
             while library.importing && Date() < packageDeadline { await pause(0.1) }
-            results["packageRoundTrip"] = library.state.wallpapers.contains { $0.id != video.id && $0.kind == "video" && $0.tags == edited.tags && $0.metadata?.details == edited.metadata?.details }
+            results["packageRoundTrip"] = library.state.wallpapers.contains {
+                $0.id != video.id && $0.kind == "video" && $0.tags == edited.tags && $0.metadata == edited.metadata
+                    && $0.color == "Purple" && $0.motion == "High" && $0.dateAdded != nil
+                    && $0.mediaFacts?.width == exportedInfo.width && abs(($0.mediaFacts?.sourceDuration ?? 0) - 0.5) < 0.06
+            }
+            var unclassified = edited
+            unclassified.tags = "unknown-color"
+            unclassified.metadata?.color = "Unknown"
+            let unknownPackageURL = out.appendingPathComponent("UnknownColor.flua", isDirectory: true)
+            try await Library.exportPackage(unclassified, source: videoURL, destination: unknownPackageURL)
+            library.importMedia([unknownPackageURL])
+            let unknownPackageDeadline = Date().addingTimeInterval(20)
+            while library.importing && Date() < unknownPackageDeadline { await pause(0.1) }
+            results["unknownColorRoundTrip"] = library.state.wallpapers.contains {
+                $0.tags == unclassified.tags && $0.color == "Unknown" && $0.metadata == unclassified.metadata
+            }
             library.edit(edited)
             results["editorPersistence"] = try library.disk.load().item(edited.id)?.videoEdit == edited.videoEdit
             VideoEditorWindow.open(wallpaper: edited, source: library.disk.url(for: edited)!, library: library)
@@ -143,6 +211,41 @@ enum SmokeRunner {
             results["playlistNext"] = library.state.displays.values.allSatisfy { $0.wallpaperID == "ocean" }
             library.stop()
             results["libraryStop"] = library.state.displays.isEmpty && library.engine.activeCount == 0
+            library.selection = edited.id
+            library.section = "discover"
+            let savedAssignments = library.state.displays, savedPlaylists = library.state.playlists
+            library.blockTags(" TEST, , test ")
+            let persistedBlockedTags = try library.disk.load().blockedTags
+            results["blockedDiscover"] = !library.eligible.contains { $0.id == edited.id } && library.selection == nil
+                && library.state.blockedTags == ["test"] && library.state.displays == savedAssignments && library.state.playlists == savedPlaylists
+                && persistedBlockedTags == ["test"]
+            library.unblockTag("test")
+            library.filterTag("PORTABLE")
+            results["clickableTag"] = library.section == "browse" && library.visible.contains { $0.id == edited.id } && library.filter.tags == ["portable"]
+            library.filter.colors = ["Purple"]
+            results["combinedBrowsing"] = library.visible.count == 2
+            library.selection = edited.id
+            await pause(0.3)
+            if let window = NSApp.windows.first(where: { $0.title == "Flua" }) {
+                captureView(window, to: out.appendingPathComponent("Flua-filters.png"))
+            }
+            library.filter.colors = ["Orange"]
+            await pause(0.2)
+            if let window = NSApp.windows.first(where: { $0.title == "Flua" }) {
+                captureView(window, to: out.appendingPathComponent("Flua-empty-results.png"))
+            }
+            library.clearFilters()
+            results["clearFilters"] = library.filter.activeCount == 0 && library.query.isEmpty && library.visible.count == library.state.wallpapers.count
+            library.blockTags("example")
+            let settings = NSWindow(contentRect: NSRect(x: 100, y: 100, width: 530, height: 760), styleMask: [.titled, .closable], backing: .buffered, defer: false)
+            settings.isReleasedWhenClosed = false
+            settings.title = "Flua Settings Verification"
+            settings.contentView = NSHostingView(rootView: SettingsView().environmentObject(library).preferredColorScheme(.dark))
+            settings.orderFront(nil)
+            await pause(0.3)
+            captureView(settings, to: out.appendingPathComponent("Flua-settings.png"))
+            settings.close()
+            library.unblockTag("example")
             library.selection = "aurora"
             library.section = "discover"
             await pause(0.5)
@@ -159,13 +262,20 @@ enum SmokeRunner {
                 }
             }
             results["libraryRoundTrip"] = try library.disk.load().wallpapers == library.state.wallpapers
-            let required = ["imageImport", "videoImport", "videoReady", "videoPlaying", "videoLooped", "videoPaused", "videoResumed", "liveAdjustmentPreservesTime", "liveAdjustmentSpeed", "render_image", "render_aurora", "render_cosmos", "render_ocean", "render_ember", "desktopWindowVisible", "desktopIgnoresMouse", "desktopCleanup", "systemWallpaperPreserved", "libraryApply", "playlistStart", "playlistNext", "libraryStop", "libraryRoundTrip", "discoverWindow", "windowSnapshot", "videoInformation", "trimmedPlayback", "trimmedExport", "thumbnailExport", "rejectInvalidTrim", "preserveSourceOnExport", "packageRoundTrip", "editorPersistence", "editorWindow", "audioExport", "muteExport"]
+            let required = ["importFacts", "rotatedFacts", "missingFacts", "legacyBackfill", "staleEditPreservesFacts", "unknownColorBackfill", "unknownColorRoundTrip", "blockedDiscover", "clickableTag", "combinedBrowsing", "clearFilters", "imageImport", "videoImport", "videoReady", "videoPlaying", "videoLooped", "videoPaused", "videoResumed", "liveAdjustmentPreservesTime", "liveAdjustmentSpeed", "render_image", "render_aurora", "render_cosmos", "render_ocean", "render_ember", "desktopWindowVisible", "desktopIgnoresMouse", "desktopCleanup", "systemWallpaperPreserved", "libraryApply", "playlistStart", "playlistNext", "libraryStop", "libraryRoundTrip", "discoverWindow", "windowSnapshot", "videoInformation", "trimmedPlayback", "trimmedExport", "thumbnailExport", "rejectInvalidTrim", "preserveSourceOnExport", "packageRoundTrip", "editorPersistence", "editorWindow", "audioExport", "muteExport"]
             for key in required where results[key] as? Bool != true { failures.append(key) }
         } catch { failures.append(String(reflecting: error)) }
         results["failures"] = failures
         results["passed"] = failures.isEmpty
         if let data = try? JSONSerialization.data(withJSONObject: results, options: [.prettyPrinted, .sortedKeys]) { try? data.write(to: out.appendingPathComponent("smoke-results.json")) }
         NSApp.terminate(nil)
+    }
+    @MainActor static func captureView(_ window: NSWindow, to url: URL) {
+        if let view = window.contentView, let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) {
+            view.cacheDisplay(in: view.bounds, to: bitmap)
+            try? bitmap.representation(using: .png, properties: [:])?.write(to: url)
+            capture(window, to: url)
+        }
     }
     static func png(_ image: NSImage) throws -> Data {
         guard let data = image.tiffRepresentation,
@@ -203,10 +313,11 @@ enum SmokeRunner {
         try await exporter.export(to: output, as: .mov)
         return output
     }
-    static func makeVideo(_ url: URL) throws {
+    static func makeVideo(_ url: URL, transform: CGAffineTransform = .identity) throws {
         try? FileManager.default.removeItem(at: url)
         let writer = try AVAssetWriter(outputURL: url, fileType: .mov)
         let input = AVAssetWriterInput(mediaType: .video, outputSettings: [AVVideoCodecKey: AVVideoCodecType.h264, AVVideoWidthKey: 640, AVVideoHeightKey: 360])
+        input.transform = transform
         let adaptor = AVAssetWriterInputPixelBufferAdaptor(assetWriterInput: input, sourcePixelBufferAttributes: [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32ARGB, kCVPixelBufferWidthKey as String: 640, kCVPixelBufferHeightKey as String: 360, kCVPixelBufferCGImageCompatibilityKey as String: true, kCVPixelBufferCGBitmapContextCompatibilityKey as String: true])
         writer.add(input)
         guard writer.startWriting() else { throw writer.error ?? LibraryError.unreadableMedia("writer") }
