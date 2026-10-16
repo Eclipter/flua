@@ -105,19 +105,23 @@ final class Library: ObservableObject {
     func settingChanged() { syncEngine(); save() }
     func applySelected() {
         guard let w = selected else { return }
+        let now = Date()
         for screen in targets {
-            state.displays[displayID(screen)] = DisplayAssignment(wallpaperID: w.id)
+            state.assign(w.id, display: displayID(screen), now: now)
             engine.apply(w, url: disk.url(for: w), to: screen)
         }
+        if playbackMode == "mirrored" { _ = state.synchronizeMirrored(displayIDs: targets.map(displayID)) }
         activity = "Playing \(w.title) on \(targets.count == screens.count ? "all displays" : targets.first?.localizedName ?? "display")."
         save()
     }
     func startPlaylist(_ id: String) {
         guard let p = state.playlist(id), let w = p.items.compactMap({ state.item($0) }).first else { error = "Add at least one scene to this playlist first."; return }
+        let now = Date()
         for screen in targets {
-            state.displays[displayID(screen)] = DisplayAssignment(wallpaperID: w.id, playlistID: id)
+            state.assign(w.id, display: displayID(screen), playlistID: id, now: now)
             engine.apply(w, url: disk.url(for: w), to: screen)
         }
+        if playbackMode == "mirrored" { _ = state.synchronizeMirrored(displayIDs: targets.map(displayID)) }
         activity = "Playlist: \(p.name)"
         save()
     }
@@ -128,7 +132,7 @@ final class Library: ObservableObject {
         }
         for screen in screens {
             let key = displayID(screen)
-            guard let w = state.item(state.displays[key]?.wallpaperID) else { continue }
+            guard let w = state.item(state.displays[key]?.desktop.wallpaperID) else { continue }
             if w.file != nil && !(disk.url(for: w).map { FileManager.default.fileExists(atPath: $0.path) } ?? false) {
                 error = "Media for \(w.title) is missing. Reimport the file."
                 continue
@@ -159,7 +163,7 @@ final class Library: ObservableObject {
         if didChange { save() }
     }
     func stop() {
-        for screen in targets { engine.stop(display: displayID(screen)); state.displays.removeValue(forKey: displayID(screen)) }
+        for screen in targets { engine.stop(display: displayID(screen)); state.stop(display: displayID(screen)) }
         activity = "Wallpaper stopped. Your system wallpaper is visible."
         save()
     }
@@ -218,13 +222,12 @@ final class Library: ObservableObject {
         save()
     }
     func deletePlaylist(_ id: String) {
-        state.playlists.removeAll { $0.id == id }
-        for key in Array(state.displays.keys) where state.displays[key]?.playlistID == id { state.displays[key]?.playlistID = nil }
+        state.removePlaylist(id)
         section = "all"
         save()
     }
     func remove(_ w: Wallpaper) {
-        for screen in screens where state.displays[displayID(screen)]?.wallpaperID == w.id { engine.stop(display: displayID(screen)) }
+        for screen in screens where state.displays[displayID(screen)]?.desktop.wallpaperID == w.id { engine.stop(display: displayID(screen)) }
         state.remove(w.id)
         save()
         // Retain the imported file so accidental removal never destroys the user's media.

@@ -8,7 +8,7 @@ Remaining implementation work is tracked in [PLAN.md](PLAN.md). Community featur
 |---|---|---|
 | Video/image wallpapers | Local videos and images | Playback, looping, pause/resume and overlay cleanup covered by smoke tests |
 | Procedural wallpapers | Aurora, cosmos, ocean and ember | Four locally rendered scenes |
-| Displays | Mirrored or per-display selection and restoration | Stable display UUIDs; physical multi-display behavior remains unverified |
+| Displays | Mirrored or per-display desktop selection and restoration | Stable display UUIDs. The library can also store a Lock Screen choice, Animated/Still mode and a link between the two surfaces; the app does not apply or show those controls yet. Physical multi-display behavior remains unverified |
 | Library | Discover shelves, combined filters, favorites, clickable tags, search, media facts and blocked tags | Model and isolated smoke tests cover category/color/motion/resolution/aspect filters, exact tags, legacy decoding, measured import facts, rotated video, metadata backfill, package classifications and Discover blocking; no hosted catalog |
 | Playlists | Per-playlist timing and shuffle, duplication, previous history and reorder | Model scheduling/history and runtime tests |
 | Playback controls | Speed, volume, dimming and fit | Live changes and trimmed playback covered by smoke tests |
