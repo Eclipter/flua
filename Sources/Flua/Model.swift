@@ -1,5 +1,13 @@
 import Foundation
 
+func resolvedDisplayMode(_ mode: String?) -> String {
+    mode ?? "perDisplay"
+}
+
+func initialDisplaySelection(mode: String?, displayIDs: [String]) -> String {
+    resolvedDisplayMode(mode) == "perDisplay" ? displayIDs.first ?? "all" : "all"
+}
+
 struct Wallpaper: Codable, Identifiable, Equatable {
     var id: String = UUID().uuidString
     var title: String
@@ -34,6 +42,8 @@ struct Playlist: Codable, Identifiable, Equatable {
     var id: String = UUID().uuidString
     var name: String
     var items: [String] = []
+    var interval: Double?
+    var shuffle: Bool?
 }
 
 struct DisplayAssignment: Codable, Equatable {
@@ -54,6 +64,7 @@ struct LibraryState: Codable {
     var pauseOnLowPower: Bool?
     var pauseOnFullscreen: Bool = true
     var paused: Bool = false
+    var displayMode: String?
     static var initial: LibraryState {
         var s = LibraryState()
         s.wallpapers = [
@@ -63,6 +74,7 @@ struct LibraryState: Codable {
             Wallpaper(id: "ember", title: "Ember glow", kind: "ember", tags: "warm, abstract, orange")
         ]
         s.playlists = [Playlist(id: "ambient", name: "Slow mornings", items: ["aurora", "ocean", "cosmos", "ember"])]
+        s.displayMode = "mirrored"
         return s
     }
     func item(_ id: String?) -> Wallpaper? { wallpapers.first { $0.id == id } }
@@ -78,7 +90,7 @@ struct LibraryState: Codable {
         guard var a = displays[display], let p = playlist(a.playlistID) else { return nil }
         let ids = p.items.filter { item($0) != nil }
         guard !ids.isEmpty else { return nil }
-        guard force || now.timeIntervalSince(a.changedAt) >= interval else { return nil }
+        guard force || now.timeIntervalSince(a.changedAt) >= (p.interval ?? interval) else { return nil }
         if backwards {
             var history = (a.history ?? []).filter { ids.contains($0) }
             if let previous = history.popLast(), let index = ids.firstIndex(of: previous) { a.index = index }
@@ -86,7 +98,7 @@ struct LibraryState: Codable {
             a.history = history
         } else {
         if let old = a.wallpaperID { a.history = Array(((a.history ?? []) + [old]).suffix(128)) }
-        if shuffle && ids.count > 1 {
+        if (p.shuffle ?? shuffle) && ids.count > 1 {
             a.index = ids.indices.filter { ids[$0] != a.wallpaperID }.randomElement() ?? 0
         } else { a.index = ((ids.firstIndex(of: a.wallpaperID ?? "") ?? a.index) + 1) % ids.count }
         }
@@ -94,6 +106,19 @@ struct LibraryState: Codable {
         a.changedAt = now
         displays[display] = a
         return item(a.wallpaperID)
+    }
+    mutating func advanceMirrored(displayIDs: [String], now: Date = Date(), force: Bool = false, backwards: Bool = false) -> Wallpaper? {
+        guard let source = displayIDs.first(where: { displays[$0]?.playlistID != nil }),
+              advance(display: source, now: now, force: force, backwards: backwards) != nil else { return nil }
+        return synchronizeMirrored(displayIDs: displayIDs, preferredSource: source)
+    }
+    mutating func synchronizeMirrored(displayIDs: [String], preferredSource: String? = nil) -> Wallpaper? {
+        let preferred = preferredSource.flatMap { displayIDs.contains($0) ? $0 : nil }
+        let candidates = (preferred.map { [$0] } ?? []) + displayIDs
+        guard let source = candidates.first(where: { item(displays[$0]?.wallpaperID) != nil }),
+              let assignment = displays[source], let wallpaper = item(assignment.wallpaperID) else { return nil }
+        for id in displayIDs { displays[id] = assignment }
+        return wallpaper
     }
 }
 
