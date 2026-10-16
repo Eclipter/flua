@@ -28,20 +28,24 @@ final class Library: ObservableObject {
         do { state = try disk.load() }
         catch { state = .initial; saveBlocked = true; self.error = error.localizedDescription }
         selection = state.wallpapers.first?.id
+        display = initialDisplaySelection(mode: state.displayMode, displayIDs: screens.map(displayID))
         engine.onError = { [weak self] in self?.error = $0 }
         syncEngine()
         screenObserver = NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main) { [weak self] _ in
             guard let self else { return }
             self.screens = NSScreen.screens
-            if self.display != "all" && !self.screens.contains(where: { displayID($0) == self.display }) { self.display = "all" }
+            if self.display != "all" && !self.screens.contains(where: { displayID($0) == self.display }) {
+                self.display = self.playbackMode == "perDisplay" ? self.screens.first.map(displayID) ?? "all" : "all"
+            }
             for key in self.engine.activeKeys where !self.screens.contains(where: { displayID($0) == key }) { self.engine.stop(display: key) }
-            self.restoreAssignments()
+            if self.restoreAssignments() { self.save() }
         }
         tick = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in self?.advancePlaylists(force: false) }
         RunLoop.main.add(tick!, forMode: .common)
         DispatchQueue.main.async { [weak self] in
-            self?.restoreAssignments()
-            self?.makeThumbnails()
+            guard let self else { return }
+            if self.restoreAssignments() { self.save() }
+            self.makeThumbnails()
         }
     }
     var selected: Wallpaper? { state.item(selection) }
@@ -60,12 +64,24 @@ final class Library: ObservableObject {
         return filtered
     }
     var sectionTitle: String {
+        if section == "browse" { return "Browse" }
         if section == "favorites" { return "Favorites" }
         if section == "imports" { return "Your media" }
         if section.hasPrefix("playlist:") { return state.playlist(String(section.dropFirst(9)))?.name ?? "Playlist" }
-        return "Your collection"
+        return "Library"
     }
-    var targets: [NSScreen] { screens.filter { display == "all" || displayID($0) == display } }
+    var playbackMode: String { resolvedDisplayMode(state.displayMode) }
+    var targets: [NSScreen] {
+        if playbackMode == "mirrored" { return screens }
+        return screens.filter { displayID($0) == display }
+    }
+    func setPlaybackMode(_ mode: String) {
+        let preferredDisplay = display == "all" ? nil : display
+        state.displayMode = mode
+        display = mode == "mirrored" ? "all" : screens.first.map(displayID) ?? "all"
+        if mode == "mirrored" { _ = restoreAssignments(preferredDisplay: preferredDisplay) }
+        save()
+    }
     func save() {
         guard !saveBlocked else { error = LibraryError.invalidLibrary.localizedDescription; return }
         do { try disk.save(state) } catch { self.error = error.localizedDescription }
@@ -97,7 +113,11 @@ final class Library: ObservableObject {
         activity = "Playlist: \(p.name)"
         save()
     }
-    func restoreAssignments() {
+    @discardableResult func restoreAssignments(preferredDisplay: String? = nil) -> Bool {
+        let previousDisplays = state.displays
+        if playbackMode == "mirrored" {
+            _ = state.synchronizeMirrored(displayIDs: screens.map(displayID), preferredSource: preferredDisplay)
+        }
         for screen in screens {
             let key = displayID(screen)
             guard let w = state.item(state.displays[key]?.wallpaperID) else { continue }
@@ -108,16 +128,24 @@ final class Library: ObservableObject {
             engine.apply(w, url: disk.url(for: w), to: screen)
         }
         if engine.activeCount > 0 { activity = "Restored wallpapers on \(engine.activeCount) display(s)." }
+        return state.displays != previousDisplays
     }
-    func advancePlaylists(force: Bool, backwards: Bool = false) {
+    func advancePlaylists(force: Bool, backwards: Bool = false, allDisplays: Bool = false) {
         guard !state.paused || force else { return }
         var didChange = false
-        for screen in screens {
-            let key = displayID(screen)
-            if force && display != "all" && display != key { continue }
-            if let w = state.advance(display: key, force: force, backwards: backwards) {
-                engine.apply(w, url: disk.url(for: w), to: screen)
+        if playbackMode == "mirrored" {
+            if let w = state.advanceMirrored(displayIDs: screens.map(displayID), force: force, backwards: backwards) {
+                for screen in screens { engine.apply(w, url: disk.url(for: w), to: screen) }
                 didChange = true
+            }
+        } else {
+            for screen in screens {
+                let key = displayID(screen)
+                if force && !allDisplays && display != key { continue }
+                if let w = state.advance(display: key, force: force, backwards: backwards) {
+                    engine.apply(w, url: disk.url(for: w), to: screen)
+                    didChange = true
+                }
             }
         }
         if didChange { save() }
@@ -145,6 +173,20 @@ final class Library: ObservableObject {
         let p = Playlist(name: trimmed)
         state.playlists.append(p)
         section = "playlist:" + p.id
+        save()
+    }
+    func updatePlaylist(_ id: String, interval: Double? = nil, shuffle: Bool? = nil) {
+        guard let i = state.playlists.firstIndex(where: { $0.id == id }) else { return }
+        if let interval { state.playlists[i].interval = interval }
+        if let shuffle { state.playlists[i].shuffle = shuffle }
+        save()
+    }
+    func duplicatePlaylist(_ id: String) {
+        guard let source = state.playlist(id) else { return }
+        let copy = Playlist(name: source.name + " Copy", items: source.items,
+                            interval: source.interval, shuffle: source.shuffle)
+        state.playlists.append(copy)
+        section = "playlist:" + copy.id
         save()
     }
     func toggleInPlaylist(_ wallpaper: String, _ playlist: String) {

@@ -60,8 +60,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             CommandMenu("Playback") {
                 Button(library.state.paused ? "Resume" : "Pause") { library.togglePause() }.keyboardShortcut("p", modifiers: [.command, .shift])
-                Button("Previous in playlist") { library.advancePlaylists(force: true, backwards: true) }.keyboardShortcut(.leftArrow, modifiers: [.command])
-                Button("Next in playlist") { library.advancePlaylists(force: true) }.keyboardShortcut(.rightArrow, modifiers: [.command])
+                Button("Previous on every display") { library.advancePlaylists(force: true, backwards: true, allDisplays: true) }.keyboardShortcut(.leftArrow, modifiers: [.command])
+                Button("Next on every display") { library.advancePlaylists(force: true, allDisplays: true) }.keyboardShortcut(.rightArrow, modifiers: [.command])
                 Button("Stop wallpapers") { library.stop() }
             }
         }
@@ -77,7 +77,7 @@ struct TrayView: View {
         Button("Open Flua") { openWindow(id: "library"); NSApp.activate(ignoringOtherApps: true) }
         Divider()
         Button(library.state.paused ? "Resume wallpapers" : "Pause wallpapers") { library.togglePause() }
-        Button("Next in playlist") { library.advancePlaylists(force: true) }
+        Button("Next on every display") { library.advancePlaylists(force: true, allDisplays: true) }
         Button("Stop wallpapers") { library.stop() }
         Divider()
         SettingsLink { Text("Settings…") }
@@ -299,11 +299,16 @@ struct InspectorView: View {
                     }
                     VStack(alignment: .leading, spacing: 10) {
                         Text("DISPLAY").font(.system(size: 9, weight: .semibold)).tracking(1.5).foregroundStyle(.secondary)
-                        Picker("Display", selection: $library.display) {
-                            Text("All displays").tag("all")
-                            ForEach(library.screens, id: \.self) { screen in Text(screen.localizedName).tag(displayID(screen)) }
-                        }.labelsHidden().frame(maxWidth: .infinity)
-                        Button { library.applySelected() } label: { Label("Apply to desktop", systemImage: "desktopcomputer").frame(maxWidth: .infinity).padding(.vertical, 7) }.buttonStyle(.borderedProminent).foregroundStyle(.black)
+                        Picker("Display Mode", selection: Binding(get: { library.playbackMode }, set: { library.setPlaybackMode($0) })) {
+                            Text("Mirrored").tag("mirrored")
+                            Text("Per Display").tag("perDisplay")
+                        }.pickerStyle(.segmented)
+                        if library.playbackMode == "perDisplay" {
+                            Picker("Display", selection: $library.display) {
+                                ForEach(library.screens, id: \.self) { screen in Text(screen.localizedName).tag(displayID(screen)) }
+                            }.labelsHidden().frame(maxWidth: .infinity)
+                        }
+                        Button { library.applySelected() } label: { Label("Play Backdrop", systemImage: "play.fill").frame(maxWidth: .infinity).padding(.vertical, 7) }.buttonStyle(.borderedProminent)
                     }
                     Divider().opacity(0.3)
                     if w.kind == "video", let source = library.disk.url(for: w) {
@@ -349,6 +354,10 @@ struct SettingsView: View {
     var body: some View {
         Form {
             Section("Playback") {
+                Picker("Display mode", selection: Binding(get: { library.playbackMode }, set: { library.setPlaybackMode($0) })) {
+                    Text("Mirrored").tag("mirrored")
+                    Text("Per Display").tag("perDisplay")
+                }
                 Toggle("Pause behind fullscreen apps", isOn: $library.state.pauseOnFullscreen)
                 Toggle("Pause while running on battery", isOn: $library.state.pauseOnBattery)
                 Toggle("Pause in Low Power Mode", isOn: Binding(get: { library.state.pauseOnLowPower ?? false }, set: { library.state.pauseOnLowPower = $0; library.settingChanged() }))
