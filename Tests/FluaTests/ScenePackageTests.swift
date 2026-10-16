@@ -38,6 +38,11 @@ import Foundation
             precondition(!fm.fileExists(atPath: temporary.path))
             precondition(fm.fileExists(atPath: url.path))
         }
+        let backdropPackage = root.appendingPathComponent("portable.bdpkg")
+        try zip(base).write(to: backdropPackage)
+        let backdropResult = try ScenePackage.inspect(backdropPackage)
+        precondition(backdropResult.title == "A local video")
+        backdropResult.cleanup()
         let deflated = root.appendingPathComponent("deflated.zip")
         let zipProcess = Process()
         zipProcess.executableURL = URL(fileURLWithPath: "/usr/bin/zip")
@@ -77,7 +82,7 @@ import Foundation
         try fm.createSymbolicLink(atPath: folder.appendingPathComponent("link").path, withDestinationPath: "/tmp")
         do { _ = try ScenePackage.inspect(folder); fatalError("Accepted a folder symbolic link") }
         catch is ScenePackageError {}
-        print("PASS: verified folder metadata, stored and nested ZIP extraction, source preservation, explicit unsupported-scene errors, cleanup, traversal, absolute/backslash/newline paths, symlinks, duplicate paths, file-directory collisions, AppleDouble and expansion limits")
+        print("PASS: verified folder metadata, ZIP and .bdpkg extraction, source preservation, explicit unsupported-scene errors, cleanup, traversal, absolute/backslash/newline paths, symlinks, duplicate paths, file-directory collisions, AppleDouble and expansion limits")
     }
 
     struct Member {

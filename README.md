@@ -4,7 +4,7 @@ A free native live wallpaper app for Apple Silicon Macs running macOS 15 or late
 
 ## Use it
 
-Open `Flua.app`, choose one of the four animated scenes, choose a display, and click **Apply to desktop**. Use **Import** or drag videos/images, video manifest folders, direct manifests or `.zip` archives into the window to add your own media. Interactive package runtimes are still unsupported. Imported files are copied into Flua’s library; your originals stay where they are.
+Open `Flua.app` and use **Discover** for local featured shelves or **Browse** to filter the full collection. Choose a backdrop and click **Play Backdrop**. Mirrored mode plays it across every display; Per Display mode lets each display use a different choice. Use **Create** to import a video straight into the editor, or **Import** for videos, images, video manifest folders, direct manifests, `.zip`, and `.bdpkg` archives. Interactive package runtimes are still unsupported. Imported files are copied into Flua’s library; your originals stay where they are.
 
 Use the inspector to adjust speed, dimming, volume, and image fit. Right-click a backdrop or use **Add to Playlist** to organize it. Create playlists with the **+** beside Playlists, then use **Playlist Options** for that playlist’s interval, shuffle mode, or duplication. Use the previous/next controls for navigation; right-click an item inside a playlist to move it earlier or later. Global rotation defaults, fullscreen pause, battery pause, Low Power Mode pause and login startup are in Settings. Text edits save when you press Return.
 

@@ -455,8 +455,8 @@ struct SettingsView: View {
                 Text("Flua stores its own copies of imported media. Closing the window keeps wallpapers running; quitting restores the underlying wallpaper.").font(.caption).foregroundStyle(.secondary)
             }
             Section("About") {
-                Text("Flua 1.1 • Independent native wallpaper app").font(.callout)
-                Text("Video editing, package import, animated scenes, per-display playback and playlists. Hosted community, interactive scene runtimes and native Lock Screen activation are still in development.").font(.caption).foregroundStyle(.secondary)
+                Text("Flua 1.2 • Independent native wallpaper app").font(.callout)
+                Text("Discover, browse, create, edit, playlists and per-display playback are built in. Everything in your library remains local.").font(.caption).foregroundStyle(.secondary)
             }
         }.formStyle(.grouped).padding(8)
             .onChange(of: library.state.pauseOnFullscreen) { _, _ in library.settingChanged() }

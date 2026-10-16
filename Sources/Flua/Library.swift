@@ -218,11 +218,11 @@ final class Library: ObservableObject {
     }
     func chooseMedia() {
         let panel = NSOpenPanel()
-        panel.allowedContentTypes = [.movie, .image, .json, .folder, .zip]
+        panel.allowedContentTypes = [.movie, .image, .json, .folder, .zip] + (UTType(filenameExtension: "bdpkg").map { [$0] } ?? [])
         panel.allowsMultipleSelection = true
         panel.canChooseDirectories = true
         panel.treatsFilePackagesAsDirectories = true
-        panel.message = "Import videos, images, video manifest folders, or .zip packages. Flua stores its own copies."
+        panel.message = "Import videos, images, video manifest folders, .zip, or .bdpkg packages. Flua stores its own copies."
         panel.begin { [weak self] response in if response == .OK { self?.importMedia(panel.urls) } }
     }
     func createBackdrop() {
@@ -247,7 +247,7 @@ final class Library: ObservableObject {
             for url in urls {
                 do {
                     let isDirectory = (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true
-                    let isPackage = isDirectory || ["zip", "json"].contains(url.pathExtension.lowercased())
+                    let isPackage = isDirectory || ["zip", "json", "bdpkg"].contains(url.pathExtension.lowercased())
                     let package: ScenePackageContents?
                     if isPackage {
                         package = try await Task.detached(priority: .userInitiated) { try ScenePackage.inspect(url) }.value
