@@ -2,7 +2,7 @@
 
 This plan tracks the remaining native wallpaper work and outstanding validation. Current support is listed in `FEATURES.md`. Community features, profiles, network services and third-party runtime dependencies are outside its scope.
 
-The native-provider playback and file-access feasibility gate has passed on the tested OS. Steps 2–5 can proceed; the remaining real-system scenarios in steps 1 and 6 still need validation.
+The native-provider playback and file-access feasibility gate has passed on the tested OS. Step 2 is implemented in the library model. Steps 3–5 can proceed; the remaining real-system scenarios in steps 1 and 6 still need validation.
 
 ## 1. Prove the native provider works with the real system host
 
@@ -19,13 +19,15 @@ Repeat `make native-test` after provider changes before running host checks. Tem
 
 ## 2. Model desktop and Lock Screen assignments separately
 
-1. Extend `DisplayAssignment` with per-surface selection and persistent Animated/Still mode, plus a linked/independent setting. Keep this separate from the existing Mirrored/Per Display setting.
-2. Decode old assignments into the desktop surface with their playlist index, history and timing intact. Leave the Lock Screen unmanaged until the user assigns it or enables linking.
-3. Define linking to copy the desktop selection and mode to the Lock Screen and follow subsequent desktop changes. Unlinking preserves the current values for independent editing.
-4. Update assignment changes, mirrored synchronization, playlist advancement, removal, stopping and restoration to respect the selected surface and link state.
-5. Keep assignments keyed by stable display UUIDs, retaining disconnected displays' saved choices for reconnection.
+**Status:** done in the library model. Deterministic tests and the isolated smoke run pass. The desktop app still applies and restores only the desktop surface; Animated/Still is stored but not used by rendering, and there is no setup UI.
 
-**Acceptance:** deterministic tests cover legacy decoding, link/unlink, independent modes, mirrored displays, playlist advancement, removed content and persistence.
+1. Extend `DisplayAssignment` with per-surface selection and persistent Animated/Still mode, plus a linked/independent setting. Keep this separate from the existing Mirrored/Per Display setting. **Done.**
+2. Decode old assignments into the desktop surface with their playlist index, history and timing intact. Leave the Lock Screen unmanaged until the user assigns it or enables linking. **Done.**
+3. Define linking to copy the desktop selection and mode to the Lock Screen and follow subsequent desktop changes. Unlinking preserves the current values for independent editing. **Done.** A change made for either linked surface updates both.
+4. Update assignment changes, mirrored synchronization, playlist advancement, removal, stopping and restoration to respect the selected surface and link state. **Done.** Mirrored mode copies the whole desktop/Lock Screen pair, including modes and link state. Desktop apply, playlist advancement and stop leave an unlinked Lock Screen choice in place.
+5. Keep assignments keyed by stable display UUIDs, retaining disconnected displays' saved choices for reconnection. **Done.**
+
+**Acceptance:** deterministic tests cover legacy decoding, link/unlink, independent modes, mirrored displays, playlist advancement, removed content and persistence. **Met** by `make test` and the assignment checks in `make smoke`. Physical multi-display behavior remains unverified.
 
 ## 3. Implement Animated and Still rendering for each surface
 

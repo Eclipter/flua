@@ -34,20 +34,20 @@ import Foundation
         legacyState.displayMode = nil
         let restoredLegacyState = try JSONDecoder().decode(LibraryState.self, from: JSONEncoder().encode(legacyState))
         precondition(restoredLegacyState.displayMode == nil && resolvedDisplayMode(restoredLegacyState.displayMode) == "perDisplay")
-        state.displays["display-A"] = DisplayAssignment(wallpaperID: "aurora", playlistID: "ambient", changedAt: Date(timeIntervalSince1970: 0))
+        state.displays["display-A"] = DisplayAssignment(desktop: SurfaceAssignment(wallpaperID: "aurora", playlistID: "ambient", changedAt: Date(timeIntervalSince1970: 0)))
         precondition(state.advance(display: "display-A", now: Date(timeIntervalSince1970: 299)) == nil)
         precondition(state.advance(display: "display-A", now: Date(timeIntervalSince1970: 300))?.id == "ocean")
         precondition(state.advance(display: "display-A", now: Date(timeIntervalSince1970: 301)) == nil)
         state.playlists[0].interval = 600
         state.playlists[0].shuffle = false
-        state.displays["display-A"] = DisplayAssignment(wallpaperID: "aurora", playlistID: "ambient", changedAt: Date(timeIntervalSince1970: 1_000))
+        state.displays["display-A"] = DisplayAssignment(desktop: SurfaceAssignment(wallpaperID: "aurora", playlistID: "ambient", changedAt: Date(timeIntervalSince1970: 1_000)))
         precondition(state.advance(display: "display-A", now: Date(timeIntervalSince1970: 1_599)) == nil)
         precondition(state.advance(display: "display-A", now: Date(timeIntervalSince1970: 1_600))?.id == "ocean")
         state.playlists[0].interval = nil
         state.playlists[0].shuffle = nil
-        state.displays["display-A"] = DisplayAssignment(wallpaperID: "aurora", playlistID: "ambient")
-        let mirroredAssignment = DisplayAssignment(wallpaperID: "ocean", playlistID: "ambient", index: 1,
-                                                   changedAt: Date(timeIntervalSince1970: 2_000), history: ["aurora"])
+        state.displays["display-A"] = DisplayAssignment(desktop: SurfaceAssignment(wallpaperID: "aurora", playlistID: "ambient"))
+        let mirroredAssignment = DisplayAssignment(desktop: SurfaceAssignment(wallpaperID: "ocean", playlistID: "ambient", index: 1,
+                                                   changedAt: Date(timeIntervalSince1970: 2_000), history: ["aurora"]))
         state.displays["display-B"] = mirroredAssignment
         precondition(state.synchronizeMirrored(displayIDs: ["display-A", "display-B", "display-C"], preferredSource: "display-B")?.id == "ocean")
         precondition(state.displays["display-A"] == mirroredAssignment && state.displays["display-B"] == mirroredAssignment && state.displays["display-C"] == mirroredAssignment)
@@ -55,7 +55,7 @@ import Foundation
         precondition(state.displays["display-A"] == state.displays["display-B"] && state.displays["display-B"] == state.displays["display-C"])
         state.shuffle = true
         for _ in 0..<100 {
-            let old = state.displays["display-A"]?.wallpaperID
+            let old = state.displays["display-A"]?.desktop.wallpaperID
             let next = state.advance(display: "display-A", force: true)
             precondition(next != nil && next?.id != old)
             precondition(state.advance(display: "display-A", force: true, backwards: true)?.id == old)
@@ -63,12 +63,12 @@ import Foundation
         let oldSchema = Data("{\"id\":\"old\",\"title\":\"Old scene\",\"kind\":\"video\",\"tags\":\"\",\"favorite\":false,\"speed\":1,\"volume\":0,\"dimming\":0,\"fit\":false}".utf8)
         let oldWallpaper = try JSONDecoder().decode(Wallpaper.self, from: oldSchema)
         precondition(oldWallpaper.videoEdit == nil && oldWallpaper.metadata == nil)
-        state.displays["display-A"] = DisplayAssignment(wallpaperID: "aurora")
-        state.displays["display-B"] = DisplayAssignment(wallpaperID: "ember")
+        state.displays["display-A"] = DisplayAssignment(desktop: SurfaceAssignment(wallpaperID: "aurora"))
+        state.displays["display-B"] = DisplayAssignment(desktop: SurfaceAssignment(wallpaperID: "ember"))
         state.remove("ember")
         precondition(state.displays["display-B"] == nil)
         precondition(state.playlists.allSatisfy { !$0.items.contains("ember") })
-        let activeID = state.displays["display-A"]!.wallpaperID!
+        let activeID = state.displays["display-A"]!.desktop.wallpaperID!
         state.remove(activeID)
         precondition(state.displays["display-A"] == nil)
         state.displayMode = "perDisplay"
@@ -77,6 +77,7 @@ import Foundation
         precondition(restored.wallpapers == state.wallpapers && restored.playlists == state.playlists && restored.displays == state.displays && restored.displayMode == "perDisplay")
         precondition(disk.url(for: Wallpaper(title: "bad", kind: "video", file: "../../secret")) == nil)
         precondition(disk.url(for: Wallpaper(title: "good", kind: "video", file: "clip.mp4"))!.deletingLastPathComponent() == disk.assets)
+        try surfaceAssignmentTests(disk: disk)
         try browsingTests(disk: disk)
         let invalid = Data("not valid json".utf8)
         try invalid.write(to: disk.manifest)
@@ -84,9 +85,138 @@ import Foundation
         let preserved = try Data(contentsOf: disk.manifest)
         precondition(preserved == invalid)
         state.playlists = [Playlist(id: "empty", name: "Empty")]
-        state.displays["display-C"] = DisplayAssignment(playlistID: "empty")
+        state.displays["display-C"] = DisplayAssignment(desktop: SurfaceAssignment(playlistID: "empty"))
         precondition(state.advance(display: "display-C", force: true) == nil)
         print("PASS: global, per-playlist and mirrored scheduling, 100 shuffle transitions, removal cleanup, persistence, path validation, corrupt-library preservation, empty playlists")
+    }
+    static func surfaceAssignmentTests(disk: LibraryDisk) throws {
+        let start = Date(timeIntervalSinceReferenceDate: 42)
+        let oldData = Data(#"{"wallpaperID":"ocean","playlistID":"ambient","index":1,"changedAt":42,"history":["aurora","missing"]}"#.utf8)
+        let legacy = try JSONDecoder().decode(DisplayAssignment.self, from: oldData)
+        precondition(legacy.desktop == SurfaceAssignment(wallpaperID: "ocean", playlistID: "ambient", index: 1,
+                                                         changedAt: start, history: ["aurora", "missing"]))
+        precondition(legacy.lockScreen == nil && !legacy.surfacesLinked && legacy.desktop.mode == .animated)
+        var oldLibrary = try JSONSerialization.jsonObject(with: JSONEncoder().encode(LibraryState.initial)) as! [String: Any]
+        oldLibrary["displays"] = ["saved-display-UUID": try JSONSerialization.jsonObject(with: oldData)]
+        try JSONSerialization.data(withJSONObject: oldLibrary).write(to: disk.manifest)
+        let loadedLegacy = try disk.load()
+        precondition(loadedLegacy.displays["saved-display-UUID"] == legacy)
+
+        var state = LibraryState.initial
+        state.displays["A"] = DisplayAssignment(
+            desktop: SurfaceAssignment(wallpaperID: "ocean", playlistID: "ambient", index: 1,
+                                       changedAt: start, history: ["aurora"], mode: .still),
+            lockScreen: SurfaceAssignment(wallpaperID: "ember", changedAt: start))
+        state.setSurfacesLinked(true, display: "A")
+        precondition(state.displays["A"]?.lockScreen == state.displays["A"]?.desktop)
+        precondition(state.displays["A"]?.lockScreen?.history == ["aurora"])
+        state.assign("cosmos", display: "A", surface: .lockScreen, now: start)
+        precondition(state.displays["A"]?.desktop.wallpaperID == "cosmos")
+        precondition(state.displays["A"]?.desktop.mode == .still && state.displays["A"]?.surfacesLinked == true)
+        state.setMode(.animated, display: "A", surface: .lockScreen)
+        precondition(state.displays["A"]?.desktop.mode == .animated && state.displays["A"]?.lockScreen?.mode == .animated)
+        let linked = state.displays["A"]!
+        state.setSurfacesLinked(false, display: "A")
+        precondition(state.displays["A"]?.desktop == linked.desktop && state.displays["A"]?.lockScreen == linked.lockScreen)
+        state.assign("ember", display: "A", surface: .lockScreen, now: start)
+        state.setMode(.still, display: "A", surface: .lockScreen)
+        precondition(state.displays["A"]?.desktop == linked.desktop && state.displays["A"]?.lockScreen?.wallpaperID == "ember")
+        precondition(state.displays["A"]?.lockScreen?.mode == .still)
+        let unchanged = state.displays
+        precondition(!state.assign("missing", display: "A"))
+        precondition(!state.assign("aurora", display: "A", playlistID: "missing"))
+        precondition(state.displays == unchanged)
+
+        state.playlists.append(Playlist(id: "fast", name: "Fast", items: ["missing", "ember", "cosmos"], interval: 60, shuffle: false))
+        state.assign("aurora", display: "A", playlistID: "ambient", now: start)
+        state.assign("ember", display: "A", surface: .lockScreen, playlistID: "fast", now: start)
+        let desktop = state.displays["A"]!.desktop
+        precondition(state.advance(display: "A", surface: .lockScreen, now: start.addingTimeInterval(59)) == nil)
+        precondition(state.advance(display: "A", surface: .lockScreen, now: start.addingTimeInterval(60))?.id == "cosmos")
+        precondition(state.displays["A"]?.desktop == desktop && state.displays["A"]?.lockScreen?.history == ["ember"])
+        precondition(state.displays["A"]?.lockScreen?.mode == .still)
+        precondition(state.advance(display: "A", surface: .lockScreen, now: start.addingTimeInterval(61), force: true, backwards: true)?.id == "ember")
+        let lockScreen = state.displays["A"]!.lockScreen
+        precondition(state.advance(display: "A", now: start.addingTimeInterval(299)) == nil)
+        precondition(state.advance(display: "A", now: start.addingTimeInterval(300))?.id == "ocean")
+        precondition(state.displays["A"]?.lockScreen == lockScreen)
+        state.setSurfacesLinked(true, display: "A")
+        precondition(state.advance(display: "A", surface: .lockScreen, now: start.addingTimeInterval(301), force: true)?.id == "cosmos")
+        precondition(state.displays["A"]?.desktop == state.displays["A"]?.lockScreen)
+        precondition(state.displays["A"]?.desktop.history == ["aurora", "ocean"])
+
+        state.displays["disconnected-UUID"] = DisplayAssignment(
+            desktop: SurfaceAssignment(wallpaperID: "ember", changedAt: start, mode: .still),
+            lockScreen: SurfaceAssignment(wallpaperID: "aurora", changedAt: start))
+        let disconnected = state.displays["disconnected-UUID"]
+        state.displays["B"] = DisplayAssignment(desktop: SurfaceAssignment(wallpaperID: "ember", changedAt: start))
+        precondition(state.synchronizeMirrored(displayIDs: ["B", "A", "C"], preferredSource: "A")?.id == "cosmos")
+        precondition(state.displays["A"] == state.displays["B"] && state.displays["B"] == state.displays["C"])
+        precondition(state.displays["B"]?.surfacesLinked == true && state.displays["disconnected-UUID"] == disconnected)
+        precondition(state.advanceMirrored(displayIDs: ["A", "B", "C"], surface: .lockScreen,
+                                          now: start.addingTimeInterval(302), force: true)?.id == "ember")
+        precondition(state.displays["A"] == state.displays["C"] && state.displays["A"]?.desktop == state.displays["A"]?.lockScreen)
+        state.setSurfacesLinked(false, display: "A")
+        state.assign("aurora", display: "A", surface: .lockScreen, now: start)
+        state.setMode(.still, display: "A", surface: .lockScreen)
+        precondition(state.synchronizeMirrored(displayIDs: ["A", "B", "C"], surface: .lockScreen)?.id == "aurora")
+        precondition(state.displays["A"] == state.displays["B"] && state.displays["B"] == state.displays["C"])
+        precondition(state.displays["B"]?.surfacesLinked == false && state.displays["B"]?.lockScreen?.mode == .still)
+
+        state.stop(display: "A", now: start)
+        precondition(state.displays["A"]?.desktop.wallpaperID == nil && state.displays["A"]?.lockScreen?.wallpaperID == "aurora")
+        precondition(state.synchronizeMirrored(displayIDs: ["A", "new-display-UUID"], preferredSource: "A") == nil)
+        precondition(state.displays["A"] == state.displays["new-display-UUID"])
+        let saved = state.displays
+        try disk.save(state)
+        state = try disk.load()
+        precondition(state.displays == saved && state.displays["disconnected-UUID"] == disconnected)
+        precondition(state.synchronizeMirrored(displayIDs: ["disconnected-UUID", "reconnected-UUID"], preferredSource: "disconnected-UUID")?.id == "ember")
+        precondition(state.displays["reconnected-UUID"] == disconnected)
+        state.stop(display: "A", surface: .lockScreen, now: start)
+        precondition(state.displays["A"]?.lockScreen?.wallpaperID == nil && state.displays["A"]?.lockScreen?.mode == .still)
+        state.assign("ocean", display: "A", surface: .lockScreen, now: start)
+        precondition(state.displays["A"]?.lockScreen?.mode == .still)
+        state.setSurfacesLinked(true, display: "B")
+        state.stop(display: "B", surface: .lockScreen, now: start)
+        precondition(state.displays["B"]?.desktop.wallpaperID == nil && state.displays["B"]?.lockScreen?.wallpaperID == nil)
+        precondition(state.displays["B"]?.surfacesLinked == true)
+
+        state = .initial
+        state.assign("aurora", display: "A", playlistID: "ambient", now: start)
+        state.assign("ember", display: "A", surface: .lockScreen, playlistID: "ambient", now: start)
+        state.setMode(.still, display: "A", surface: .lockScreen)
+        state.removePlaylist("ambient")
+        precondition(state.displays["A"]?.desktop.playlistID == nil && state.displays["A"]?.lockScreen?.playlistID == nil)
+        precondition(state.displays["A"]?.desktop.wallpaperID == "aurora" && state.displays["A"]?.lockScreen?.wallpaperID == "ember")
+        state.remove("aurora")
+        precondition(state.displays["A"]?.desktop.wallpaperID == nil && state.displays["A"]?.lockScreen?.wallpaperID == "ember")
+        state.remove("ember")
+        precondition(state.displays["A"]?.lockScreen?.wallpaperID == nil && state.displays["A"]?.lockScreen?.mode == .still)
+        state = .initial
+        state.displays["A"] = DisplayAssignment(
+            desktop: SurfaceAssignment(wallpaperID: "ocean", playlistID: "ambient", index: 1,
+                                       changedAt: start, history: ["aurora", "ember"]),
+            lockScreen: SurfaceAssignment(wallpaperID: "cosmos", changedAt: start, history: ["aurora"]))
+        state.remove("aurora")
+        precondition(state.displays["A"]?.desktop.index == 0 && state.displays["A"]?.desktop.history == ["ember"])
+        precondition(state.displays["A"]?.lockScreen?.history == [])
+        state.setSurfacesLinked(true, display: "A")
+        state.remove("ocean")
+        precondition(state.displays["A"]?.desktop.wallpaperID == nil && state.displays["A"]?.lockScreen?.wallpaperID == nil)
+
+        var malformed = try JSONSerialization.jsonObject(with: JSONEncoder().encode(legacy)) as! [String: Any]
+        var nested = malformed["desktop"] as! [String: Any]
+        nested["mode"] = "unsupported"
+        malformed["desktop"] = nested
+        do {
+            _ = try JSONDecoder().decode(DisplayAssignment.self, from: JSONSerialization.data(withJSONObject: malformed))
+            preconditionFailure("Unknown surface mode accepted")
+        } catch is DecodingError {}
+        state = .initial
+        state.displays["A"] = DisplayAssignment(desktop: SurfaceAssignment(playlistID: "ambient", index: -100, changedAt: start))
+        precondition(state.advance(display: "A", now: start, force: true, backwards: true)?.id == "ember")
+        print("PASS: legacy surface migration, linked/independent assignments and modes, per-surface playlists/history, mirrored pairs, disconnected display restoration, stopping, removal and persistence")
     }
     static func browsingTests(disk: LibraryDisk) throws {
         precondition(normalizedTags(" Nature, , NATURE, natural, BLUE ") == ["nature", "natural", "blue"])
@@ -95,8 +225,8 @@ import Foundation
         old.wallpapers.append(Wallpaper(id: "legacy", title: "Existing import", kind: "video", file: "retained.mov",
                                        videoEdit: VideoEdit(start: 1, end: 3), metadata: SceneMetadata(details: "Original", category: "Custom")))
         old.playlists[0].items.append("legacy")
-        old.displays["saved-display"] = DisplayAssignment(wallpaperID: "legacy", playlistID: "ambient", index: 4,
-                                                         changedAt: Date(timeIntervalSince1970: 1000), history: ["ocean", "aurora"])
+        old.displays["saved-display"] = DisplayAssignment(desktop: SurfaceAssignment(wallpaperID: "legacy", playlistID: "ambient", index: 4,
+                                                         changedAt: Date(timeIntervalSince1970: 1000), history: ["ocean", "aurora"]))
         var object = try JSONSerialization.jsonObject(with: JSONEncoder().encode(old)) as! [String: Any]
         object.removeValue(forKey: "blockedTags")
         let legacy = try JSONDecoder().decode(LibraryState.self, from: JSONSerialization.data(withJSONObject: object))
@@ -111,7 +241,7 @@ import Foundation
         let unknown = Wallpaper(id: "unknown", title: "C unknown", kind: "ocean", tags: " Nature, RED ")
         state.wallpapers = [video, image, unknown]
         state.playlists = [Playlist(id: "ordered", name: "Order", items: ["unknown", "image", "video"])]
-        state.displays = ["display": DisplayAssignment(wallpaperID: "video", playlistID: "ordered", index: 2, history: ["image"])]
+        state.displays = ["display": DisplayAssignment(desktop: SurfaceAssignment(wallpaperID: "video", playlistID: "ordered", index: 2, history: ["image"]))]
         var filter = LibraryFilter()
         filter.tags = ["nature"]
         precondition(state.browsing(section: "all", filter: filter).map(\.id) == ["video", "unknown"])

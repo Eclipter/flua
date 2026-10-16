@@ -1,6 +1,6 @@
 # Architecture
 
-Flua is a local SwiftUI/AppKit macOS application. `App.swift` creates the shared library and owns windows, settings and the menu bar. `Library.swift` coordinates UI actions, persistence and playback. `Model.swift` contains backward-compatible Codable state, exact-tag normalization, browsing/filter rules, media buckets and playlist transitions; `LibraryPaths.swift` resolves the application's local library directory.
+Flua is a local SwiftUI/AppKit macOS application. `App.swift` creates the shared library and owns windows, settings and the menu bar. `Library.swift` coordinates UI actions, persistence and playback. `Model.swift` contains backward-compatible Codable state, exact-tag normalization, browsing/filter rules, media buckets and playlist transitions. Each display assignment stores a desktop choice and an optional Lock Screen choice, each with its own playlist position and Animated/Still mode. Older assignments load as desktop-only. Linking keeps both choices identical; Mirrored mode copies that whole pair between connected displays. `Library.swift` still plays and restores only the desktop choice. `LibraryPaths.swift` resolves the application's local library directory.
 
 `MediaFacts.swift` measures local image/video facts and classifies a bounded thumbnail off the main thread. `Library.swift` records successful import dates, backfills legacy facts and routes Discover and collection views through the same model rules. Blocked tags affect browsing while preserving playback assignments.
 

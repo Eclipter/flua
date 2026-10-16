@@ -204,13 +204,37 @@ enum SmokeRunner {
             }
             library.selection = video.id
             library.applySelected()
-            results["libraryApply"] = library.state.displays.values.allSatisfy { $0.wallpaperID == video.id } && library.engine.activeCount == NSScreen.screens.count
+            results["libraryApply"] = library.state.displays.values.allSatisfy { $0.desktop.wallpaperID == video.id } && library.engine.activeCount == NSScreen.screens.count
             library.startPlaylist("ambient")
-            results["playlistStart"] = library.state.displays.values.allSatisfy { $0.wallpaperID == "aurora" && $0.playlistID == "ambient" }
+            results["playlistStart"] = library.state.displays.values.allSatisfy { $0.desktop.wallpaperID == "aurora" && $0.desktop.playlistID == "ambient" }
             library.advancePlaylists(force: true)
-            results["playlistNext"] = library.state.displays.values.allSatisfy { $0.wallpaperID == "ocean" }
+            results["playlistNext"] = library.state.displays.values.allSatisfy { $0.desktop.wallpaperID == "ocean" }
             library.stop()
             results["libraryStop"] = library.state.displays.isEmpty && library.engine.activeCount == 0
+            if let screen = library.screens.first {
+                let key = displayID(screen)
+                library.state.assign("ember", display: key, surface: .lockScreen)
+                library.state.setMode(.still, display: key, surface: .lockScreen)
+                let lockScreen = library.state.displays[key]?.lockScreen
+                library.selection = video.id
+                library.applySelected()
+                results["desktopApplyPreservesLockScreen"] = library.state.displays.values.allSatisfy {
+                    $0.desktop.wallpaperID == video.id && $0.lockScreen == lockScreen
+                }
+                library.startPlaylist("ambient")
+                library.advancePlaylists(force: true)
+                results["desktopPlaylistPreservesLockScreen"] = library.state.displays.values.allSatisfy {
+                    $0.desktop.wallpaperID == "ocean" && $0.lockScreen == lockScreen
+                }
+                library.stop()
+                _ = library.restoreAssignments()
+                results["desktopStopPreservesLockScreen"] = library.engine.activeCount == 0
+                    && library.state.displays.values.allSatisfy { $0.desktop.wallpaperID == nil && $0.lockScreen == lockScreen }
+                let persisted = try library.disk.load()
+                results["surfaceAssignmentsPersisted"] = persisted.displays == library.state.displays
+                library.state.displays.removeAll()
+                library.save()
+            }
             library.selection = edited.id
             library.section = "discover"
             let savedAssignments = library.state.displays, savedPlaylists = library.state.playlists

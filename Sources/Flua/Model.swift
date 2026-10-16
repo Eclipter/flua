@@ -50,12 +50,86 @@ struct Playlist: Codable, Identifiable, Equatable {
     var shuffle: Bool?
 }
 
-struct DisplayAssignment: Codable, Equatable {
+enum WallpaperSurface: CaseIterable {
+    case desktop, lockScreen
+}
+
+enum WallpaperMode: String, Codable {
+    case animated, still
+}
+
+struct SurfaceAssignment: Codable, Equatable {
     var wallpaperID: String?
     var playlistID: String?
     var index: Int = 0
     var changedAt: Date = Date()
     var history: [String]?
+    var mode: WallpaperMode = .animated
+
+    var isEmpty: Bool { wallpaperID == nil && playlistID == nil && mode == .animated }
+
+    private enum CodingKeys: String, CodingKey {
+        case wallpaperID, playlistID, index, changedAt, history, mode
+    }
+}
+
+extension SurfaceAssignment {
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        wallpaperID = try c.decodeIfPresent(String.self, forKey: .wallpaperID)
+        playlistID = try c.decodeIfPresent(String.self, forKey: .playlistID)
+        index = try c.decode(Int.self, forKey: .index)
+        changedAt = try c.decode(Date.self, forKey: .changedAt)
+        history = try c.decodeIfPresent([String].self, forKey: .history)
+        mode = try c.decodeIfPresent(WallpaperMode.self, forKey: .mode) ?? .animated
+    }
+}
+
+struct DisplayAssignment: Codable, Equatable {
+    private(set) var desktop: SurfaceAssignment
+    private(set) var lockScreen: SurfaceAssignment?
+    private(set) var surfacesLinked: Bool
+
+    init(desktop: SurfaceAssignment = SurfaceAssignment(), lockScreen: SurfaceAssignment? = nil, surfacesLinked: Bool = false) {
+        self.desktop = desktop
+        self.lockScreen = surfacesLinked ? desktop : lockScreen
+        self.surfacesLinked = surfacesLinked
+    }
+
+    var isEmpty: Bool { desktop.isEmpty && (lockScreen?.isEmpty ?? true) && !surfacesLinked }
+
+    func selection(for surface: WallpaperSurface) -> SurfaceAssignment? {
+        surface == .desktop ? desktop : lockScreen
+    }
+    mutating func set(_ selection: SurfaceAssignment, for surface: WallpaperSurface) {
+        if surfacesLinked {
+            desktop = selection
+            lockScreen = selection
+        } else if surface == .desktop {
+            desktop = selection
+        } else {
+            lockScreen = selection.isEmpty ? nil : selection
+        }
+    }
+    mutating func setLinked(_ linked: Bool) {
+        surfacesLinked = linked
+        if linked { lockScreen = desktop }
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case desktop, lockScreen, surfacesLinked
+    }
+}
+
+extension DisplayAssignment {
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        // Legacy flat assignments belong only to the desktop surface.
+        desktop = c.contains(.desktop) ? try c.decode(SurfaceAssignment.self, forKey: .desktop) : try SurfaceAssignment(from: decoder)
+        lockScreen = try c.decodeIfPresent(SurfaceAssignment.self, forKey: .lockScreen)
+        surfacesLinked = try c.decodeIfPresent(Bool.self, forKey: .surfacesLinked) ?? false
+        if surfacesLinked { lockScreen = desktop }
+    }
 }
 
 struct LibraryState: Codable {
@@ -106,46 +180,109 @@ struct LibraryState: Codable {
     }
     func item(_ id: String?) -> Wallpaper? { wallpapers.first { $0.id == id } }
     func playlist(_ id: String?) -> Playlist? { playlists.first { $0.id == id } }
+    private mutating func store(_ assignment: DisplayAssignment, display: String) {
+        displays[display] = assignment.isEmpty ? nil : assignment
+    }
+    private mutating func updateAssignment(display: String, surface: WallpaperSurface, _ change: (inout SurfaceAssignment) -> Void) {
+        var assignment = displays[display] ?? DisplayAssignment()
+        var selection = assignment.selection(for: surface) ?? SurfaceAssignment()
+        change(&selection)
+        assignment.set(selection, for: surface)
+        store(assignment, display: display)
+    }
+    @discardableResult mutating func assign(_ wallpaperID: String, display: String, surface: WallpaperSurface = .desktop,
+                                            playlistID: String? = nil, now: Date = Date()) -> Bool {
+        guard item(wallpaperID) != nil,
+              playlistID == nil || playlist(playlistID)?.items.contains(wallpaperID) == true else { return false }
+        let ids = playlist(playlistID)?.items.filter { item($0) != nil } ?? []
+        updateAssignment(display: display, surface: surface) {
+            $0 = SurfaceAssignment(wallpaperID: wallpaperID, playlistID: playlistID,
+                                   index: ids.firstIndex(of: wallpaperID) ?? 0, changedAt: now, mode: $0.mode)
+        }
+        return true
+    }
+    mutating func setMode(_ mode: WallpaperMode, display: String, surface: WallpaperSurface) {
+        updateAssignment(display: display, surface: surface) { $0.mode = mode }
+    }
+    mutating func setSurfacesLinked(_ linked: Bool, display: String) {
+        var assignment = displays[display] ?? DisplayAssignment()
+        assignment.setLinked(linked)
+        store(assignment, display: display)
+    }
+    mutating func stop(display: String, surface: WallpaperSurface = .desktop, now: Date = Date()) {
+        updateAssignment(display: display, surface: surface) {
+            $0 = SurfaceAssignment(changedAt: now, mode: $0.mode)
+        }
+    }
+    mutating func removePlaylist(_ id: String) {
+        playlists.removeAll { $0.id == id }
+        for key in Array(displays.keys) {
+            for surface in WallpaperSurface.allCases where displays[key]?.selection(for: surface)?.playlistID == id {
+                updateAssignment(display: key, surface: surface) {
+                    $0.playlistID = nil
+                    $0.index = 0
+                    $0.history = nil
+                }
+            }
+        }
+    }
     mutating func remove(_ id: String) {
         wallpapers.removeAll { $0.id == id }
         for i in playlists.indices { playlists[i].items.removeAll { $0 == id } }
         for key in Array(displays.keys) {
-            if displays[key]?.wallpaperID == id { displays.removeValue(forKey: key) }
+            guard var assignment = displays[key] else { continue }
+            for surface in WallpaperSurface.allCases {
+                if surface == .lockScreen && assignment.surfacesLinked { continue }
+                guard var selection = assignment.selection(for: surface) else { continue }
+                if selection.wallpaperID == id {
+                    selection = SurfaceAssignment(mode: selection.mode)
+                } else {
+                    selection.history = selection.history.map { $0.filter { $0 != id } }
+                    if let ids = playlist(selection.playlistID)?.items.filter({ item($0) != nil }),
+                       let index = ids.firstIndex(of: selection.wallpaperID ?? "") { selection.index = index }
+                }
+                assignment.set(selection, for: surface)
+            }
+            store(assignment, display: key)
         }
     }
-    mutating func advance(display: String, now: Date = Date(), force: Bool = false, backwards: Bool = false) -> Wallpaper? {
-        guard var a = displays[display], let p = playlist(a.playlistID) else { return nil }
+    mutating func advance(display: String, surface: WallpaperSurface = .desktop, now: Date = Date(), force: Bool = false, backwards: Bool = false) -> Wallpaper? {
+        guard var a = displays[display]?.selection(for: surface), let p = playlist(a.playlistID) else { return nil }
         let ids = p.items.filter { item($0) != nil }
         guard !ids.isEmpty else { return nil }
         guard force || now.timeIntervalSince(a.changedAt) >= (p.interval ?? interval) else { return nil }
+        let currentIndex = ids.firstIndex(of: a.wallpaperID ?? "") ?? ((a.index % ids.count) + ids.count) % ids.count
         if backwards {
             var history = (a.history ?? []).filter { ids.contains($0) }
             if let previous = history.popLast(), let index = ids.firstIndex(of: previous) { a.index = index }
-            else { a.index = ((ids.firstIndex(of: a.wallpaperID ?? "") ?? a.index) - 1 + ids.count) % ids.count }
+            else { a.index = (currentIndex - 1 + ids.count) % ids.count }
             a.history = history
         } else {
-        if let old = a.wallpaperID { a.history = Array(((a.history ?? []) + [old]).suffix(128)) }
-        if (p.shuffle ?? shuffle) && ids.count > 1 {
-            a.index = ids.indices.filter { ids[$0] != a.wallpaperID }.randomElement() ?? 0
-        } else { a.index = ((ids.firstIndex(of: a.wallpaperID ?? "") ?? a.index) + 1) % ids.count }
+            if let old = a.wallpaperID { a.history = Array(((a.history ?? []) + [old]).suffix(128)) }
+            if (p.shuffle ?? shuffle) && ids.count > 1 {
+                a.index = ids.indices.filter { ids[$0] != a.wallpaperID }.randomElement() ?? 0
+            } else { a.index = (currentIndex + 1) % ids.count }
         }
         a.wallpaperID = ids[a.index]
         a.changedAt = now
-        displays[display] = a
+        updateAssignment(display: display, surface: surface) { $0 = a }
         return item(a.wallpaperID)
     }
-    mutating func advanceMirrored(displayIDs: [String], now: Date = Date(), force: Bool = false, backwards: Bool = false) -> Wallpaper? {
-        guard let source = displayIDs.first(where: { displays[$0]?.playlistID != nil }),
-              advance(display: source, now: now, force: force, backwards: backwards) != nil else { return nil }
-        return synchronizeMirrored(displayIDs: displayIDs, preferredSource: source)
+    mutating func advanceMirrored(displayIDs: [String], surface: WallpaperSurface = .desktop, now: Date = Date(), force: Bool = false, backwards: Bool = false) -> Wallpaper? {
+        guard let source = displayIDs.first(where: { displays[$0]?.selection(for: surface)?.playlistID != nil }),
+              advance(display: source, surface: surface, now: now, force: force, backwards: backwards) != nil else { return nil }
+        return synchronizeMirrored(displayIDs: displayIDs, surface: surface, preferredSource: source)
     }
-    mutating func synchronizeMirrored(displayIDs: [String], preferredSource: String? = nil) -> Wallpaper? {
+    mutating func synchronizeMirrored(displayIDs: [String], surface: WallpaperSurface = .desktop, preferredSource: String? = nil) -> Wallpaper? {
         let preferred = preferredSource.flatMap { displayIDs.contains($0) ? $0 : nil }
         let candidates = (preferred.map { [$0] } ?? []) + displayIDs
-        guard let source = candidates.first(where: { item(displays[$0]?.wallpaperID) != nil }),
-              let assignment = displays[source], let wallpaper = item(assignment.wallpaperID) else { return nil }
+        guard let source = candidates.first(where: {
+            guard let assignment = displays[$0] else { return false }
+            return item(assignment.desktop.wallpaperID) != nil || item(assignment.lockScreen?.wallpaperID) != nil
+                || (assignment.desktop.wallpaperID == nil && assignment.lockScreen?.wallpaperID == nil && !assignment.isEmpty)
+        }), let assignment = displays[source] else { return nil }
         for id in displayIDs { displays[id] = assignment }
-        return wallpaper
+        return item(assignment.selection(for: surface)?.wallpaperID)
     }
 }
 
