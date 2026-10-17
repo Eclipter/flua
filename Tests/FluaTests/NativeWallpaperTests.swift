@@ -274,6 +274,37 @@ import Foundation
         precondition(NativeWallpaperStore.refreshMatches(refreshedPerDisplay, in: refreshedPerDisplay, provider: "test"))
         let reapplied = try NativeWallpaperStore.applying(resolved, mirrored: false, to: perDisplay)
         precondition(NativeWallpaperStore.matches(resolved, mirrored: false, in: reapplied))
+        let replacementAssignments = ["A": NativeWallpaperStore.Assignment(desktop: resolved["B"]!.desktop)]
+        let replaced = try NativeWallpaperStore.replacing(replacementAssignments, displays: ["A", "B"], provider: "test",
+            mirrored: false, in: perDisplay, baseline: original)
+        precondition(NativeWallpaperStore.matches(replacementAssignments, mirrored: false, in: replaced))
+        let restoredBeforeReplace = try NativeWallpaperStore.stopping(displays: ["A", "B"], provider: "test", in: perDisplay, baseline: original)
+        let expectedReplacement = try NativeWallpaperStore.applying(replacementAssignments, mirrored: false, to: restoredBeforeReplace)
+        precondition(NativeWallpaperStore.stopMatches(expectedReplacement, in: replaced))
+        let replacedStore = try PropertyListSerialization.propertyList(from: replaced, format: nil) as! [String: Any]
+        let replacedDisplays = replacedStore["Displays"] as! [String: Any]
+        let restoredDisplayB = replacedDisplays["B"] as! [String: Any]
+        precondition(NSDictionary(dictionary: restoredDisplayB["Desktop"] as! [String: Any]).isEqual(to: old["Desktop"] as! [String: Any]))
+        precondition(NSDictionary(dictionary: restoredDisplayB["Idle"] as! [String: Any]).isEqual(to: old["Idle"] as! [String: Any]))
+        let emptyReplacement = try NativeWallpaperStore.replacing([:], displays: ["A", "B"], provider: "test",
+            mirrored: false, in: perDisplay, baseline: original)
+        precondition(NativeWallpaperStore.stopMatches(removedPerDisplay, in: emptyReplacement))
+        let mirroredAssignments = ["A": replacementAssignments["A"]!, "B": replacementAssignments["A"]!]
+        let formerlyMirrored = try NativeWallpaperStore.applying(mirroredAssignments, mirrored: true, to: original)
+        let perDisplayAfterMirror = try NativeWallpaperStore.replacing(replacementAssignments, displays: ["A", "B"], provider: "test",
+            mirrored: false, in: formerlyMirrored, baseline: original)
+        precondition(NativeWallpaperStore.matches(replacementAssignments, mirrored: false, in: perDisplayAfterMirror))
+        let modeChangedStore = try PropertyListSerialization.propertyList(from: perDisplayAfterMirror, format: nil) as! [String: Any]
+        let expectedDefault = try encode(["SystemDefault": old])
+        let modeChangedDefault = try encode(["SystemDefault": modeChangedStore["SystemDefault"]!])
+        precondition(NativeWallpaperStore.stopMatches(expectedDefault, in: modeChangedDefault))
+        let stoppedAfterModeChange = try NativeWallpaperStore.stopping(displays: ["A", "B"], provider: "test",
+            in: perDisplayAfterMirror, baseline: original, mirrored: false)
+        let stoppedModeStore = try PropertyListSerialization.propertyList(from: stoppedAfterModeChange, format: nil) as! [String: Any]
+        let stoppedModeDefault = try encode(["SystemDefault": stoppedModeStore["SystemDefault"]!])
+        precondition(NativeWallpaperStore.stopMatches(expectedDefault, in: stoppedModeDefault))
+        let stoppedModeUsesProvider = try NativeWallpaperStore.containsProvider("test", in: stoppedAfterModeChange)
+        precondition(!stoppedModeUsesProvider)
         let remirrored = try NativeWallpaperStore.applying(assignments, mirrored: true, to: perDisplay)
         precondition(NativeWallpaperStore.matches(assignments, mirrored: true, in: remirrored))
         precondition(NSDictionary(dictionary: (perStore["Displays"] as! [String: Any])["display"] as! [String: Any]).isEqual(to: old))

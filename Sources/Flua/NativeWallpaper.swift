@@ -26,7 +26,7 @@ enum NativeWallpaper {
             return "Native Lock Screen playback has been verified on macOS 27. Other macOS versions are unavailable."
         }
         if !available { return "Lock Screen playback needs the wallpaper extension inside Flua.app." }
-        return "Apply the saved Desktop and Lock Screen choices and modes for the targeted displays. Native playback continues after Flua quits. Unassigned surfaces keep their system wallpaper. Applying briefly reloads the macOS wallpaper service."
+        return "Apply the saved Desktop and Lock Screen choices and modes for the targeted displays. Saved choices and mode changes sync to displays with active native playback. Native playback continues after Flua quits. Unassigned surfaces keep their system wallpaper. Applying briefly reloads the macOS wallpaper service."
     }
     static func register() throws {
         guard available else { throw NativeWallpaperError(explanation) }
@@ -38,10 +38,21 @@ enum NativeWallpaper {
             throw NativeWallpaperError("macOS did not register this copy of Flua. Keep the app in a permanent folder and retry setup.")
         }
     }
-    static func apply(_ assignments: [String: NativeWallpaperStore.Assignment], mirrored: Bool, root: URL) throws {
+    static func apply(_ assignments: [String: NativeWallpaperStore.Assignment], targeting displays: [String], mirrored: Bool, root: URL) throws {
+        guard !assignments.isEmpty else {
+            _ = try stop(displays: displays, mirrored: mirrored, root: root)
+            return
+        }
         try register()
-        try updateStore(root: root, baselineDisplays: Array(assignments.keys), transform: { try NativeWallpaperStore.applying(assignments, mirrored: mirrored, to: $0) },
-                        verify: { actual, _ in NativeWallpaperStore.matches(assignments, mirrored: mirrored, in: actual) })
+        let baselineURL = root.appendingPathComponent("NativeWallpaperBaseline.plist")
+        try updateStore(root: root, baselineDisplays: displays, transform: { current in
+            let baseline = FileManager.default.fileExists(atPath: baselineURL.path) ? try Data(contentsOf: baselineURL) : nil
+            return try NativeWallpaperStore.replacing(assignments, displays: displays, provider: identifier,
+                mirrored: mirrored, in: current, baseline: baseline)
+        }, verify: { actual, expected in
+            NativeWallpaperStore.matches(assignments, mirrored: mirrored, in: actual)
+                && NativeWallpaperStore.stopMatches(expected, in: actual)
+        })
     }
     static func stop(displays: [String], mirrored: Bool, root: URL) throws -> Bool {
         guard available else { throw NativeWallpaperError(explanation) }

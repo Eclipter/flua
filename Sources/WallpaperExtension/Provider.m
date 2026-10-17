@@ -374,9 +374,20 @@ NSDictionary *FSInspectSettings(id settings) { return FSJSON(settings, @"Wallpap
         if ((!session.needsRecovery && !session.renderer.playbackFailed) || session.suspended) continue;
         NSMutableDictionary *configuration = [session.configuration mutableCopy];
         configuration[@"presentation"] = session.mode;
+        BOOL alreadyShowingFallback = session.needsRecovery;
+        NSError *mediaError;
         FSMediaRenderer *renderer = [[FSMediaRenderer alloc] initWithWidth:(NSUInteger)session.root.bounds.size.width
             height:(NSUInteger)session.root.bounds.size.height configuration:configuration
-            fileWrappers:session.fileWrappers error:NULL];
+            fileWrappers:session.fileWrappers error:&mediaError];
+        BOOL recovered = renderer != nil;
+        if (!renderer && alreadyShowingFallback) continue;
+        if (!renderer && ([configuration[@"kind"] isEqual:@"image"] || [configuration[@"kind"] isEqual:@"video"])) {
+            renderer = [[FSMediaRenderer alloc] initWithWidth:(NSUInteger)session.root.bounds.size.width
+                height:(NSUInteger)session.root.bounds.size.height configuration:@{@"kind":@"gradient"}
+                fileWrappers:@[] error:NULL];
+            if (renderer) NSLog(@"Flua media recovery failed; showing static fallback and retrying original host files: %@",
+                                mediaError.localizedDescription ?: @"unknown error");
+        }
         if (!renderer) continue;
         renderer.layer.speed = session.suspended ? 0 : 1;
         [renderer setPlaybackSuspended:session.suspended];
@@ -384,9 +395,9 @@ NSDictionary *FSInspectSettings(id settings) { return FSJSON(settings, @"Wallpap
         [session.renderer dispose];
         session.renderer = renderer;
         session.root = renderer.layer;
-        session.needsRecovery = NO;
+        session.needsRecovery = !recovered;
         [CATransaction flush];
-        NSLog(@"Flua recovered original media session");
+        if (recovered) NSLog(@"Flua recovered original media session");
     }
 }
 - (void)startRecovery {
@@ -828,6 +839,44 @@ static void FSPump(double seconds) {
     NSDate *deadline=[NSDate dateWithTimeIntervalSinceNow:seconds];
     while(deadline.timeIntervalSinceNow>0) [NSRunLoop.currentRunLoop runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.01]];
 }
+static BOOL FSVerifyFreshProviderReacquire(NSURL *file, id ident, NSDictionary *creation) {
+    NSMutableDictionary *savedCreation = [creation mutableCopy];
+    savedCreation[@"configuration"] = FSEncodeConfiguration(@{ @"version":@1, @"kind":@"image", @"fileIndex":@0 });
+    savedCreation[@"presentationMode"] = @{ @"default":@{} };
+    savedCreation[@"activityState"] = @{ @"active":@{} };
+    id savedRequest = FSCreateRequest(savedCreation, @[file]);
+    NSDictionary *savedPayload = FSInspectCreation(savedRequest)[@"payload"];
+    FSCaptureCoder *savedCoder = FSCaptureCoder.new;
+    [savedRequest encodeWithCoder:savedCoder];
+    id savedWrapper = [savedCoder.objects[@"files"] firstObject];
+
+    FSProvider *firstProvider = FSProvider.new;
+    __block BOOL firstAcquired = NO;
+    [firstProvider acquireWithId:ident request:savedRequest reply:^(id remote, NSError *error) {
+        firstAcquired = remote != nil && error == nil;
+    }];
+    FSSession *firstSession = firstProvider.sessions.allValues.firstObject;
+    BOOL initialSessionReady = firstAcquired && firstSession.renderer.scopedFileCount == 1 &&
+        firstSession.renderer.activeScopeCount == 1 && firstSession.renderer.frameCount > 0;
+    [firstProvider invalidateWithId:ident reply:^(NSError *error) {}];
+
+    id retryRequest = FSCreateRequest(savedCreation, @[file]);
+    FSCaptureCoder *retryCoder = FSCaptureCoder.new;
+    [retryRequest encodeWithCoder:retryCoder];
+    id retryWrapper = [retryCoder.objects[@"files"] firstObject];
+    FSProvider *restartedProvider = FSProvider.new;
+    __block BOOL reacquired = NO;
+    [restartedProvider acquireWithId:ident request:retryRequest reply:^(id remote, NSError *error) {
+        reacquired = remote != nil && error == nil;
+    }];
+    FSSession *restartedSession = restartedProvider.sessions.allValues.firstObject;
+    BOOL savedChoiceRestored = reacquired && savedWrapper && retryWrapper && savedWrapper != retryWrapper &&
+        [savedPayload isEqual:FSInspectCreation(retryRequest)[@"payload"]] &&
+        [restartedSession.request isEqual:savedPayload] && restartedSession.renderer.scopedFileCount == 1 &&
+        restartedSession.renderer.activeScopeCount == 1 && restartedSession.renderer.frameCount > 0;
+    [restartedProvider invalidateWithId:ident reply:^(NSError *error) {}];
+    return initialSessionReady && savedChoiceRestored;
+}
 int main(int argc,const char **argv) { @autoreleasepool {
     if(argc!=2 || !FSLoad()) return 1;
     NSURL *dir=[NSURL fileURLWithPath:@(argv[1]) isDirectory:YES];
@@ -838,6 +887,8 @@ int main(int argc,const char **argv) { @autoreleasepool {
     FSProvider *provider=FSProvider.new;
     id ident=FSBox(@"WallpaperIDXPC",@"WallpaperID",@{@"id":@"12345678-1234-1234-1234-123456789ABC"});
     NSMutableDictionary *results=NSMutableDictionary.new;
+    BOOL freshProviderReacquire = FSVerifyFreshProviderReacquire([dir URLByAppendingPathComponent:@"FluaStill.png"], ident, creation);
+    results[@"freshProviderReacquire"] = @{@"ok":@(freshProviderReacquire)};
     for(NSString *kind in @[@"image",@"video"]) {
         NSDictionary *config=@{@"version":@1,@"kind":kind,@"fileIndex":@0,@"identifier":[@"org.flua.test." stringByAppendingString:kind],@"fit":@"fill"};
         creation[@"configuration"]=[[NSJSONSerialization dataWithJSONObject:config options:0 error:nil] base64EncodedStringWithOptions:0];
@@ -869,7 +920,7 @@ int main(int argc,const char **argv) { @autoreleasepool {
         BOOL success=acquired && wrappers && before && after && paused && resumed && disposed && (![kind isEqual:@"video"] || (motion && loops>=1));
         results[kind]=@{@"ok":@(success),@"acquired":@(acquired),@"nonemptyScopedFiles":@(wrappers),@"motion":@(motion),@"suspendedStable":@(paused),@"resumed":@(resumed),@"loopCount":@(loops),@"frames":@(finalFrames),@"disposed":@(disposed),@"error":errorText,@"snapshot":after ?: @{}};
     }
-    BOOL recoveryOK = YES;
+    BOOL recoveryOK = freshProviderReacquire;
     NSURL *broken = [dir URLByAppendingPathComponent:@"broken-media"];
     [@"invalid media" writeToURL:broken atomically:YES encoding:NSUTF8StringEncoding error:nil];
     for (NSString *kind in @[@"image", @"video"]) {
@@ -934,6 +985,45 @@ int main(int argc,const char **argv) { @autoreleasepool {
         automaticRecovery = automaticRecovery && provider.sessions.count == 0 && session.fileWrappers.count == 0;
     }
     recoveryOK = recoveryOK && automaticRecovery;
+    BOOL activeVideoRecovery = NO;
+    NSURL *sourceVideo = [dir URLByAppendingPathComponent:@"FluaMotion.mov"];
+    NSData *sourceVideoData = [NSData dataWithContentsOfURL:sourceVideo];
+    NSURL *activeVideo = [dir URLByAppendingPathComponent:@"active-recovery.mov"];
+    if (sourceVideoData.length && [sourceVideoData writeToURL:activeVideo atomically:YES]) {
+        creation[@"configuration"] = FSEncodeConfiguration(@{@"version":@1, @"kind":@"video", @"fileIndex":@0});
+        creation[@"presentationMode"] = @{@"default":@{}};
+        creation[@"activityState"] = @{@"active":@{}};
+        [provider acquireWithId:ident request:FSCreateRequest(creation, @[activeVideo]) reply:^(id remote, NSError *error) {}];
+        FSSession *session = provider.sessions.allValues.firstObject;
+        NSDictionary *savedRequest = [session.request copy];
+        FSMediaRenderer *originalRenderer = session.renderer;
+        FSPump(0.35);
+        NSFileHandle *brokenHandle = [NSFileHandle fileHandleForWritingAtPath:activeVideo.path];
+        [brokenHandle truncateFileAtOffset:0];
+        [brokenHandle writeData:[@"truncated video" dataUsingEncoding:NSUTF8StringEncoding]];
+        [brokenHandle synchronizeFile];
+        [brokenHandle closeFile];
+        NSDate *failureDeadline = [NSDate dateWithTimeIntervalSinceNow:6];
+        while (failureDeadline.timeIntervalSinceNow > 0 && !session.needsRecovery && !session.renderer.playbackFailed)
+            FSPump(0.1);
+        BOOL failureDetected = session.needsRecovery || session.renderer.playbackFailed;
+        if (failureDetected && !session.needsRecovery) [provider recoverSessions];
+        BOOL fallback = failureDetected && session.needsRecovery && session.renderer != originalRenderer &&
+            session.renderer.scopedFileCount == 0 && [session.request isEqual:savedRequest];
+        NSFileHandle *restoreHandle = [NSFileHandle fileHandleForWritingAtPath:activeVideo.path];
+        [restoreHandle truncateFileAtOffset:0];
+        [restoreHandle writeData:sourceVideoData];
+        [restoreHandle synchronizeFile];
+        [restoreHandle closeFile];
+        [provider recoverSessions];
+        FSPump(0.5);
+        activeVideoRecovery = fallback && !session.needsRecovery && session.renderer.scopedFileCount == 1 &&
+            session.renderer.frameCount > 1 && !session.renderer.playbackFailed &&
+            [session.request isEqual:savedRequest] && [sourceVideoData isEqual:[NSData dataWithContentsOfURL:activeVideo]];
+        [provider invalidateWithId:ident reply:^(NSError *error) {}];
+        [NSFileManager.defaultManager removeItemAtURL:activeVideo error:nil];
+    }
+    recoveryOK = recoveryOK && activeVideoRecovery;
     creation[@"configuration"] = FSEncodeConfiguration(@{@"version":@2, @"kind":@"video", @"fileIndex":@0});
     __block BOOL rejectedConfiguration = NO;
     [provider acquireWithId:ident request:FSCreateRequest(creation, @[]) reply:^(id remote, NSError *error) {
@@ -977,7 +1067,15 @@ int main(int argc,const char **argv) { @autoreleasepool {
     BOOL lockedStill=tunedSession.renderer.holdsStill && tunedSession.renderer.playbackRate == 0 && tunedSession.renderer.frameCount == stillFrames;
     modeUpdate[@"presentationMode"]=@{@"idle":@{}};
     [provider updateWithId:ident request:FSBox(@"WallpaperUpdateRequestXPC",@"WallpaperUpdateRequest",modeUpdate) reply:^(NSError *error){}];
-    BOOL idleUsesLock=tunedSession.renderer.holdsStill;
+    NSUInteger idleFrames=tunedSession.renderer.frameCount;
+    FSPump(0.3);
+    BOOL idleUsesLock=tunedSession.renderer.holdsStill && tunedSession.renderer.playbackRate==0 && tunedSession.renderer.frameCount==idleFrames;
+    modeUpdate[@"activityState"]=@{@"suspended":@{}};
+    [provider updateWithId:ident request:FSBox(@"WallpaperUpdateRequestXPC",@"WallpaperUpdateRequest",modeUpdate) reply:^(NSError *error){}];
+    modeUpdate[@"activityState"]=@{@"active":@{}};
+    [provider updateWithId:ident request:FSBox(@"WallpaperUpdateRequestXPC",@"WallpaperUpdateRequest",modeUpdate) reply:^(NSError *error){}];
+    FSPump(0.3);
+    BOOL idleResumeStill=tunedSession.renderer.holdsStill && tunedSession.renderer.playbackRate==0 && tunedSession.renderer.frameCount==idleFrames;
     modeUpdate[@"presentationMode"]=@{@"default":@{}};
     [provider updateWithId:ident request:FSBox(@"WallpaperUpdateRequestXPC",@"WallpaperUpdateRequest",modeUpdate) reply:^(NSError *error){}];
     FSPump(0.3);
@@ -1016,8 +1114,8 @@ int main(int argc,const char **argv) { @autoreleasepool {
     BOOL fitDiffers=filled && fitted && ![filled[@"checksum"] isEqual:fitted[@"checksum"]] && fitSum < 30 && fillSum > 80;
     [provider invalidateWithId:ident reply:^(NSError *error){}];
     BOOL dimOK=bright.count > 2 && dark.count > 2 && [bright[2] intValue] > 100 && [dark[2] intValue] < [bright[2] intValue];
-    BOOL playbackOK=tunedAcquired && inTrim && moved && rate && suspendedHoldsMode && resumedSameMode && lockedStill && idleUsesLock && desktopPlays && sourceUntouched && dimOK && fitDiffers;
-    results[@"playback"]=@{@"ok":@(playbackOK),@"acquired":@(tunedAcquired),@"inTrim":@(inTrim),@"moved":@(moved),@"rate":@(rate),@"times":times,@"suspendedHoldsMode":@(suspendedHoldsMode),@"resumedSameMode":@(resumedSameMode),@"lockedStill":@(lockedStill),@"idleUsesLock":@(idleUsesLock),@"desktopPlays":@(desktopPlays),@"sourceUntouched":@(sourceUntouched),@"dimming":@(dimOK),@"fit":@(fitDiffers),@"bright":bright ?: @[],@"dark":dark ?: @[],@"fillSum":@(fillSum),@"fitSum":@(fitSum)};
+    BOOL playbackOK=tunedAcquired && inTrim && moved && rate && suspendedHoldsMode && resumedSameMode && lockedStill && idleUsesLock && idleResumeStill && desktopPlays && sourceUntouched && dimOK && fitDiffers;
+    results[@"playback"]=@{@"ok":@(playbackOK),@"acquired":@(tunedAcquired),@"inTrim":@(inTrim),@"moved":@(moved),@"rate":@(rate),@"times":times,@"suspendedHoldsMode":@(suspendedHoldsMode),@"resumedSameMode":@(resumedSameMode),@"lockedStill":@(lockedStill),@"idleUsesLock":@(idleUsesLock),@"idleResumeStill":@(idleResumeStill),@"desktopPlays":@(desktopPlays),@"sourceUntouched":@(sourceUntouched),@"dimming":@(dimOK),@"fit":@(fitDiffers),@"bright":bright ?: @[],@"dark":dark ?: @[],@"fillSum":@(fillSum),@"fitSum":@(fitSum)};
     creation[@"destination"]=[@{@"size":@[@96,@64],@"scaleFactor":@1,@"colorSpace":creation[@"destination"][@"colorSpace"]} mutableCopy];
     creation[@"presentationMode"]=@{@"default":@{}};
     creation[@"activityState"]=@{@"active":@{}};
@@ -1082,9 +1180,23 @@ int main(int argc,const char **argv) { @autoreleasepool {
     NSUInteger lockFrames=playing.renderer.frameCount;
     FSPump(0.3);
     BOOL sceneLockStill=playing.renderer.holdsStill && playing.renderer.playbackRate==0 && playing.renderer.frameCount==lockFrames;
+    sceneUpdate[@"presentationMode"]=@{@"idle":@{}};
+    [provider updateWithId:ident request:FSBox(@"WallpaperUpdateRequestXPC",@"WallpaperUpdateRequest",sceneUpdate) reply:^(NSError *error){}];
+    FSPump(0.3);
+    BOOL sceneIdleStill=playing.renderer.holdsStill && playing.renderer.playbackRate==0 && playing.renderer.frameCount==lockFrames;
+    sceneUpdate[@"activityState"]=@{@"suspended":@{}};
+    [provider updateWithId:ident request:FSBox(@"WallpaperUpdateRequestXPC",@"WallpaperUpdateRequest",sceneUpdate) reply:^(NSError *error){}];
+    sceneUpdate[@"activityState"]=@{@"active":@{}};
+    [provider updateWithId:ident request:FSBox(@"WallpaperUpdateRequestXPC",@"WallpaperUpdateRequest",sceneUpdate) reply:^(NSError *error){}];
+    FSPump(0.3);
+    BOOL sceneIdleResumeStill=playing.renderer.holdsStill && playing.renderer.playbackRate==0 && playing.renderer.frameCount==lockFrames;
+    sceneUpdate[@"presentationMode"]=@{@"default":@{}};
+    [provider updateWithId:ident request:FSBox(@"WallpaperUpdateRequestXPC",@"WallpaperUpdateRequest",sceneUpdate) reply:^(NSError *error){}];
+    FSPump(0.3);
+    BOOL sceneDesktopResumed=!playing.renderer.holdsStill && playing.renderer.playbackRate>1 && playing.renderer.frameCount>lockFrames;
     [provider invalidateWithId:ident reply:^(NSError *error){}];
-    BOOL sceneOK=scenesDrawn && distinctScenes && sceneDimmed && sceneMotion && sceneSuspended && sceneResumed && sceneLockStill;
-    results[@"scene"]=@{@"ok":@(sceneOK),@"drawn":@(scenesDrawn),@"distinct":@(distinctScenes),@"dimmed":@(sceneDimmed),@"motion":@(sceneMotion),@"suspended":@(sceneSuspended),@"resumed":@(sceneResumed),@"lockStill":@(sceneLockStill),@"frames":@(playing.renderer.frameCount)};
+    BOOL sceneOK=scenesDrawn && distinctScenes && sceneDimmed && sceneMotion && sceneSuspended && sceneResumed && sceneLockStill && sceneIdleStill && sceneIdleResumeStill && sceneDesktopResumed;
+    results[@"scene"]=@{@"ok":@(sceneOK),@"drawn":@(scenesDrawn),@"distinct":@(distinctScenes),@"dimmed":@(sceneDimmed),@"motion":@(sceneMotion),@"suspended":@(sceneSuspended),@"resumed":@(sceneResumed),@"lockStill":@(sceneLockStill),@"idleStill":@(sceneIdleStill),@"idleResumeStill":@(sceneIdleResumeStill),@"desktopResumed":@(sceneDesktopResumed),@"frames":@(playing.renderer.frameCount)};
     NSURL *catalogRoot=[dir URLByAppendingPathComponent:@"library" isDirectory:YES];
     [[NSFileManager defaultManager] createDirectoryAtURL:[catalogRoot URLByAppendingPathComponent:@"Media"] withIntermediateDirectories:YES attributes:nil error:nil];
     NSURL *catalogFile=[catalogRoot URLByAppendingPathComponent:@"catalog.json"];
@@ -1147,7 +1259,7 @@ int main(int argc,const char **argv) { @autoreleasepool {
         [provider invalidateWithId:ident reply:^(NSError *error) {}];
     }
     recoveryOK = recoveryOK && cachedChoice;
-    results[@"recovery"] = @{@"ok":@(recoveryOK), @"automaticMediaRecovery":@(automaticRecovery), @"cachedChoiceWithoutCatalog":@(cachedChoice), @"unsupportedConfigurationRejected":@(rejectedConfiguration)};
+    results[@"recovery"] = @{@"ok":@(recoveryOK), @"automaticMediaRecovery":@(automaticRecovery), @"activeVideoRecovery":@(activeVideoRecovery), @"cachedChoiceWithoutCatalog":@(cachedChoice), @"unsupportedConfigurationRejected":@(rejectedConfiguration)};
     unsetenv("FLUA_CATALOG");
     results[@"catalog"]=@{@"ok":@(listedClip && rejectedRoot && rejectedVersion),@"listedClip":@(listedClip),@"rejectedRoot":@(rejectedRoot),@"rejectedVersion":@(rejectedVersion)};
     results[@"systemActivationPerformed"]=@NO;

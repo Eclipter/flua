@@ -139,6 +139,15 @@ enum SmokeRunner {
             }
             results["libraryVisibleOnLaunch"] = NSApp.windows.contains { $0.title == "Flua" && $0.isVisible }
             if results["libraryVisibleOnLaunch"] as? Bool != true { failures.append("libraryVisibleOnLaunch") }
+            if let window = NSApp.windows.first(where: { $0.title == "Flua" }) {
+                results["libraryWindowChrome"] = window.titleVisibility == .hidden
+                    && [.closeButton, .miniaturizeButton, .zoomButton].allSatisfy {
+                        window.standardWindowButton($0)?.isHidden == false
+                    }
+            }
+            if results["libraryWindowChrome"] as? Bool != true { failures.append("libraryWindowChrome") }
+            results["discoverSystemScrollers"] = verifySystemScrollers()
+            if results["discoverSystemScrollers"] as? Bool != true { failures.append("discoverSystemScrollers") }
             results["inspectorSceneInteraction"] = await verifyInspectorInteraction(library: library)
             library.stop()
             let image = AmbientSceneView.thumbnail(scene: "ocean", size: NSSize(width: 640, height: 360))
@@ -446,6 +455,8 @@ enum SmokeRunner {
             library.selection = edited.id
             await pause(0.3)
             if let window = NSApp.windows.first(where: { $0.title == "Flua" }) {
+                results["browseSystemScrollers"] = verifySystemScrollers()
+                if results["browseSystemScrollers"] as? Bool != true { failures.append("browseSystemScrollers") }
                 captureView(window, to: out.appendingPathComponent("Flua-filters.png"))
             }
             library.filter.colors = ["Orange"]
@@ -521,6 +532,35 @@ enum SmokeRunner {
         results["passed"] = failures.isEmpty
         if let data = try? JSONSerialization.data(withJSONObject: results, options: [.prettyPrinted, .sortedKeys]) { try? data.write(to: out.appendingPathComponent("smoke-results.json")) }
         NSApp.terminate(nil)
+    }
+    @MainActor private static func verifySystemScrollers() -> Bool {
+        guard let window = NSApp.windows.first(where: { $0.title == "Flua" }),
+              let root = window.contentView else { return false }
+        var scrollViews: [NSScrollView] = []
+        func collect(_ view: NSView) {
+            if let scrollView = view as? NSScrollView, scrollView.hasVerticalScroller,
+               scrollView.bounds.width > 260 {
+                scrollViews.append(scrollView)
+            }
+            for child in view.subviews { collect(child) }
+        }
+        collect(root)
+        return scrollViews.count == 2 && scrollViews.allSatisfy { scrollView in
+            let frame = scrollView.convert(scrollView.bounds, to: nil)
+            guard scrollView.scrollerStyle == NSScroller.preferredScrollerStyle,
+                  abs(frame.minY) < 1, abs(frame.maxY - window.frame.height) < 1 else {
+                print("Scroll view does not span the window: \(frame), window height: \(window.frame.height)")
+                return false
+            }
+            if let scroller = scrollView.verticalScroller, !scroller.isHidden {
+                let track = scroller.convert(scroller.bounds, to: nil)
+                guard abs(track.minY) < 1, abs(track.maxY - window.frame.height) < 1 else {
+                    print("Scrollbar does not span the window: \(track), window height: \(window.frame.height)")
+                    return false
+                }
+            }
+            return true
+        }
     }
     @MainActor private static func verifyInspectorInteraction(library: Library) async -> Bool {
         guard let window = NSApp.windows.first(where: { $0.title == "Flua" }),

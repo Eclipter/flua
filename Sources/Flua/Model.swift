@@ -168,6 +168,35 @@ struct LibraryState: Codable {
 
     init() {}
 
+    func nativeRestorationDisplays(connected: [String], previouslyConnected: [String] = []) -> [String] {
+        let previous = Set(previouslyConnected)
+        return connected.filter { nativePlayback[$0] == true && !previous.contains($0) }
+    }
+
+    func nativeAssignmentChanges(from previous: [String: DisplayAssignment], displays: [String]) -> [String] {
+        displays.filter { id in
+            let old = previous[id] ?? DisplayAssignment()
+            let updated = self.displays[id] ?? DisplayAssignment()
+            return WallpaperSurface.allCases.contains { surface in
+                let before = old.selection(for: surface)
+                let after = updated.selection(for: surface)
+                return before?.wallpaperID != after?.wallpaperID
+                    || (before?.wallpaperID != nil && before?.mode != after?.mode)
+            }
+        }
+    }
+
+    func nativeAssignmentRefreshDisplays(changed: [String], connected: [String], mirrored: Bool) -> [String] {
+        let candidates = mirrored ? connected : changed
+        guard !nativeRestorationDisplays(connected: candidates).isEmpty else { return [] }
+        return nativeRestorationDisplays(connected: connected)
+    }
+
+    func nativeApplicationDisplays(targeted: [String], connected: [String]) -> [String] {
+        let selected = Set(targeted).union(nativeRestorationDisplays(connected: connected))
+        return connected.filter { selected.contains($0) }
+    }
+
     private enum CodingKeys: String, CodingKey {
         case wallpapers, playlists, displays, interval, shuffle, pauseOnBattery, pauseOnLowPower
         case pauseOnFullscreen, paused, displayMode, blockedTags, accentColor, nativePlayback

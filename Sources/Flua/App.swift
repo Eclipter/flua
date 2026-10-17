@@ -3,6 +3,7 @@ import AppKit
 import Combine
 
 final class ViewState: ObservableObject {
+    @Published var transportHeight: CGFloat = 0
     @Published var creatingPlaylist = false
     @Published var playlistName = ""
     @Published var deleting: Wallpaper?
@@ -158,17 +159,29 @@ struct LibraryView: View {
         NavigationSplitView {
             sidebar
         } detail: {
-            VStack(spacing: 0) {
-                Group {
-                    if library.section == "discover" { discoverContent }
-                    else { libraryContent }
-                }.frame(maxWidth: .infinity, maxHeight: .infinity)
-                transport
+            GeometryReader { geometry in
+                ScrollView {
+                    Group {
+                        if library.section == "discover" { discoverContent }
+                        else { libraryContent }
+                    }
+                    .padding(.top, geometry.safeAreaInsets.top)
+                    .padding(.bottom, ui.transportHeight)
+                }
+                .ignoresSafeArea(.container, edges: .top)
+                .overlay(alignment: .bottom) {
+                    transport
+                        .background(.bar)
+                        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { ui.transportHeight = $0 }
+                        .padding(.trailing, NSScroller.scrollerWidth(for: .regular, scrollerStyle: NSScroller.preferredScrollerStyle))
+                }
             }
         }
         .inspector(isPresented: .constant(true)) {
             InspectorView().inspectorColumnWidth(min: 280, ideal: 304, max: 360)
         }
+        .toolbar(removing: .title)
+        .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .overlay {
             if ui.dragOver {
@@ -202,36 +215,32 @@ struct LibraryView: View {
         })
     }
     private var libraryContent: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 24) {
-                pageHeader(count: displayed.count)
-                browseToolbar
-                if displayed.isEmpty {
-                    ContentUnavailableView("No Wallpapers Available", systemImage: "photo.on.rectangle.angled", description: Text("Import media or clear your search and filters. Hidden tags can be adjusted in Settings → Blocked tags."))
-                        .frame(maxWidth: .infinity, minHeight: 320)
-                } else {
-                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 240), spacing: 16)], spacing: 16) {
-                        ForEach(displayed) { wallpaperCard($0) }
-                    }
+        VStack(alignment: .leading, spacing: 24) {
+            pageHeader(count: displayed.count)
+            browseToolbar
+            if displayed.isEmpty {
+                ContentUnavailableView("No Wallpapers Available", systemImage: "photo.on.rectangle.angled", description: Text("Import media or clear your search and filters. Hidden tags can be adjusted in Settings → Blocked tags."))
+                    .frame(maxWidth: .infinity, minHeight: 320)
+            } else {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 240), spacing: 16)], spacing: 16) {
+                    ForEach(displayed) { wallpaperCard($0) }
                 }
-            }.padding(24)
-        }
+            }
+        }.padding(24)
     }
     private var discoverContent: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 32) {
-                pageHeader(count: nil)
-                browseToolbar
-                if library.eligible.isEmpty {
-                    ContentUnavailableView("No Wallpapers Available", systemImage: "photo.on.rectangle.angled", description: Text("Clear filters or adjust Settings → Blocked tags to show hidden content."))
-                }
-                discoverShelf("Featured", wallpapers: Array(library.eligible.prefix(3)), large: true)
-                discoverShelf("Animated", wallpapers: library.eligible.filter { $0.kind != "image" })
-                if library.eligible.contains(where: { $0.file != nil }) {
-                    discoverShelf("Your Wallpapers", wallpapers: library.eligible.filter { $0.file != nil })
-                }
-            }.padding(24)
-        }
+        VStack(alignment: .leading, spacing: 32) {
+            pageHeader(count: nil)
+            browseToolbar
+            if library.eligible.isEmpty {
+                ContentUnavailableView("No Wallpapers Available", systemImage: "photo.on.rectangle.angled", description: Text("Clear filters or adjust Settings → Blocked tags to show hidden content."))
+            }
+            discoverShelf("Featured", wallpapers: Array(library.eligible.prefix(3)), large: true)
+            discoverShelf("Animated", wallpapers: library.eligible.filter { $0.kind != "image" })
+            if library.eligible.contains(where: { $0.file != nil }) {
+                discoverShelf("Your Wallpapers", wallpapers: library.eligible.filter { $0.file != nil })
+            }
+        }.padding(24)
     }
     private func pageHeader(count: Int?) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
@@ -559,7 +568,7 @@ struct InspectorView: View {
                         LabeledContent("Lock Screen", value: library.surfaceSummary(.lockScreen)).font(.caption)
                         if library.surface == .lockScreen {
                             Button("Save Lock Screen Choice") { library.saveSelectedSurface() }.fluaGlassButton()
-                            Text("Apply Saved Wallpapers sends both saved surface choices and modes to macOS for the targeted displays.")
+                            Text("Apply Saved Wallpapers starts native playback. Later saved choices and mode changes sync to displays with active native playback.")
                                 .font(.caption).foregroundStyle(.secondary)
                         }
                         fluaGlassGroup {
