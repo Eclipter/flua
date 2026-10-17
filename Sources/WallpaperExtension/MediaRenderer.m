@@ -253,6 +253,10 @@ static double FSClamped(id value, double fallback, double lo, double hi) {
     _presentation = next;
     [self applySurfaceMode:NO error:NULL];
 }
+- (BOOL)playbackFailed {
+    return _player.status == AVPlayerStatusFailed || _player.currentItem.status == AVPlayerItemStatusFailed ||
+        _looper.status == AVPlayerLooperStatusFailed;
+}
 - (void)tick {
     if (_disposed || _suspended || _holdsStill) return;
     if (_player.currentItem.status == AVPlayerItemStatusReadyToPlay && fabs(_player.rate - _speed) > 0.05)

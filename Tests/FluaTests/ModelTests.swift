@@ -28,6 +28,17 @@ import Foundation
         precondition(state.wallpapers.count == 4)
         precondition(state.displayMode == "mirrored")
         precondition(state.accentColor == nil)
+        precondition(state.nativePlayback.isEmpty)
+        var nativeState = state
+        nativeState.nativePlayback = ["active": true, "stopped": false, "disconnected": true]
+        try disk.save(nativeState)
+        let nativeRoundTrip = try disk.load()
+        precondition(nativeRoundTrip.nativePlayback == nativeState.nativePlayback)
+        var legacy = try JSONSerialization.jsonObject(with: JSONEncoder().encode(nativeState)) as! [String: Any]
+        legacy.removeValue(forKey: "nativePlayback")
+        let legacyNativeState = try JSONDecoder().decode(LibraryState.self, from: JSONSerialization.data(withJSONObject: legacy))
+        precondition(legacyNativeState.nativePlayback.isEmpty && legacyNativeState.wallpapers == state.wallpapers)
+        print("PASS: native playback intent retains active, stopped and disconnected displays and defaults safely for legacy libraries")
         var accentState = state
         accentState.accentColor = "Purple"
         try disk.save(accentState)

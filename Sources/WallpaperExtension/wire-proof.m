@@ -41,6 +41,7 @@ static id Box(NSString *name, NSString *key, id value) {
 
 @interface FSCatalogHost : NSObject
 @property BOOL expecting;
+@property NSUInteger accessRequests;
 @property NSURL *catalogURL;
 @property BOOL refreshed;
 @property NSString *expectedTitle;
@@ -51,6 +52,15 @@ static id Box(NSString *name, NSString *key, id value) {
 - (void)requestReadOnlyAccessTo:(NSURL *)url reply:(void (^)(id, NSError *))reply {
     if (!self.expecting || ![url.path isEqualToString:self.catalogURL.path]) {
         reply(nil, [NSError errorWithDomain:@"org.flua.WallpaperPrototype" code:2 userInfo:@{NSLocalizedDescriptionKey : @"Unexpected catalog access"}]);
+        return;
+    }
+    self.accessRequests++;
+    if (self.accessRequests == 1) {
+        reply(self.catalogURL, nil);
+        return;
+    }
+    if (self.accessRequests == 2) {
+        reply(nil, [NSError errorWithDomain:@"org.flua.WallpaperPrototype" code:3 userInfo:@{NSLocalizedDescriptionKey:@"Temporary catalog access failure"}]);
         return;
     }
     NSURL *media = [self.catalogURL.URLByDeletingLastPathComponent URLByAppendingPathComponent:@"Media" isDirectory:YES];
@@ -82,7 +92,7 @@ static id Box(NSString *name, NSString *key, id value) {
 @end
 
 static BOOL Wait(dispatch_semaphore_t semaphore) {
-    NSDate *deadline = [NSDate dateWithTimeIntervalSinceNow:5];
+    NSDate *deadline = [NSDate dateWithTimeIntervalSinceNow:12];
     while (dispatch_semaphore_wait(semaphore, DISPATCH_TIME_NOW) != 0) {
         if (deadline.timeIntervalSinceNow <= 0)
             return NO;
@@ -221,7 +231,7 @@ int main(void) {
                                     }];
             complete = Wait(pending);
         }
-        BOOL catalogRefresh = NO, atomicRefresh = YES;
+        BOOL catalogRefresh = NO, atomicRefresh = YES, missingCatalogRecovery = NO;
         if (complete && downloaded) {
             NSURL *root = [NSURL fileURLWithPath:[NSTemporaryDirectory() stringByAppendingPathComponent:[[NSUUID UUID] UUIDString]] isDirectory:YES];
             [[NSFileManager defaultManager] createDirectoryAtURL:root withIntermediateDirectories:YES attributes:nil error:nil];
@@ -230,7 +240,7 @@ int main(void) {
             catalogHost.pending = dispatch_semaphore_create(0);
             setenv("FLUA_CATALOG", catalogHost.catalogURL.path.UTF8String, 1);
             [proxy provideSettingsViewModelsWithContentTypes:nil reply:^(id settings, NSError *error) {}];
-            catalogRefresh = Wait(catalogHost.pending) && catalogHost.refreshed;
+            catalogRefresh = Wait(catalogHost.pending) && catalogHost.refreshed && catalogHost.accessRequests >= 3;
             if (!catalogRefresh && failure.length == 0)
                 failure = catalogHost.failure ?: @"Catalog refresh timed out";
             for (NSString *title in @[@"Updated clip", @"Updated again"]) {
@@ -242,12 +252,21 @@ int main(void) {
                 atomicRefresh = Wait(catalogHost.pending) && catalogHost.refreshed && atomicRefresh;
             }
             if (!atomicRefresh && failure.length == 0) failure = @"Atomic catalog replacement was not refreshed";
+            catalogHost.expectedTitle = @"Clip";
+            catalogHost.refreshed = NO;
+            catalogHost.pending = dispatch_semaphore_create(0);
+            [[NSFileManager defaultManager] removeItemAtURL:catalogHost.catalogURL error:nil];
+            NSDate *watchDeadline = [NSDate dateWithTimeIntervalSinceNow:0.2];
+            while (watchDeadline.timeIntervalSinceNow > 0)
+                [NSRunLoop.currentRunLoop runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.01]];
+            catalogHost.pending = dispatch_semaphore_create(0);
+            missingCatalogRecovery = Wait(catalogHost.pending) && catalogHost.refreshed;
             unsetenv("FLUA_CATALOG");
             [[NSFileManager defaultManager] removeItemAtURL:root error:nil];
         }
         [client invalidate];
         [listener invalidate];
-        BOOL ok = complete && acquired && updated && snapshotted && catalog && invalidated && downloaded && catalogRefresh && atomicRefresh;
+        BOOL ok = complete && acquired && updated && snapshotted && catalog && invalidated && downloaded && catalogRefresh && atomicRefresh && missingCatalogRecovery;
         if (!complete && failure.length == 0)
             failure = @"Timed out";
         NSDictionary *result = @{
@@ -259,6 +278,7 @@ int main(void) {
             @"downloadStatusRoundtrip" : @(downloaded),
             @"catalogRefresh" : @(catalogRefresh),
             @"atomicCatalogRefresh" : @(atomicRefresh),
+            @"missingCatalogRecovery" : @(missingCatalogRecovery),
             @"invalidateRoundtrip" : @(invalidated),
             @"failure" : failure,
             @"systemActivationPerformed" : @NO

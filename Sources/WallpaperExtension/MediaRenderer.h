@@ -13,6 +13,7 @@ BOOL FSIsSceneKind(NSString *kind);
 @property(readonly) double playbackTime;
 @property(readonly) float playbackRate;
 @property(readonly) BOOL holdsStill;
+@property(readonly) BOOL playbackFailed;
 - (instancetype)initWithWidth:(NSUInteger)width height:(NSUInteger)height configuration:(NSDictionary *)configuration
                  fileWrappers:(NSArray *)wrappers error:(NSError **)error;
 - (void)setPresentation:(NSString *)presentation;

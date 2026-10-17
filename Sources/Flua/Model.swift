@@ -163,13 +163,14 @@ struct LibraryState: Codable {
     var paused: Bool = false
     var displayMode: String?
     var accentColor: String?
+    var nativePlayback: [String: Bool] = [:]
     var blockedTags: [String] = []
 
     init() {}
 
     private enum CodingKeys: String, CodingKey {
         case wallpapers, playlists, displays, interval, shuffle, pauseOnBattery, pauseOnLowPower
-        case pauseOnFullscreen, paused, displayMode, blockedTags, accentColor
+        case pauseOnFullscreen, paused, displayMode, blockedTags, accentColor, nativePlayback
     }
 
     init(from decoder: Decoder) throws {
@@ -184,6 +185,7 @@ struct LibraryState: Codable {
         pauseOnFullscreen = try c.decode(Bool.self, forKey: .pauseOnFullscreen)
         paused = try c.decode(Bool.self, forKey: .paused)
         displayMode = try c.decodeIfPresent(String.self, forKey: .displayMode)
+        nativePlayback = try c.decodeIfPresent([String: Bool].self, forKey: .nativePlayback) ?? [:]
         accentColor = try c.decodeIfPresent(String.self, forKey: .accentColor)
         blockedTags = normalizedTags((try c.decodeIfPresent([String].self, forKey: .blockedTags) ?? []).joined(separator: ","))
     }

@@ -34,6 +34,7 @@ final class Library: ObservableObject {
         disk = try LibraryDisk(root: root)
         do { state = try disk.load() }
         catch { state = .initial; saveBlocked = true; self.error = error.localizedDescription }
+        stoppedNativeDisplays = Set(state.nativePlayback.filter { !$0.value }.keys)
         selection = state.wallpapers.first(where: { !state.isBlocked($0) })?.id
         display = initialDisplaySelection(mode: state.displayMode, displayIDs: screens.map(displayID))
         engine.onError = { [weak self] in self?.error = $0 }
@@ -52,6 +53,7 @@ final class Library: ObservableObject {
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             if self.restoreAssignments() { self.save() }
+            self.restoreNativeAssignments()
             self.makeThumbnails()
             self.backfillMetadata()
         }
@@ -177,32 +179,35 @@ final class Library: ObservableObject {
         }
         for screen in screens {
             let key = displayID(screen)
-            guard !stoppedNativeDisplays.contains(key), let w = state.item(state.displays[key]?.desktop.wallpaperID) else { continue }
+            guard !stoppedNativeDisplays.contains(key),
+                  !(nativeRoutingAvailable && state.nativePlayback[key] == true), let w = state.item(state.displays[key]?.desktop.wallpaperID) else { continue }
             if w.file != nil && !(disk.url(for: w).map { FileManager.default.fileExists(atPath: $0.path) } ?? false) {
                 error = "Media for \(w.title) is missing. Reimport the file."
                 continue
             }
-            play(w, on: screen)
+            play(w, on: screen, rememberBackend: false)
         }
         if engine.activeCount > 0 { activity = "Restored wallpapers on \(engine.activeCount) display(s)." }
         return state.displays != previousDisplays
     }
     func advancePlaylists(force: Bool, backwards: Bool = false, allDisplays: Bool = false) {
         guard !nativeSetupBusy, !state.paused || force else { return }
+        if playbackMode == "mirrored", nativeRoutingAvailable, screens.contains(where: { state.nativePlayback[displayID($0)] == true }) { return }
         if !force && screens.allSatisfy({ stoppedNativeDisplays.contains(displayID($0)) }) { return }
         var didChange = false
         if playbackMode == "mirrored" {
             if let w = state.advanceMirrored(displayIDs: screens.map(displayID), force: force, backwards: backwards) {
-                for screen in screens { play(w, on: screen) }
+                for screen in screens { play(w, on: screen, rememberBackend: force) }
                 didChange = true
             }
         } else {
             for screen in screens {
                 let key = displayID(screen)
+                if nativeRoutingAvailable && state.nativePlayback[key] == true { continue }
                 if !force && stoppedNativeDisplays.contains(key) { continue }
                 if force && !allDisplays && display != key { continue }
                 if let w = state.advance(display: key, force: force, backwards: backwards) {
-                    play(w, on: screen)
+                    play(w, on: screen, rememberBackend: force)
                     didChange = true
                 }
             }
@@ -222,10 +227,17 @@ final class Library: ObservableObject {
                     let nativeStopped = try await Task.detached { try NativeWallpaper.stop(displays: ids, mirrored: mirrored, root: root) }.value
                     for id in ids {
                         engine.stop(display: id)
-                        if !nativeStopped && !stoppedNativeDisplays.contains(id) { state.stop(display: id) }
+                        if !nativeStopped && !stoppedNativeDisplays.contains(id) {
+                            if state.nativePlayback[id] != nil {
+                                state.nativePlayback[id] = false
+                                stoppedNativeDisplays.insert(id)
+                            } else { state.stop(display: id) }
+                        }
                     }
                     if nativeStopped {
                         stoppedNativeDisplays.formUnion(ids)
+                        for id in ids { state.nativePlayback[id] = false }
+                        save()
                         activity = "Wallpapers stopped. Previous system wallpapers restored; saved choices retained."
                     } else {
                         activity = "Wallpaper stopped. Your system wallpaper is visible."
@@ -235,7 +247,14 @@ final class Library: ObservableObject {
             }
             return
         }
-        for screen in targets { engine.stop(display: displayID(screen)); state.stop(display: displayID(screen)) }
+        for screen in targets {
+            let id = displayID(screen)
+            engine.stop(display: id)
+            if state.nativePlayback[id] != nil {
+                state.nativePlayback[id] = false
+                stoppedNativeDisplays.insert(id)
+            } else { state.stop(display: id) }
+        }
         activity = "Wallpaper stopped. Your system wallpaper is visible."
         save()
     }
@@ -244,7 +263,19 @@ final class Library: ObservableObject {
         settingChanged()
         activity = state.paused ? "Playback paused." : "Playback resumed."
     }
+    private var nativeRoutingAvailable: Bool {
+        NativeWallpaper.available && NativeWallpaper.catalogURL.resolvingSymlinksInPath() == disk.catalog.resolvingSymlinksInPath()
+    }
+    @MainActor private func restoreNativeAssignments() {
+        guard !saveBlocked, nativeRoutingAvailable else { return }
+        let ids = screens.map(displayID).filter { state.nativePlayback[$0] == true }
+        guard !ids.isEmpty else { return }
+        applySavedNativeAssignments(displays: ids)
+    }
     @MainActor func applySavedNativeAssignments() {
+        applySavedNativeAssignments(displays: targets.map(displayID))
+    }
+    @MainActor private func applySavedNativeAssignments(displays: [String]) {
         guard !nativeSetupBusy else { return }
         guard NativeWallpaper.available else { error = NativeWallpaper.explanation; return }
         guard !saveBlocked else { error = LibraryError.invalidLibrary.localizedDescription; return }
@@ -255,15 +286,17 @@ final class Library: ObservableObject {
         do { try disk.save(state) } catch { self.error = error.localizedDescription; return }
         let assignments: [String: NativeWallpaperStore.Assignment]
         do {
-            assignments = try NativeWallpaperStore.assignments(from: state, displays: targets.map(displayID), root: disk.root, provider: NativeWallpaper.identifier)
+            assignments = try NativeWallpaperStore.assignments(from: state, displays: displays, root: disk.root, provider: NativeWallpaper.identifier)
         } catch { self.error = error.localizedDescription; return }
-        let mirrored = playbackMode == "mirrored"
+        let mirrored = playbackMode == "mirrored" && Set(displays) == Set(screens.map(displayID))
         nativeSetupBusy = true
         let root = disk.root
         Task {
             defer { nativeSetupBusy = false }
             do {
                 try await Task.detached { try NativeWallpaper.apply(assignments, mirrored: mirrored, root: root) }.value
+                for id in assignments.keys { state.nativePlayback[id] = true }
+                save()
                 stoppedNativeDisplays.subtract(assignments.keys)
                 for (id, assignment) in assignments where assignment.desktop != nil { engine.stop(display: id) }
                 activity = "Applied saved wallpaper choices to \(assignments.count) display(s). Native playback continues after Flua quits."
@@ -284,6 +317,12 @@ final class Library: ObservableObject {
             defer { nativeSetupBusy = false }
             do {
                 try await Task.detached { try NativeWallpaper.remove(root: root) }.value
+                for id in state.nativePlayback.keys {
+                    state.nativePlayback[id] = false
+                    stoppedNativeDisplays.insert(id)
+                    engine.stop(display: id)
+                }
+                save()
                 activity = "Native provider removed. Previous system wallpapers restored; your library is preserved."
             } catch { self.error = error.localizedDescription }
         }
@@ -300,7 +339,9 @@ final class Library: ObservableObject {
         state.wallpapers[i] = updated
         engine.update(updated)
         for screen in screens where state.displays[displayID(screen)]?.desktop.wallpaperID == updated.id && state.displays[displayID(screen)]?.desktop.mode == .still {
-            play(updated, on: screen)
+            if !(nativeRoutingAvailable && state.nativePlayback[displayID(screen)] == true) {
+                play(updated, on: screen, rememberBackend: false)
+            }
         }
         clearBlockedSelection()
         save()
@@ -335,7 +376,8 @@ final class Library: ObservableObject {
             } catch { self.error = error.localizedDescription }
         }
     }
-    private func play(_ wallpaper: Wallpaper, on screen: NSScreen) {
+    private func play(_ wallpaper: Wallpaper, on screen: NSScreen, rememberBackend: Bool = true) {
+        if rememberBackend { state.nativePlayback.removeValue(forKey: displayID(screen)) }
         stoppedNativeDisplays.remove(displayID(screen))
         let mode = state.displays[displayID(screen)]?.desktop.mode ?? .animated
         let url = disk.url(for: wallpaper)

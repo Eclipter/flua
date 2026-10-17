@@ -105,6 +105,38 @@ enum SmokeRunner {
         do {
             try FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
             await pause(1)
+            if let screen = library.screens.first {
+                let key = displayID(screen)
+                let root = out.appendingPathComponent("LaunchRestoration", isDirectory: true)
+                let disk = try LibraryDisk(root: root)
+                var saved = LibraryState.initial
+                saved.displayMode = "perDisplay"
+                saved.assign("aurora", display: key)
+                saved.nativePlayback[key] = false
+                try disk.save(saved)
+                let stopped = try Library(root: root)
+                await pause(0.2)
+                results["nativeStoppedSurvivesLaunch"] = stopped.engine.activeCount == 0
+                    && stopped.state.displays[key]?.desktop.wallpaperID == "aurora"
+                stopped.tick?.invalidate()
+                saved.nativePlayback[key] = true
+                try disk.save(saved)
+                let fallback = try Library(root: root)
+                await pause(0.2)
+                results["nativeUnavailableLaunchFallback"] = fallback.engine.activeCount == 1
+                    && fallback.state.nativePlayback[key] == true
+                fallback.stop()
+                let stoppedFallback = try disk.load()
+                results["nativeFallbackStopPersists"] = fallback.engine.activeCount == 0
+                    && fallback.state.nativePlayback[key] == false
+                    && fallback.state.displays[key]?.desktop.wallpaperID == "aurora"
+                    && stoppedFallback.nativePlayback[key] == false
+                fallback.engine.stopAll()
+                fallback.tick?.invalidate()
+                for check in ["nativeStoppedSurvivesLaunch", "nativeUnavailableLaunchFallback", "nativeFallbackStopPersists"] {
+                    if results[check] as? Bool != true { failures.append(check) }
+                }
+            }
             results["libraryVisibleOnLaunch"] = NSApp.windows.contains { $0.title == "Flua" && $0.isVisible }
             if results["libraryVisibleOnLaunch"] as? Bool != true { failures.append("libraryVisibleOnLaunch") }
             results["inspectorSceneInteraction"] = await verifyInspectorInteraction(library: library)
