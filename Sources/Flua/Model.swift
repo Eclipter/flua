@@ -162,13 +162,14 @@ struct LibraryState: Codable {
     var pauseOnFullscreen: Bool = true
     var paused: Bool = false
     var displayMode: String?
+    var accentColor: String?
     var blockedTags: [String] = []
 
     init() {}
 
     private enum CodingKeys: String, CodingKey {
         case wallpapers, playlists, displays, interval, shuffle, pauseOnBattery, pauseOnLowPower
-        case pauseOnFullscreen, paused, displayMode, blockedTags
+        case pauseOnFullscreen, paused, displayMode, blockedTags, accentColor
     }
 
     init(from decoder: Decoder) throws {
@@ -183,6 +184,7 @@ struct LibraryState: Codable {
         pauseOnFullscreen = try c.decode(Bool.self, forKey: .pauseOnFullscreen)
         paused = try c.decode(Bool.self, forKey: .paused)
         displayMode = try c.decodeIfPresent(String.self, forKey: .displayMode)
+        accentColor = try c.decodeIfPresent(String.self, forKey: .accentColor)
         blockedTags = normalizedTags((try c.decodeIfPresent([String].self, forKey: .blockedTags) ?? []).joined(separator: ","))
     }
     static var initial: LibraryState {
@@ -323,16 +325,53 @@ struct ProviderCatalog: Codable, Equatable {
         var kind: String
         var file: String
         var fit: String
+        var speed: Double = 1
+        var dimming: Double = 0
+        var trimStart: Double?
+        var trimEnd: Double?
+        var still: Double?
+        var desktop: WallpaperMode = .animated
+        var lockScreen: WallpaperMode = .animated
     }
     var version = 1
     var items: [Item] = []
 }
 
+// shortcut: one mode per wallpaper per surface; conflicting displays publish animated until the host takes a choice per display.
+func publishedSurfaceMode(_ surface: WallpaperSurface, wallpaper id: String, in state: LibraryState) -> WallpaperMode {
+    let modes = Set(state.displays.values.compactMap { assignment -> WallpaperMode? in
+        guard let selection = assignment.selection(for: surface), selection.wallpaperID == id else { return nil }
+        return selection.mode
+    })
+    return modes.count == 1 ? modes.first! : .animated
+}
+
+let builtInSceneKinds: Set<String> = ["aurora", "cosmos", "ocean", "ember"]
+
 func providerCatalog(from state: LibraryState) -> ProviderCatalog {
     ProviderCatalog(items: state.wallpapers.compactMap { wallpaper in
-        guard wallpaper.kind == "image" || wallpaper.kind == "video", !state.isBlocked(wallpaper),
+        guard !state.isBlocked(wallpaper) else { return nil }
+        // The provider draws these scenes, so a choice needs no media file. Still is the desktop thumbnail time.
+        if builtInSceneKinds.contains(wallpaper.kind) {
+            return .init(id: wallpaper.id, title: wallpaper.title, kind: wallpaper.kind, file: "",
+                         fit: wallpaper.fit ? "fit" : "fill", speed: wallpaper.speed, dimming: wallpaper.dimming, still: 7,
+                         desktop: publishedSurfaceMode(.desktop, wallpaper: wallpaper.id, in: state),
+                         lockScreen: publishedSurfaceMode(.lockScreen, wallpaper: wallpaper.id, in: state))
+        }
+        guard wallpaper.kind == "image" || wallpaper.kind == "video",
               let name = wallpaper.file, name == (name as NSString).lastPathComponent, name != ".", name != ".." else { return nil }
-        return .init(id: wallpaper.id, title: wallpaper.title, kind: wallpaper.kind, file: "Media/\(name)", fit: wallpaper.fit ? "fit" : "fill")
+        var trimStart: Double?
+        var trimEnd: Double?
+        if wallpaper.kind == "video", let edit = wallpaper.videoEdit, let end = edit.end, end > edit.start, edit.start >= 0 {
+            trimStart = edit.start
+            trimEnd = end
+        }
+        let still = wallpaper.kind == "video" ? stillFrameTime(edit: wallpaper.videoEdit, duration: wallpaper.mediaFacts?.sourceDuration) : nil
+        return .init(id: wallpaper.id, title: wallpaper.title, kind: wallpaper.kind, file: "Media/\(name)",
+                     fit: wallpaper.fit ? "fit" : "fill", speed: wallpaper.speed, dimming: wallpaper.dimming,
+                     trimStart: trimStart, trimEnd: trimEnd, still: still,
+                     desktop: publishedSurfaceMode(.desktop, wallpaper: wallpaper.id, in: state),
+                     lockScreen: publishedSurfaceMode(.lockScreen, wallpaper: wallpaper.id, in: state))
     })
 }
 

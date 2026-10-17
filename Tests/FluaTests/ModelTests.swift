@@ -27,6 +27,20 @@ import Foundation
         var state = try disk.load()
         precondition(state.wallpapers.count == 4)
         precondition(state.displayMode == "mirrored")
+        precondition(state.accentColor == nil)
+        var accentState = state
+        accentState.accentColor = "Purple"
+        try disk.save(accentState)
+        let restoredAccent = try disk.load()
+        precondition(restoredAccent.accentColor == "Purple" && restoredAccent.wallpapers == state.wallpapers)
+        accentState.accentColor = nil
+        let systemAccentData = try JSONEncoder().encode(accentState)
+        let systemAccentJSON = try JSONSerialization.jsonObject(with: systemAccentData) as! [String: Any]
+        precondition(systemAccentJSON["accentColor"] == nil)
+        let legacyAccent = try JSONDecoder().decode(LibraryState.self, from: systemAccentData)
+        precondition(legacyAccent.accentColor == nil && legacyAccent.wallpapers == state.wallpapers)
+        try disk.save(state)
+        print("PASS: accent preference persists and missing preferences follow the system")
         precondition(resolvedDisplayMode(nil) == "perDisplay")
         precondition(initialDisplaySelection(mode: "perDisplay", displayIDs: ["display-A"]) == "display-A")
         precondition(initialDisplaySelection(mode: nil, displayIDs: ["display-A"]) == "display-A")
@@ -130,16 +144,37 @@ import Foundation
         var state = LibraryState()
         state.blockedTags = ["hidden"]
         state.wallpapers = [
-            Wallpaper(id: "clip", title: "Clip", kind: "video", file: "clip.mov", fit: true),
+            Wallpaper(id: "clip", title: "Clip", kind: "video", file: "clip.mov", speed: 1.5, dimming: 0.25, fit: true,
+                      videoEdit: VideoEdit(start: 0.25, end: 0.75, thumbnail: 0.5)),
             Wallpaper(id: "pic", title: "Pic", kind: "image", file: "pic.png"),
-            Wallpaper(id: "aurora", title: "Northern lights", kind: "aurora"),
+            Wallpaper(id: "aurora", title: "Northern lights", kind: "aurora", speed: 0.5, dimming: 0.2),
             Wallpaper(id: "escape", title: "Escape", kind: "video", file: "../secret.mov"),
-            Wallpaper(id: "hidden-pic", title: "Hidden", kind: "image", file: "hidden.png", tags: "hidden")
+            Wallpaper(id: "hidden-pic", title: "Hidden", kind: "image", file: "hidden.png", tags: "hidden"),
+            Wallpaper(id: "ember", title: "Ember", kind: "ember", tags: "hidden"),
+            Wallpaper(id: "plugin", title: "Plugin", kind: "plugin"),
+            Wallpaper(id: "bad", title: "Bad", kind: "video", file: "bad.mov", videoEdit: VideoEdit(start: 2, end: 1, thumbnail: 0.2))
         ]
+        precondition(state.assign("clip", display: "A"))
+        state.setMode(.still, display: "A", surface: .desktop)
+        precondition(state.assign("clip", display: "B"))
+        state.setMode(.still, display: "B", surface: .desktop)
+        precondition(state.assign("clip", display: "A", surface: .lockScreen))
+        precondition(state.assign("pic", display: "C", surface: .lockScreen))
+        state.setMode(.still, display: "C", surface: .lockScreen)
+        precondition(state.assign("pic", display: "D"))
+        state.setMode(.still, display: "D", surface: .desktop)
+        precondition(state.assign("pic", display: "E"))
+        state.setMode(.animated, display: "E", surface: .desktop)
+        precondition(state.assign("aurora", display: "F"))
+        state.setMode(.still, display: "F", surface: .desktop)
         let catalog = providerCatalog(from: state)
         precondition(catalog == ProviderCatalog(items: [
-            .init(id: "clip", title: "Clip", kind: "video", file: "Media/clip.mov", fit: "fit"),
-            .init(id: "pic", title: "Pic", kind: "image", file: "Media/pic.png", fit: "fill")
+            .init(id: "clip", title: "Clip", kind: "video", file: "Media/clip.mov", fit: "fit", speed: 1.5, dimming: 0.25,
+                  trimStart: 0.25, trimEnd: 0.75, still: 0.5, desktop: .still, lockScreen: .animated),
+            .init(id: "pic", title: "Pic", kind: "image", file: "Media/pic.png", fit: "fill", lockScreen: .still),
+            .init(id: "aurora", title: "Northern lights", kind: "aurora", file: "", fit: "fill", speed: 0.5, dimming: 0.2,
+                  still: 7, desktop: .still, lockScreen: .animated),
+            .init(id: "bad", title: "Bad", kind: "video", file: "Media/bad.mov", fit: "fill", still: 0.2)
         ]))
         try disk.save(state)
         let saved = try JSONDecoder().decode(ProviderCatalog.self, from: Data(contentsOf: disk.catalog))

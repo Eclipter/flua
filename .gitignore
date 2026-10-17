@@ -3,7 +3,7 @@
 build/
 dist/
 work/
-experimental/**/Built/
+Sources/WallpaperExtension/Built/
 .DS_Store
 *.xcuserstate
 xcuserdata/

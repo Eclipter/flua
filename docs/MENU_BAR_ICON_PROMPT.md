@@ -1,0 +1,7 @@
+# Sakura menu bar icon
+
+Generated from the user's five-petal reference with the built-in image generation tool. The transparent PNG is stored in `Sources/Flua/Resources/MenuBarSakura.png`.
+
+## Final prompt
+
+Create a raster PNG icon that closely matches the attached reference's exact five-petal sakura blossom design. ONE simple flat flower, viewed from directly above, five broad asymmetrical gently swirling petals arranged around the center. Match the reference's petal shapes, orientation, proportions and organic pinwheel-like curved narrow gaps: two upright petals at the top, one petal extending to each lower side, one downward petal. Each petal has a small V-shaped notch at its outer tip. The five petals are separate filled shapes divided by narrow smooth TRANSPARENT curved channels all the way to the central junction, just like the white gaps in the reference. NO stamens, NO pistil, NO outlines, NO central circle, NO branch, NO leaves, NO extra marks. Adapt the reference into pure opaque BLACK petals on genuinely TRANSPARENT alpha background and transparent separating channels, for a macOS template menu bar icon. Preserve the original's beautiful simple petal geometry rather than replacing it with generic symmetric flower geometry. Center the flower in a square with about 8 percent safe margin. Smooth clean edges, strong legibility at 18 points. Do not paint a white background or white separating lines; those must be alpha transparency. No pink, no gradients, no shadow, no border, no letters, no checkerboard. Actual raster PNG output.

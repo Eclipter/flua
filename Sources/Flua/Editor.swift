@@ -224,6 +224,7 @@ final class EditorFrameView: NSView {
 }
 
 struct VideoEditorView: View {
+    @EnvironmentObject var library: Library
     @ObservedObject var model: VideoEditorModel
     private func editBinding<T>(_ key: WritableKeyPath<VideoEdit,T>, fallback: T) -> Binding<T> {
         Binding(get: { model.draft.videoEdit?[keyPath: key] ?? fallback }, set: { value in var e = model.draft.videoEdit ?? VideoEdit(end: model.info?.duration); e[keyPath: key] = value; model.draft.videoEdit = e })
@@ -251,7 +252,7 @@ struct VideoEditorView: View {
                 }
                 if let info = model.info {
                     Text("\(info.width) × \(info.height)  ·  \(String(format: "%.2f", info.fps)) fps  ·  \(String(format: "%.1f", info.duration)) s  ·  \(ByteCountFormatter.string(fromByteCount: info.bytes, countStyle: .file))  ·  \(String(format: "%.1f", info.bitrate / 1_000_000)) Mbps").font(.caption).foregroundStyle(.secondary)
-                    HStack { Text("Position"); Slider(value: Binding(get: { model.playhead }, set: { model.playhead = $0; model.seek($0) }), in: 0...info.duration); Text(String(format: "%.2f s", model.playhead)).monospacedDigit().frame(width: 75) }.font(.caption)
+                    HStack { Text("Position"); Slider(value: Binding(get: { model.playhead }, set: { model.playhead = $0; model.seek($0) }), in: 0...info.duration).tint(library.accentOverride); Text(String(format: "%.2f s", model.playhead)).monospacedDigit().frame(width: 75) }.font(.caption)
                     HStack {
                         Button("Set trim start here") { var e = model.draft.videoEdit ?? VideoEdit(end: info.duration); e.start = min(model.playhead, (e.end ?? info.duration) - 0.1); model.draft.videoEdit = e }
                         Button("Set trim end here") { var e = model.draft.videoEdit ?? VideoEdit(end: info.duration); e.end = max(model.playhead, e.start + 0.1); model.draft.videoEdit = e }
@@ -266,7 +267,7 @@ struct VideoEditorView: View {
                 Spacer(minLength: 0)
                 if let error = model.error { Text(error).font(.caption).foregroundStyle(.red).textSelection(.enabled) }
                 if !model.status.isEmpty { Text(model.status).font(.caption).foregroundStyle(.secondary) }
-                if model.busy { HStack { ProgressView(value: model.exportProgress); Button("Cancel export") { model.cancelExport() } } }
+                if model.busy { HStack { ProgressView(value: model.exportProgress).tint(library.accentOverride); Button("Cancel export") { model.cancelExport() } } }
             }.padding(24).frame(minWidth: 580, maxWidth: .infinity)
             Divider()
             VStack(alignment: .leading, spacing: 15) {
@@ -286,13 +287,13 @@ struct VideoEditorView: View {
                 Divider()
                 Text("EXPORT").font(.caption).foregroundStyle(.secondary)
                 Picker("Quality", selection: editBinding(\.quality, fallback: "high")) { Text("Original resolution").tag("high"); Text("1080p").tag("1080"); Text("720p").tag("medium"); Text("Small, 480p").tag("small") }
-                Toggle("Include audio", isOn: editBinding(\.includeAudio, fallback: true)).disabled(model.info?.hasAudio != true)
+                Toggle("Include audio", isOn: editBinding(\.includeAudio, fallback: true)).tint(library.accentOverride).disabled(model.info?.hasAudio != true)
                 Button("Export trimmed video…") { model.chooseExport("video") }
                 Button("Export 5-second preview…") { model.chooseExport("preview") }
                 Button("Export thumbnail…") { model.chooseExport("thumbnail") }
                 Spacer()
                 Button("Undo changes") { model.revert() }
-                Button("Save to library") { model.save() }.buttonStyle(.borderedProminent).tint(accent).foregroundStyle(.black)
+                Button("Save to library") { model.save() }.buttonStyle(.borderedProminent).tint(library.accentOverride)
                 Text("Trim and thumbnail choices are saved without changing the source file. Export creates a new file.").font(.caption2).foregroundStyle(.secondary)
             }.padding(24).frame(width: 290).textFieldStyle(.roundedBorder).disabled(model.busy || model.info == nil)
         }.frame(minWidth: 980, minHeight: 650).background(Color(red: 0.062, green: 0.075, blue: 0.085)).preferredColorScheme(.dark)
@@ -315,7 +316,7 @@ struct VideoEditorView: View {
         super.init()
         window.title = "Edit — " + wallpaper.title
         window.isReleasedWhenClosed = false
-        window.contentView = NSHostingView(rootView: VideoEditorView(model: model))
+        window.contentView = NSHostingView(rootView: VideoEditorView(model: model).environmentObject(library))
         window.delegate = self
         window.center()
         model.window = window

@@ -4,7 +4,7 @@
 
 - Flua is a local-only SwiftUI/AppKit application for Apple Silicon Macs running macOS 15 or later.
 - Keep the main app in `Sources/Flua/` free of third-party runtime dependencies unless the task explicitly requires one.
-- Treat `experimental/WallpaperExtension/` as a separate prototype. It uses private macOS APIs, requires a macOS 26 SDK/runtime, and is not part of the desktop app build.
+- `Sources/WallpaperExtension/` is the wallpaper provider. It uses private macOS APIs and needs a macOS 26 SDK. `make build` embeds it in `Flua.app`. Lock Screen setup stays limited to macOS 27.
 - Do not add network services, telemetry, accounts, or cloud storage unless explicitly requested.
 
 ## Source map
@@ -19,6 +19,7 @@
 - `Editor.swift`: video preview and export.
 - `ScenePackage.swift`: package and ZIP validation/import.
 - `SmokeRunner.swift`: opt-in isolated runtime verification.
+- `Sources/WallpaperExtension/`: wallpaper provider, its fixtures and standalone tests.
 
 ## Working rules
 
@@ -30,9 +31,9 @@
 - Preserve source media during import, editing and export. Replacing an existing export destination is allowed with explicit user consent, such as confirmation in the save dialog. Never replace files silently.
 - Keep UI and user-facing documentation in English, matching the existing application.
 - Follow `.editorconfig`: four spaces in Swift, tabs in `Makefile`, LF endings, and a final newline.
-- Do not edit generated `.build/`, `build/`, `dist/`, or `experimental/**/Built/` artifacts.
+- Do not edit generated `.build/`, `build/`, `dist/`, or `Sources/WallpaperExtension/Built/` artifacts.
 - Do not commit, push, notarize, or register login items unless explicitly requested.
-- Reversible OS integration checks are authorized when needed to implement or verify the requested task, including temporary registration, selection and activation of the experimental system provider. No separate confirmation is needed for these checks. Use disposable fixtures, record the affected system settings and establish a rollback procedure before changing them, then restore the previous settings and registration state on completion or failure. Ask before irreversible changes or when reliable restoration cannot be established.
+- Reversible OS integration checks are authorized when needed to implement or verify the requested task, including temporary registration, selection and activation of the wallpaper provider. No separate confirmation is needed for these checks. Use disposable fixtures, record the affected system settings and establish a rollback procedure before changing them, then restore the previous settings and registration state on completion or failure. Ask before irreversible changes or when reliable restoration cannot be established.
 
 ## Validation
 
@@ -41,7 +42,7 @@ Run the narrowest relevant checks, then expand when the change crosses boundarie
 - Model, persistence, paths, or package import: `make test`.
 - Main app build or compile-sensitive UI changes: `make build`.
 - Playback, UI, import/export, or end-to-end behavior: `make smoke` after `make build` (the `make smoke` target builds automatically).
-- Experimental provider changes: `make native-test`.
+- Wallpaper provider changes: `make wallpaper-test`.
 - Release packaging changes: `make release` and verify the produced archive under `dist/`.
 
 Smoke tests briefly create a desktop overlay and write only to a fresh directory under `build/verification/`. Do not claim multi-display, sleep/wake, fullscreen, battery, login startup, system-provider activation, or other hardware/OS integration behavior was verified unless it was tested on the relevant real setup.

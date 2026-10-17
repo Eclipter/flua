@@ -15,6 +15,7 @@ final class Library: ObservableObject {
     @Published var screens = NSScreen.screens
     @Published var error: String?
     @Published var importing = false
+    @Published var nativeSetupBusy = false
     @Published var activity = "Choose a scene, then apply it to your desktop."
     @Published var thumbnails: [String: NSImage] = [:]
     let disk: LibraryDisk
@@ -168,6 +169,29 @@ final class Library: ObservableObject {
         settingChanged()
         activity = state.paused ? "Playback paused." : "Playback resumed."
     }
+    @MainActor func applySelectedToLockScreen() {
+        guard !nativeSetupBusy else { return }
+        guard let selected, let item = providerCatalog(from: state).items.first(where: { $0.id == selected.id }) else {
+            error = "Select an available video or scene first."
+            return
+        }
+        guard NativeWallpaper.available else { error = NativeWallpaper.explanation; return }
+        guard !saveBlocked else { error = LibraryError.invalidLibrary.localizedDescription; return }
+        guard NativeWallpaper.catalogURL.resolvingSymlinksInPath() == disk.catalog.resolvingSymlinksInPath() else {
+            error = "This build uses a different library. Rebuild it with FLUA_CATALOG_PATH set to this library’s catalog.json."
+            return
+        }
+        do { try disk.save(state) } catch { self.error = error.localizedDescription; return }
+        nativeSetupBusy = true
+        let root = disk.root
+        Task {
+            defer { nativeSetupBusy = false }
+            do {
+                try await Task.detached { try NativeWallpaper.apply(item, root: root) }.value
+                activity = "Applied \(item.title) to the Lock Screen on all displays. Native playback continues after Flua quits."
+            } catch { self.error = error.localizedDescription }
+        }
+    }
     func edit(_ value: Wallpaper) {
         guard let i = state.wallpapers.firstIndex(where: { $0.id == value.id }) else { return }
         var updated = value
@@ -278,11 +302,11 @@ final class Library: ObservableObject {
         panel.message = "Import videos, images, video manifest folders, .zip, or .bdpkg packages. Flua stores its own copies."
         panel.begin { [weak self] response in if response == .OK { self?.importMedia(panel.urls) } }
     }
-    func createBackdrop() {
+    func createWallpaper() {
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [.movie]
         panel.allowsMultipleSelection = false
-        panel.message = "Choose a video to create a Flua backdrop. The source file will not be changed."
+        panel.message = "Choose a video to create a Flua wallpaper. The source file will not be changed."
         panel.begin { [weak self] response in
             if response == .OK { self?.importMedia(panel.urls, openEditor: true) }
         }

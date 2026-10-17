@@ -6,7 +6,7 @@ let package = Package(
     platforms: [.macOS("15.0")],
     products: [.executable(name: "Flua", targets: ["Flua"])],
     targets: [
-        .executableTarget(name: "Flua", linkerSettings: [
+        .executableTarget(name: "Flua", resources: [.process("Resources")], linkerSettings: [
             .linkedFramework("AppKit"), .linkedFramework("SwiftUI"),
             .linkedFramework("AVFoundation"), .linkedFramework("QuartzCore"),
             .linkedFramework("IOKit"), .linkedFramework("ServiceManagement"),

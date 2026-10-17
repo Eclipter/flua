@@ -1,19 +1,21 @@
 # Development
 
-Requires macOS 15+, Apple Silicon and Apple Swift command-line tools (`xcode-select --install`). The experimental wallpaper extension additionally needs a macOS 26 SDK/runtime. There are no external Swift package dependencies.
+Requires macOS 15+, Apple Silicon and Apple Swift command-line tools (`xcode-select --install`). The wallpaper extension needs a macOS 26 SDK/runtime. There are no external Swift package dependencies.
 
 ```sh
-make build       # release executable, app bundle, ad-hoc signature
-make test        # model, library path, package security tests
-make smoke       # isolated end-to-end app tests, then exits
-make run         # open the desktop app
-make release     # dist/Flua-macOS.zip
-make native-test # isolated experimental provider tests, no OS activation
+make build          # Flua.app with the wallpaper extension, ad-hoc signature
+make test           # model, library path, package security tests
+make smoke          # isolated end-to-end app tests, then exits
+make run            # open the app
+make release        # dist/Flua-macOS.zip
+make wallpaper-test # isolated wallpaper extension tests, no OS activation
 ```
 
 `Package.swift` supports SwiftPM and opening the source package in Xcode. Use `make build` for a runnable `.app`; `swift build` alone only produces an executable. Model/package tests are standalone executables run by `make test`, not XCTest targets. Smoke tests launch a separate app instance through Launch Services, wait for it to exit, and write only to a fresh directory under `build/verification/`; they briefly create and remove a desktop overlay.
 
 The build script updates the app bundle's modification time after signing so Launch Services can detect changed metadata and icon resources on subsequent launches.
+
+The transparent menu bar PNG lives in `Sources/Flua/Resources/MenuBarSakura.png`. SwiftPM packages it in `Flua_Flua.bundle`; the build script copies that bundle into the app's `Contents/Resources/` before signing. `MenuBarIcon.swift` loads it as an 18-point template image so macOS supplies the menu bar color. The library sidebar draws the same image at 22 points and tints it with the accent color. The prompt that produced it is `docs/MENU_BAR_ICON_PROMPT.md`.
 
 ## Layout
 
@@ -22,16 +24,34 @@ The build script updates the app bundle's modification time after signing so Lau
 - `Resources/`: bundle metadata and original application icon.
 - `scripts/`: reproducible build, test and release entry points.
 - `docs/`: architecture and feature status.
-- `experimental/WallpaperExtension/`: independent native-provider prototype, not embedded in the application.
+- `Sources/WallpaperExtension/`: wallpaper provider, compiled separately and embedded by `make build`.
 - `.build/`, `build/`, `dist/`: ignored, generated artifacts.
 
 ## Changes and validation
 
-Keep media and account information out of the repository. Test model/import changes with `make test`, and playback/UI/export changes with `make smoke`. Build the experimental provider separately when changing its protocol. Update [feature status](FEATURES.md) when support changes. Validation results belong in fresh generated output.
+Keep media and account information out of the repository. Test model/import changes with `make test`, and playback/UI/export changes with `make smoke`. Run `make wallpaper-test` when changing the provider protocol. Update [feature status](FEATURES.md) when support changes. Validation results belong in fresh generated output.
 
-`make native-test` also verifies the boxed download-status reply over XPC. It does not register or select a wallpaper. Real-host playback and file-access checks use disposable containing apps and the [provider verification and restoration procedure](../experimental/WallpaperExtension/README.md#playback-scoped-files-and-restoration). Keep their source copies, fixtures, local settings snapshots and logs outside Git.
+`make wallpaper-test` also verifies the boxed download-status reply over XPC. It does not register or select a wallpaper. Real-host playback and file-access checks use disposable containing apps, following the [provider verification and restoration procedure](../Sources/WallpaperExtension/README.md#playback-scoped-files-and-restoration). Keep their source copies, fixtures, local settings snapshots and logs outside Git.
 
 The project is a local Git repository; commits and remotes are left to the developer. No CI service, signing account or deployment credentials are required. Release bundles are ad-hoc signed, not notarized.
+
+## Lock Screen integration checks
+
+`make build` creates `build/Flua.app`. The extension requires a macOS 26 or newer SDK; the setup UI is gated to macOS 27. The extension uses `local.flua.desktop.wallpaper`, a sandbox signature and a file-only read exception for `~/Library/Application Support/Flua/catalog.json`. Prototype fixtures are hidden. Apply registers the containing app and its extension, selects its PlugInKit election and directly updates the user wallpaper store through a guarded transaction. The helper validates the current-user agent before pausing it; EOF, timeout or handled termination resumes it. A successful write restarts it. `NativeWallpaperStore` rejects unknown formats and applies one choice to all existing display/Space assignments. A backup is retained in the library as `NativeWallpaperBackup.plist`. The underlying desktop is still and the Lock Screen is animated; playlists and saved surface/link assignments remain separate.
+
+For isolated integration checks, create a fresh library outside the normal application-support directory and build with its absolute catalog path:
+
+```sh
+FLUA_CATALOG_PATH=/absolute/path/to/disposable-library/catalog.json \
+    FLUA_WALLPAPER_IDENTIFIER=local.flua.desktop.wallpaper.disposable-test \
+    make build
+open -g -n build/Flua.app --args \
+    --data-dir /absolute/path/to/disposable-library
+```
+
+The override is compiled into the extension’s plist and sandbox read exception. The app refuses setup if its library differs from that path. A build without the override uses the standard Flua library. After tests, rebuild without the override before using the app normally. `make wallpaper-test` checks the library-only catalog and repeated atomic catalog replacement over XPC. `make test` checks safe service PID parsing, media path containment, descriptor generation, all display/Space store updates, metadata preservation and unsupported-store rejection. These tests do not activate system wallpapers.
+
+Before real-host selection, follow the [snapshot and restoration procedure](../Sources/WallpaperExtension/README.md#playback-scoped-files-and-restoration), using the disposable provider identifier and preserving existing registrations. Exercise **Apply to Lock Screen** with a newly imported fixture and verify both the saved choice and host scoped-file acquisition. Check that closing the guard input resumes the paused agent. Restore both store plists while the agent is paused, then restart it; compare choices against the baseline while ignoring only system-maintained timestamps. Select another wallpaper before removal. Unregister the exact extension with `pluginkit -r <app>/Contents/Extensions/FluaWallpaperExtension.appex`, then the containing app with `lsregister -u <app>`. Restore previous wallpaper choices and provider paths, preserving concurrent user changes. Keep snapshots and logs out of Git.
 
 ## Keyboard verification
 
@@ -54,7 +74,7 @@ The smoke suite also checks filter reset, including preservation of persisted bl
 
 The bundle ID is `local.flua.desktop`. Normal launches use `~/Library/Application Support/Flua/`; an explicit `--data-dir` selects a separate library. The app creates its library on first launch and retains existing Flua data. It does not search other application directories. Login startup is opt-in.
 
-The library root contains `library.json`, `catalog.json` and a `Media/` directory of copied imports. `catalog.json` is rewritten on each successful save and lists image and video files for the experimental provider. Removing a scene retains its media file. If `library.json` cannot be decoded, the app shows the initial scenes in memory and blocks saves and imports, preserving the unreadable manifest. Quit before inspecting or restoring that file. For isolated runtime verification, supply both `--data-dir` and `--smoke-test` as shown in the [README](../README.md#build-and-verify); `--smoke-test` alone does not select a separate library.
+The library root contains `library.json`, `catalog.json` and a `Media/` directory of copied imports. `catalog.json` is rewritten on each successful save and lists image and video files for the wallpaper provider, plus the four built-in scenes with no media file. Rows include speed, dimming, fit, trim, still-frame time, and desktop and Lock Screen modes. Scene still time is 7. Removing a scene retains its media file. If `library.json` cannot be decoded, the app shows the initial scenes in memory and blocks saves and imports, preserving the unreadable manifest. Quit before inspecting or restoring that file. For isolated runtime verification, supply both `--data-dir` and `--smoke-test` as shown in the [README](../README.md#build-and-verify); `--smoke-test` alone does not select a separate library.
 
 Scene exports use `.flua` folders containing a video, thumbnail and JSON manifest. Imports accept manifest folders, direct JSON manifests and ZIP archives. ZIP members and media paths are validated before import; source files remain intact. Interactive scene runtimes are unsupported.
 
