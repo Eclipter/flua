@@ -106,22 +106,18 @@ final class Library: ObservableObject {
     func applySelected() {
         guard let w = selected else { return }
         let now = Date()
-        for screen in targets {
-            state.assign(w.id, display: displayID(screen), now: now)
-            engine.apply(w, url: disk.url(for: w), to: screen)
-        }
+        for screen in targets { state.assign(w.id, display: displayID(screen), now: now) }
         if playbackMode == "mirrored" { _ = state.synchronizeMirrored(displayIDs: targets.map(displayID)) }
+        for screen in targets { play(w, on: screen) }
         activity = "Playing \(w.title) on \(targets.count == screens.count ? "all displays" : targets.first?.localizedName ?? "display")."
         save()
     }
     func startPlaylist(_ id: String) {
         guard let p = state.playlist(id), let w = p.items.compactMap({ state.item($0) }).first else { error = "Add at least one scene to this playlist first."; return }
         let now = Date()
-        for screen in targets {
-            state.assign(w.id, display: displayID(screen), playlistID: id, now: now)
-            engine.apply(w, url: disk.url(for: w), to: screen)
-        }
+        for screen in targets { state.assign(w.id, display: displayID(screen), playlistID: id, now: now) }
         if playbackMode == "mirrored" { _ = state.synchronizeMirrored(displayIDs: targets.map(displayID)) }
+        for screen in targets { play(w, on: screen) }
         activity = "Playlist: \(p.name)"
         save()
     }
@@ -137,7 +133,7 @@ final class Library: ObservableObject {
                 error = "Media for \(w.title) is missing. Reimport the file."
                 continue
             }
-            engine.apply(w, url: disk.url(for: w), to: screen)
+            play(w, on: screen)
         }
         if engine.activeCount > 0 { activity = "Restored wallpapers on \(engine.activeCount) display(s)." }
         return state.displays != previousDisplays
@@ -147,7 +143,7 @@ final class Library: ObservableObject {
         var didChange = false
         if playbackMode == "mirrored" {
             if let w = state.advanceMirrored(displayIDs: screens.map(displayID), force: force, backwards: backwards) {
-                for screen in screens { engine.apply(w, url: disk.url(for: w), to: screen) }
+                for screen in screens { play(w, on: screen) }
                 didChange = true
             }
         } else {
@@ -155,7 +151,7 @@ final class Library: ObservableObject {
                 let key = displayID(screen)
                 if force && !allDisplays && display != key { continue }
                 if let w = state.advance(display: key, force: force, backwards: backwards) {
-                    engine.apply(w, url: disk.url(for: w), to: screen)
+                    play(w, on: screen)
                     didChange = true
                 }
             }
@@ -182,8 +178,47 @@ final class Library: ObservableObject {
         if updated.metadata?.motion == nil { updated.metadata?.motion = state.wallpapers[i].metadata?.motion }
         state.wallpapers[i] = updated
         engine.update(updated)
+        for screen in screens where state.displays[displayID(screen)]?.desktop.wallpaperID == updated.id && state.displays[displayID(screen)]?.desktop.mode == .still {
+            play(updated, on: screen)
+        }
         clearBlockedSelection()
         save()
+    }
+    private func play(_ wallpaper: Wallpaper, on screen: NSScreen) {
+        let mode = state.displays[displayID(screen)]?.desktop.mode ?? .animated
+        let url = disk.url(for: wallpaper)
+        guard mode == .still, wallpaper.kind != "image" else {
+            engine.apply(wallpaper, url: url, to: screen, mode: mode)
+            return
+        }
+        let stamp = stillStamp(for: wallpaper)
+        if let file = disk.retainedStill(id: wallpaper.id, stamp: stamp), let image = NSImage(contentsOf: file) {
+            engine.apply(wallpaper, url: url, to: screen, mode: .still, stillImage: image)
+            return
+        }
+        if wallpaper.file == nil {
+            let image = AmbientSceneView.thumbnail(scene: wallpaper.kind, size: NSSize(width: 1920, height: 1080))
+            let stored = pngData(image).flatMap { try? disk.writeStill(id: wallpaper.id, stamp: stamp, data: $0) }.flatMap { NSImage(contentsOf: $0) }
+            engine.apply(wallpaper, url: nil, to: screen, mode: .still, stillImage: stored ?? image)
+            return
+        }
+        engine.apply(wallpaper, url: url, to: screen, mode: .still)
+        let id = wallpaper.id
+        let display = displayID(screen)
+        Task { @MainActor [weak self] in
+            guard let self, let source = self.disk.url(for: wallpaper),
+                  let data = try? await VideoTools.thumbnail(source: source, time: stillFrameTime(edit: wallpaper.videoEdit, duration: wallpaper.mediaFacts?.sourceDuration)),
+                  self.state.displays[display]?.desktop.mode == .still,
+                  self.state.displays[display]?.desktop.wallpaperID == id,
+                  let current = self.state.item(id), stillStamp(for: current) == stamp,
+                  let written = try? self.disk.writeStill(id: id, stamp: stamp, data: data),
+                  let image = NSImage(contentsOf: written) else { return }
+            self.engine.showStill(image, wallpaper: id, display: display)
+        }
+    }
+    private func pngData(_ image: NSImage) -> Data? {
+        guard let tiff = image.tiffRepresentation, let rep = NSBitmapImageRep(data: tiff) else { return nil }
+        return rep.representation(using: .png, properties: [:])
     }
     func favorite(_ w: Wallpaper) { var value = w; value.favorite.toggle(); edit(value) }
     func createPlaylist(_ name: String) {

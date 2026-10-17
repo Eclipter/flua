@@ -19,7 +19,7 @@ Repeat `make native-test` after provider changes before running host checks. Tem
 
 ## 2. Model desktop and Lock Screen assignments separately
 
-**Status:** done in the library model. Deterministic tests and the isolated smoke run pass. The desktop app still applies and restores only the desktop surface; Animated/Still is stored but not used by rendering, and there is no setup UI.
+**Status:** done in the library model. Deterministic tests and the isolated smoke run pass. The desktop app applies and restores only the desktop surface. A stored desktop Still mode is rendered as a retained frame; Lock Screen is not applied, and there is no setup UI.
 
 1. Extend `DisplayAssignment` with per-surface selection and persistent Animated/Still mode, plus a linked/independent setting. Keep this separate from the existing Mirrored/Per Display setting. **Done.**
 2. Decode old assignments into the desktop surface with their playlist index, history and timing intact. Leave the Lock Screen unmanaged until the user assigns it or enables linking. **Done.**
@@ -31,11 +31,11 @@ Repeat `make native-test` after provider changes before running host checks. Tem
 
 ## 3. Implement Animated and Still rendering for each surface
 
-1. Extend `Engine.swift` so Still is a persistent rendering choice rather than the temporary global pause state.
-2. Generate and retain still assets for videos and procedural scenes. Use the chosen video thumbnail frame, respecting valid trim bounds; images remain still in either mode.
+1. Extend `Engine.swift` so Still is a persistent rendering choice rather than the temporary global pause state. **Done** for the desktop surface.
+2. Generate and retain still assets for videos and procedural scenes. Use the chosen video thumbnail frame, respecting valid trim bounds; images remain still in either mode. **Done.** Files are written under `Stills/` and the source file is left unchanged.
 3. Extend the provider configuration and renderer to honor per-surface modes and supported trim, speed, fit and dimming settings.
 4. Provide native animated output or locally prepared loop assets for the four built-in scenes before exposing them as animated native choices.
-5. Keep temporary suspension, resume and lock/idle transitions separate from the saved mode. Avoid desktop-overlay and system-provider playback competing for the same desktop.
+5. Keep temporary suspension, resume and lock/idle transitions separate from the saved mode. Avoid desktop-overlay and system-provider playback competing for the same desktop. **Partial:** pause and resume leave the saved desktop mode unchanged. Lock, sleep, idle and a competing system-provider desktop are not covered.
 
 **Acceptance:** deterministic configuration checks and runtime tests show that surface modes survive restart, suspension and resume without altering source media.
 
@@ -43,7 +43,7 @@ Repeat `make native-test` after provider changes before running host checks. Tem
 
 1. Publish a small versioned local catalog containing stable IDs, configuration, thumbnails and references to durable library-owned assets. Write it atomically instead of exposing partially saved application state. **Done.** `catalog.json` is written beside `library.json`. It lists image and video files under `Media/`, and omits procedural scenes, blocked tags and unsafe filenames. Video rows still use the prototype thumbnail.
 2. Give the provider the read access proven in step 1. Validate catalog versions, IDs and asset containment, and obtain media access through the host's supported file-wrapper mechanism. Validation and file-wrapper playback are implemented for a harness-supplied catalog. The sandboxed provider still cannot read the live library directory. On macOS 27.0.1 a disposable registration was visible to PlugInKit, but WallpaperAgent did not request the catalog, and writing a choice into `Index.plist` by hand was ignored. The wallpaper store was restored.
-3. Populate the desktop and screen-saver catalogs from eligible library entries. Respect blocked tags and reflect imports, metadata edits and removals through host refresh callbacks. Video entries now use the host's video badge so a selection can play on the Lock Screen; still entries stay desktop-only. A new host selection with that badge has not been observed.
+3. Populate the desktop and screen-saver catalogs from eligible library entries. Respect blocked tags and reflect imports, metadata edits and removals through host refresh callbacks. Video entries use the host's video badge; still entries stay desktop-only. On macOS 27.0.1 the user confirmed the bundled video moving on the Lock Screen. The visible desktop did not change while the Flua desktop overlay was running. Host refresh callbacks and a library-file selection remain unobserved.
 4. Resolve per-display desktop/Lock Screen choices and host idle requests without adding a third independent assignment surface unless required by the host.
 5. Keep selected assets and configurations available after Flua exits. Handle missing media, stale choices and incompatible catalog data with a usable still fallback or a recoverable error.
 
@@ -72,7 +72,7 @@ Repeat `make native-test` after provider changes before running host checks. Tem
 
 ## Validation throughout implementation
 
-- Verify keyboard-only access to library filters, clickable tags, clear/reset and blocked-tag controls, including empty results.
+- [x] Verify keyboard-only access to library filters, clickable tags, clear/reset and blocked-tag controls, including empty results. Checked on macOS 27.0.1 (26A434) with Keyboard navigation enabled and disposable libraries. Inspector tags stay in the focus order and scroll into view; search reset is labeled Clear search. VoiceOver was turned on; its caption read the sidebar group PLAYLISTS, and the renamed browsing controls were not reached. `make smoke` passed on macOS 27.0.1, including the offscreen check of the names VoiceOver reads for those controls. See the [repeatable keyboard check](DEVELOPMENT.md#keyboard-verification).
 
 - Run `make test` after model, persistence, metadata and package-validation changes. Add focused standalone Swift tests under `Tests/FluaTests/` through `scripts/test.sh`.
 - Run `make build`, then `make smoke`, after UI, rendering, playback and import/export changes. Extend `SmokeRunner.swift` only for behavior an isolated run can actually establish.

@@ -87,8 +87,43 @@ import Foundation
         state.playlists = [Playlist(id: "empty", name: "Empty")]
         state.displays["display-C"] = DisplayAssignment(desktop: SurfaceAssignment(playlistID: "empty"))
         precondition(state.advance(display: "display-C", force: true) == nil)
+        try stillAssetTests(dir.appendingPathComponent("stills-case"))
         try catalogTests(dir.appendingPathComponent("catalog-case"))
-        print("PASS: global, per-playlist and mirrored scheduling, 100 shuffle transitions, removal cleanup, persistence, path validation, corrupt-library preservation, empty playlists, provider catalog")
+        print("PASS: global, per-playlist and mirrored scheduling, 100 shuffle transitions, removal cleanup, persistence, path validation, corrupt-library preservation, empty playlists, still frames, provider catalog")
+    }
+    static func stillAssetTests(_ root: URL) throws {
+        precondition(stillFrameTime(edit: nil, duration: nil) == 0)
+        precondition(stillFrameTime(edit: VideoEdit(thumbnail: -2), duration: nil) == 0)
+        precondition(stillFrameTime(edit: VideoEdit(thumbnail: 1.5), duration: nil) == 1.5)
+        let inside = VideoEdit(start: 0.25, end: 0.75, thumbnail: 0.5)
+        precondition(stillFrameTime(edit: inside, duration: 1) == 0.5)
+        precondition(stillFrameTime(edit: VideoEdit(start: 0.25, end: 0.75, thumbnail: 0), duration: 1) == 0.25)
+        precondition(stillFrameTime(edit: VideoEdit(start: 0.25, end: 0.75, thumbnail: 9), duration: 1) == 0.75 - 1.0 / 600)
+        precondition(stillFrameTime(edit: VideoEdit(start: 2, end: 1, thumbnail: 0.2), duration: 5) == 0.2)
+        precondition(stillFrameTime(edit: VideoEdit(thumbnail: 9), duration: 1) == 1 - 1.0 / 600)
+        var library = LibraryState()
+        library.wallpapers = [Wallpaper(id: "clip", title: "Clip", kind: "video", file: "clip.mov", videoEdit: inside)]
+        precondition(library.assign("clip", display: "A"))
+        library.setMode(.still, display: "A", surface: .desktop)
+        library.paused = true
+        library.paused = false
+        let decoded = try JSONDecoder().decode(LibraryState.self, from: JSONEncoder().encode(library))
+        precondition(decoded.paused == false && decoded.displays["A"]?.desktop.mode == .still && decoded.displays["A"]?.desktop.wallpaperID == "clip")
+        let disk = try LibraryDisk(root: root)
+        let source = disk.assets.appendingPathComponent("clip.mov")
+        let original = Data("source-bytes".utf8)
+        try original.write(to: source)
+        precondition(disk.stillFile(id: "../secret") == nil && disk.stillFile(id: "a/b") == nil && disk.stillFile(id: "..") == nil)
+        let rejected = try disk.writeStill(id: "../secret", stamp: "video 0.500000", data: Data([1]))
+        precondition(rejected == nil)
+        let stamp = stillStamp(for: library.item("clip")!)
+        let file = try disk.writeStill(id: "clip", stamp: stamp, data: Data([0x89, 0x50, 0x4e, 0x47]))
+        precondition(file?.deletingLastPathComponent().lastPathComponent == "Stills")
+        precondition(disk.retainedStill(id: "clip", stamp: stamp) == file)
+        precondition(disk.retainedStill(id: "clip", stamp: "video 0.000000") == nil)
+        let preserved = try Data(contentsOf: source)
+        precondition(preserved == original)
+        precondition(!FileManager.default.fileExists(atPath: root.deletingLastPathComponent().appendingPathComponent("secret").path))
     }
     static func catalogTests(_ root: URL) throws {
         let disk = try LibraryDisk(root: root)

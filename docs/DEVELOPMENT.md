@@ -33,6 +33,23 @@ Keep media and account information out of the repository. Test model/import chan
 
 The project is a local Git repository; commits and remotes are left to the developer. No CI service, signing account or deployment credentials are required. Release bundles are ad-hoc signed, not notarized.
 
+## Keyboard verification
+
+The library controls were checked on macOS 27.0.1 (26A434) with the existing macOS Keyboard navigation preference enabled, using disposable `--data-dir` libraries. Repeat this check after changes to browsing controls:
+
+1. Use Tab and Shift-Tab to reach Search, the playback-type picker and all five filter menus. Use arrows and Space for the playback type; Space opens menus, then arrows and Return select values.
+2. Choose filters or enter a search with no matches. Reach Clear search and Clear filters with Tab, activate with Space, and confirm results return.
+3. From a fresh window, Tab to the tags below Motion intensity in the right-hand details panel without scrolling first. Confirm the focused button scrolls into view. Use Space to apply it, then Shift-Tab to the active tag filter and Space to remove it.
+4. Open Settings with Command-comma. Tab to the blocked-tag field and submit with Return; also test Tab/Space on Block and Unblock. Confirm blocked entries disappear and unblocking restores them.
+
+VoiceOver was turned on for this check. With the test library in front, its caption read PLAYLISTS, the sidebar group. Speech for Search, the filter menus, tag actions, favorites, playback buttons and Blocked tags was not captured. On macOS 27.0.1, `make smoke` passed after these name changes. It runs the offscreen name check, then the interactive suite. The names checked are Search, the five filter menus, Clear search, Clear filters, Filter by tag, Remove tag filter, favorite and playback buttons, and Settings → Blocked tags. Repeat the name check after browsing-control changes:
+
+```sh
+build/Flua.app/Contents/MacOS/Flua --data-dir /tmp/flua-ax --accessibility-audit /tmp/flua-accessibility.json
+```
+
+The smoke suite also checks filter reset, including preservation of persisted blocked tags, but does not replace the keyboard interaction check above.
+
 ## Local data and packages
 
 The bundle ID is `local.flua.desktop`. Normal launches use `~/Library/Application Support/Flua/`; an explicit `--data-dir` selects a separate library. The app creates its library on first launch and retains existing Flua data. It does not search other application directories. Login startup is opt-in.
@@ -56,4 +73,4 @@ Manifests are limited to 1 MiB and archives to 512 MiB. Folder and ZIP validatio
 
 Scene-package export refuses an existing destination. MP4/preview and PNG export can replace an existing destination while preserving the source. MP4 export stages its output beside the destination before moving or replacing it; cancellation leaves an existing destination intact.
 
-Browsing rules and media bucket boundaries are tested in `ModelTests.swift`. The isolated smoke run additionally measures image/video imports and rotated video, exercises legacy metadata backfill, checks classification preservation through package export/import, and verifies blocked Discover entries and cleared selections. It saves filter, empty-result, Settings, Discover and editor screenshots alongside `smoke-results.json` for visual inspection.
+Browsing rules and media bucket boundaries are tested in `ModelTests.swift`. The isolated smoke run additionally measures image/video imports and rotated video, exercises legacy metadata backfill, checks classification preservation through package export/import, and verifies blocked Discover entries, cleared selections, filter reset without clearing persisted blocked tags, and the VoiceOver names of the browsing controls. It saves filter, empty-result, Settings, Discover and editor screenshots alongside `smoke-results.json` for visual inspection.

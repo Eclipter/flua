@@ -1,10 +1,100 @@
 import AppKit
+import ApplicationServices
 import AVFoundation
 import SwiftUI
 
 /// Invoked only with --smoke-test <directory>; writes all test state to --data-dir.
 enum SmokeRunner {
     private static var running = false
+    /// Keeps an audit window off the active space and out of the window cycle.
+    @MainActor static func park(_ window: NSWindow) {
+        window.alphaValue = 0.01
+        window.ignoresMouseEvents = true
+        window.collectionBehavior = [.stationary, .ignoresCycle]
+        window.setFrameOrigin(NSPoint(x: -20000, y: -20000))
+    }
+    @MainActor static func runAuditIfRequested(library: Library) async {
+        let args = ProcessInfo.processInfo.arguments
+        guard let i = args.firstIndex(of: "--accessibility-audit"), args.indices.contains(i + 1) else { return }
+        let destination = URL(fileURLWithPath: args[i + 1])
+        try? FileManager.default.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
+        for window in NSApp.windows { park(window); window.orderBack(nil) }
+        await pause(0.4)
+        for window in NSApp.windows { park(window); window.orderBack(nil) }
+        let hosted = NSWindow(contentRect: NSRect(x: -20000, y: -20000, width: 1320, height: 840), styleMask: [.titled], backing: .buffered, defer: false)
+        hosted.title = "Flua Library Audit"
+        hosted.isReleasedWhenClosed = false
+        hosted.contentView = NSHostingView(rootView: LibraryView().environmentObject(library).frame(width: 1320, height: 840).preferredColorScheme(.dark))
+        park(hosted)
+        hosted.orderBack(nil)
+        await pause(0.4)
+        var missing = missingNames("Flua Library Audit", [
+            "Search", "Category filter", "Color filter", "Motion filter", "Resolution filter", "Aspect filter",
+            "Filter by ambient", "Filter by green", "Filter by nature", "Add favorite", "Scene name", "Tags", "Category",
+            "Speed", "Dim", "Previous in playlist", "Next in playlist", "Pause or resume", "Stop on selected displays", "Create playlist"
+        ])
+        library.query = "no-match"
+        library.filterTag("ambient")
+        library.blockTags("test")
+        await pause(0.4)
+        for window in NSApp.windows { park(window); window.orderBack(nil) }
+        missing += missingNames("Flua Library Audit", ["Clear search", "Clear filters", "Remove ambient filter"])
+        let settings = NSWindow(contentRect: NSRect(x: -20000, y: -20000, width: 530, height: 760), styleMask: [.titled], backing: .buffered, defer: false)
+        settings.title = "Flua Settings Audit"
+        settings.isReleasedWhenClosed = false
+        settings.contentView = NSHostingView(rootView: SettingsView().environmentObject(library).frame(width: 530, height: 760))
+        park(settings)
+        settings.orderBack(nil)
+        await pause(0.4)
+        missing += missingNames("Flua Settings Audit", ["Blocked tags", "Block", "Unblock test"])
+        let report: [String: Any] = ["passed": missing.isEmpty, "missing": missing]
+        if let data = try? JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys]) {
+            try? data.write(to: destination)
+        }
+        exit(missing.isEmpty ? 0 : 1)
+    }
+    private static func missingNames(_ title: String, _ required: [String]) -> [String] {
+        let names = spokenNames(titled: title)
+        return required.filter { !names.contains($0) }
+    }
+    private static func spokenNames(titled title: String) -> Set<String> {
+        let app = AXUIElementCreateApplication(ProcessInfo.processInfo.processIdentifier)
+        var windowsRef: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString, &windowsRef) == .success,
+              let windows = windowsRef as? [AXUIElement],
+              let window = windows.first(where: { ax($0, kAXTitleAttribute) == title }) else { return [] }
+        var names: Set<String> = []
+        let roles: Set<String> = ["AXButton", "AXTextField", "AXTextArea", "AXPopUpButton", "AXMenuButton", "AXCheckBox", "AXRadioButton", "AXSlider", "AXComboBox"]
+        func add(_ text: String) {
+            let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty { names.insert(trimmed) }
+        }
+        func visit(_ element: AXUIElement, _ depth: Int) {
+            if depth > 16 { return }
+            if roles.contains(ax(element, kAXRoleAttribute)) {
+                add(ax(element, kAXDescriptionAttribute))
+                add(ax(element, kAXTitleAttribute))
+                add(ax(element, kAXHelpAttribute))
+                add(ax(element, kAXTitleUIElementAttribute))
+            }
+            var childrenRef: CFTypeRef?
+            guard AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &childrenRef) == .success,
+                  let children = childrenRef as? [AXUIElement] else { return }
+            for child in children { visit(child, depth + 1) }
+        }
+        visit(window, 0)
+        return names
+    }
+    private static func ax(_ element: AXUIElement, _ attribute: String) -> String {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, attribute as CFString, &value) == .success, let value else { return "" }
+        if attribute == kAXTitleUIElementAttribute, CFGetTypeID(value as CFTypeRef) == AXUIElementGetTypeID() {
+            let named = Unmanaged<AXUIElement>.fromOpaque(Unmanaged.passUnretained(value as AnyObject).toOpaque()).takeUnretainedValue()
+            return ax(named, kAXValueAttribute) + " " + ax(named, kAXTitleAttribute) + " " + ax(named, kAXDescriptionAttribute)
+        }
+        let text = "\(value)".replacingOccurrences(of: "\n", with: " ")
+        return text.count > 140 ? String(text.prefix(140)) : text
+    }
     @MainActor static func runIfRequested(library: Library) async {
         let args = ProcessInfo.processInfo.arguments
         guard !running, let i = args.firstIndex(of: "--smoke-test"), args.indices.contains(i + 1) else { return }
@@ -136,6 +226,15 @@ enum SmokeRunner {
             results["muteExport"] = try await !VideoInformation.load(muted).hasAudio
             let thumbnail = try await VideoTools.thumbnail(source: videoURL, time: 0.5)
             results["thumbnailExport"] = NSImage(data: thumbnail) != nil
+            let sourceBeforeStill = try Data(contentsOf: videoURL)
+            let stillTime = stillFrameTime(edit: VideoEdit(start: 0.25, end: 0.75, thumbnail: 0.1), duration: information.duration)
+            let stillFrame = try await VideoTools.thumbnail(source: videoURL, time: stillTime)
+            surface.configure(video, url: videoURL, mode: .still, stillImage: NSImage(data: stillFrame))
+            await pause(0.2)
+            results["stillHeld"] = surface.holdsStill && surface.showsStillImage && surface.playbackRate == 0 && !surface.mediaReady
+            surface.setPaused(false)
+            results["stillIgnoresResume"] = surface.holdsStill && surface.playbackRate == 0
+            results["stillPreservesSource"] = try Data(contentsOf: videoURL) == sourceBeforeStill
             do { _ = try VideoTools.range(VideoEdit(start: 2, end: 1), duration: 1); results["rejectInvalidTrim"] = false }
             catch { results["rejectInvalidTrim"] = true }
             do { try await VideoTools.export(exportSession, source: videoURL, destination: videoURL); results["preserveSourceOnExport"] = false }
@@ -213,6 +312,37 @@ enum SmokeRunner {
             results["libraryStop"] = library.state.displays.isEmpty && library.engine.activeCount == 0
             if let screen = library.screens.first {
                 let key = displayID(screen)
+                library.state.setMode(.still, display: key, surface: .desktop)
+                library.selection = "aurora"
+                library.applySelected()
+                let sceneStamp = stillStamp(for: library.state.item("aurora")!)
+                results["sceneStillRetained"] = library.engine.activeCount == library.screens.count && library.engine.windowDiagnostics.allSatisfy { ($0["still"] as? Bool) == true && ($0["stillImage"] as? Bool) == true && ($0["rate"] as? Double) == 0 && $0["wallpaper"] as? String == "aurora" }
+                    && library.disk.retainedStill(id: "aurora", stamp: sceneStamp) != nil
+                library.selection = video.id
+                let sourceURL = library.disk.url(for: video)!
+                let sourceBefore = try Data(contentsOf: sourceURL)
+                library.applySelected()
+                var desktopStill = false
+                for _ in 0..<50 {
+                    await pause(0.1)
+                    desktopStill = library.engine.activeCount == library.screens.count && library.engine.windowDiagnostics.allSatisfy { ($0["still"] as? Bool) == true && ($0["stillImage"] as? Bool) == true && ($0["rate"] as? Double) == 0 && $0["wallpaper"] as? String == video.id }
+                    if desktopStill { break }
+                }
+                results["desktopStill"] = desktopStill
+                library.togglePause()
+                library.togglePause()
+                results["desktopStillSurvivesPause"] = library.state.paused == false && library.state.displays[key]?.desktop.mode == .still
+                    && library.engine.windowDiagnostics.allSatisfy { ($0["still"] as? Bool) == true && ($0["rate"] as? Double) == 0 }
+                results["desktopStillPersisted"] = try library.disk.load().displays[key]?.desktop.mode == .still
+                results["desktopStillPreservesSource"] = try Data(contentsOf: sourceURL) == sourceBefore
+                library.stop()
+                library.state.displays.removeAll()
+                library.state.paused = false
+                library.save()
+                library.engine.stopAll()
+            }
+            if let screen = library.screens.first {
+                let key = displayID(screen)
                 library.state.assign("ember", display: key, surface: .lockScreen)
                 library.state.setMode(.still, display: key, surface: .lockScreen)
                 let lockScreen = library.state.displays[key]?.lockScreen
@@ -258,7 +388,14 @@ enum SmokeRunner {
             if let window = NSApp.windows.first(where: { $0.title == "Flua" }) {
                 captureView(window, to: out.appendingPathComponent("Flua-empty-results.png"))
             }
+            library.query = "no-match"
+            library.blockTags("test")
             library.clearFilters()
+            let blockedTagsAfterReset = try library.disk.load().blockedTags
+            results["clearFiltersPreservesBlockedTags"] = library.query.isEmpty && library.filter.activeCount == 0
+                && library.state.blockedTags == ["test"] && !library.visible.contains { normalizedTags($0.tags).contains("test") }
+                && !library.visible.isEmpty && blockedTagsAfterReset == ["test"]
+            library.unblockTag("test")
             results["clearFilters"] = library.filter.activeCount == 0 && library.query.isEmpty && library.visible.count == library.state.wallpapers.count
             library.blockTags("example")
             let settings = NSWindow(contentRect: NSRect(x: 100, y: 100, width: 530, height: 760), styleMask: [.titled, .closable], backing: .buffered, defer: false)
@@ -286,7 +423,7 @@ enum SmokeRunner {
                 }
             }
             results["libraryRoundTrip"] = try library.disk.load().wallpapers == library.state.wallpapers
-            let required = ["importFacts", "rotatedFacts", "missingFacts", "legacyBackfill", "staleEditPreservesFacts", "unknownColorBackfill", "unknownColorRoundTrip", "blockedDiscover", "clickableTag", "combinedBrowsing", "clearFilters", "imageImport", "videoImport", "videoReady", "videoPlaying", "videoLooped", "videoPaused", "videoResumed", "liveAdjustmentPreservesTime", "liveAdjustmentSpeed", "render_image", "render_aurora", "render_cosmos", "render_ocean", "render_ember", "desktopWindowVisible", "desktopIgnoresMouse", "desktopCleanup", "systemWallpaperPreserved", "libraryApply", "playlistStart", "playlistNext", "libraryStop", "libraryRoundTrip", "discoverWindow", "windowSnapshot", "videoInformation", "trimmedPlayback", "trimmedExport", "thumbnailExport", "rejectInvalidTrim", "preserveSourceOnExport", "packageRoundTrip", "editorPersistence", "editorWindow", "audioExport", "muteExport"]
+            let required = ["importFacts", "rotatedFacts", "missingFacts", "legacyBackfill", "staleEditPreservesFacts", "unknownColorBackfill", "unknownColorRoundTrip", "blockedDiscover", "clickableTag", "combinedBrowsing", "clearFiltersPreservesBlockedTags", "clearFilters", "imageImport", "videoImport", "videoReady", "videoPlaying", "videoLooped", "videoPaused", "videoResumed", "liveAdjustmentPreservesTime", "liveAdjustmentSpeed", "stillHeld", "stillIgnoresResume", "stillPreservesSource", "sceneStillRetained", "desktopStill", "desktopStillSurvivesPause", "desktopStillPersisted", "desktopStillPreservesSource", "render_image", "render_aurora", "render_cosmos", "render_ocean", "render_ember", "desktopWindowVisible", "desktopIgnoresMouse", "desktopCleanup", "systemWallpaperPreserved", "libraryApply", "playlistStart", "playlistNext", "libraryStop", "libraryRoundTrip", "discoverWindow", "windowSnapshot", "videoInformation", "trimmedPlayback", "trimmedExport", "thumbnailExport", "rejectInvalidTrim", "preserveSourceOnExport", "packageRoundTrip", "editorPersistence", "editorWindow", "audioExport", "muteExport"]
             for key in required where results[key] as? Bool != true { failures.append(key) }
         } catch { failures.append(String(reflecting: error)) }
         results["failures"] = failures

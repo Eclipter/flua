@@ -33,6 +33,25 @@ struct VideoEdit: Codable, Equatable {
     var quality: String = "high"
 }
 
+func stillFrameTime(edit: VideoEdit?, duration: Double?) -> Double {
+    let thumb = edit?.thumbnail ?? 0
+    let requested = thumb.isFinite && thumb >= 0 ? thumb : 0
+    guard let duration, duration.isFinite, duration > 0 else { return requested }
+    let last = max(0, duration - 1.0 / 600)
+    let start = edit?.start ?? 0
+    let end = edit?.end ?? duration
+    guard start.isFinite, end.isFinite, start >= 0, start < duration, end - start >= 0.1 else { return min(requested, last) }
+    let lower = min(start, last)
+    let upper = min(max(lower, min(end, duration) - 1.0 / 600), last)
+    return min(max(requested, lower), upper)
+}
+
+func stillStamp(for wallpaper: Wallpaper) -> String {
+    if wallpaper.kind == "video" { return String(format: "video %.6f", stillFrameTime(edit: wallpaper.videoEdit, duration: wallpaper.mediaFacts?.sourceDuration)) }
+    if wallpaper.kind == "image" { return "image" }
+    return "scene \(wallpaper.kind)"
+}
+
 struct SceneMetadata: Codable, Equatable {
     var details: String = ""
     var category: String = ""
@@ -320,14 +339,17 @@ func providerCatalog(from state: LibraryState) -> ProviderCatalog {
 final class LibraryDisk {
     let root: URL
     let assets: URL
+    let stills: URL
     let manifest: URL
     let catalog: URL
     init(root: URL) throws {
         self.root = root
         assets = root.appendingPathComponent("Media", isDirectory: true)
+        stills = root.appendingPathComponent("Stills", isDirectory: true)
         manifest = root.appendingPathComponent("library.json")
         catalog = root.appendingPathComponent("catalog.json")
         try FileManager.default.createDirectory(at: assets, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: stills, withIntermediateDirectories: true)
     }
     func load() throws -> LibraryState {
         guard FileManager.default.fileExists(atPath: manifest.path) else { return .initial }
@@ -344,6 +366,25 @@ final class LibraryDisk {
         guard let name = wallpaper.file,
               name == (name as NSString).lastPathComponent, name != ".", name != ".." else { return nil }
         return assets.appendingPathComponent(name)
+    }
+    func stillFile(id: String) -> URL? {
+        guard id == (id as NSString).lastPathComponent, id != ".", id != "..", !id.isEmpty else { return nil }
+        return stills.appendingPathComponent(id + ".png")
+    }
+    func retainedStill(id: String, stamp: String) -> URL? {
+        guard let file = stillFile(id: id), FileManager.default.fileExists(atPath: file.path),
+              (try? String(contentsOf: file.deletingPathExtension().appendingPathExtension("stamp"), encoding: .utf8)) == stamp else { return nil }
+        return file
+    }
+    func writeStill(id: String, stamp: String, data: Data) throws -> URL? {
+        guard let file = stillFile(id: id) else { return nil }
+        let temporary = stills.appendingPathComponent(".flua-" + UUID().uuidString + ".png")
+        defer { try? FileManager.default.removeItem(at: temporary) }
+        try data.write(to: temporary)
+        if FileManager.default.fileExists(atPath: file.path) { _ = try FileManager.default.replaceItemAt(file, withItemAt: temporary) }
+        else { try FileManager.default.moveItem(at: temporary, to: file) }
+        try Data(stamp.utf8).write(to: file.deletingPathExtension().appendingPathExtension("stamp"), options: .atomic)
+        return file
     }
 }
 
