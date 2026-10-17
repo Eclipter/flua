@@ -242,17 +242,19 @@ struct VideoEditorView: View {
     var body: some View {
         HStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 16) {
-                Text("Video editor").font(.title2)
-                EditorPlayer(player: model.player).aspectRatio(16/10, contentMode: .fit).background(.black).clipShape(RoundedRectangle(cornerRadius: 12))
+                Text(model.draft.title).font(.system(size: 28, weight: .bold, design: .serif)).lineLimit(1)
+                EditorPlayer(player: model.player).aspectRatio(16/10, contentMode: .fit).background(.black).clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                 HStack {
-                    Button { model.player.play() } label: { Label("Play", systemImage: "play.fill") }
-                    Button { model.player.pause() } label: { Label("Pause", systemImage: "pause.fill") }
+                    fluaGlassRow {
+                        Button { model.player.play() } label: { Label("Play", systemImage: "play.fill") }.fluaGlassButton()
+                        Button { model.player.pause() } label: { Label("Pause", systemImage: "pause.fill") }.fluaGlassButton()
+                    }
                     Spacer()
-                    Text("Preview audio is muted").font(.caption2).foregroundStyle(.secondary)
+                    Text("Preview audio is muted").font(.caption).foregroundStyle(.secondary)
                 }
                 if let info = model.info {
                     Text("\(info.width) × \(info.height)  ·  \(String(format: "%.2f", info.fps)) fps  ·  \(String(format: "%.1f", info.duration)) s  ·  \(ByteCountFormatter.string(fromByteCount: info.bytes, countStyle: .file))  ·  \(String(format: "%.1f", info.bitrate / 1_000_000)) Mbps").font(.caption).foregroundStyle(.secondary)
-                    HStack { Text("Position"); Slider(value: Binding(get: { model.playhead }, set: { model.playhead = $0; model.seek($0) }), in: 0...info.duration).tint(library.accentOverride); Text(String(format: "%.2f s", model.playhead)).monospacedDigit().frame(width: 75) }.font(.caption)
+                    HStack { Text("Position"); Slider(value: Binding(get: { model.playhead }, set: { model.playhead = $0; model.seek($0) }), in: 0...info.duration).tint(library.accent); Text(String(format: "%.2f s", model.playhead)).monospacedDigit().frame(width: 75) }.font(.caption)
                     HStack {
                         Button("Set trim start here") { var e = model.draft.videoEdit ?? VideoEdit(end: info.duration); e.start = min(model.playhead, (e.end ?? info.duration) - 0.1); model.draft.videoEdit = e }
                         Button("Set trim end here") { var e = model.draft.videoEdit ?? VideoEdit(end: info.duration); e.end = max(model.playhead, e.start + 0.1); model.draft.videoEdit = e }
@@ -270,8 +272,8 @@ struct VideoEditorView: View {
                 if model.busy { HStack { ProgressView(value: model.exportProgress).tint(library.accentOverride); Button("Cancel export") { model.cancelExport() } } }
             }.padding(24).frame(minWidth: 580, maxWidth: .infinity)
             Divider()
-            VStack(alignment: .leading, spacing: 15) {
-                Text("SCENE INFORMATION").font(.caption).foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 16) {
+                Text("Details").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
                 TextField("Title", text: $model.draft.title)
                 TextField("Description", text: metadataBinding(\.details), axis: .vertical).lineLimit(3...5)
                 TextField("Category", text: metadataBinding(\.category))
@@ -285,18 +287,26 @@ struct VideoEditorView: View {
                 TextField("Credit title", text: metadataBinding(\.creditTitle))
                 TextField("Credit URL", text: metadataBinding(\.creditURL))
                 Divider()
-                Text("EXPORT").font(.caption).foregroundStyle(.secondary)
+                Text("Export").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
                 Picker("Quality", selection: editBinding(\.quality, fallback: "high")) { Text("Original resolution").tag("high"); Text("1080p").tag("1080"); Text("720p").tag("medium"); Text("Small, 480p").tag("small") }
                 Toggle("Include audio", isOn: editBinding(\.includeAudio, fallback: true)).tint(library.accentOverride).disabled(model.info?.hasAudio != true)
-                Button("Export trimmed video…") { model.chooseExport("video") }
-                Button("Export 5-second preview…") { model.chooseExport("preview") }
-                Button("Export thumbnail…") { model.chooseExport("thumbnail") }
+                fluaGlassGroup {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Button("Export trimmed video…") { model.chooseExport("video") }.fluaGlassButton()
+                        Button("Export 5-second preview…") { model.chooseExport("preview") }.fluaGlassButton()
+                        Button("Export thumbnail…") { model.chooseExport("thumbnail") }.fluaGlassButton()
+                    }
+                }
                 Spacer()
-                Button("Undo changes") { model.revert() }
-                Button("Save to library") { model.save() }.buttonStyle(.borderedProminent).tint(library.accentOverride)
+                fluaGlassGroup {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Button("Undo changes") { model.revert() }.fluaGlassButton()
+                        Button("Save to library") { model.save() }.fluaProminentButton().tint(library.accentOverride)
+                    }
+                }
                 Text("Trim and thumbnail choices are saved without changing the source file. Export creates a new file.").font(.caption2).foregroundStyle(.secondary)
-            }.padding(24).frame(width: 290).textFieldStyle(.roundedBorder).disabled(model.busy || model.info == nil)
-        }.frame(minWidth: 980, minHeight: 650).background(Color(red: 0.062, green: 0.075, blue: 0.085)).preferredColorScheme(.dark)
+            }.padding(24).frame(width: 304).textFieldStyle(.roundedBorder).disabled(model.busy || model.info == nil)
+        }.frame(minWidth: 980, minHeight: 650).background(Color(nsColor: .windowBackgroundColor))
     }
 }
 

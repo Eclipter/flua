@@ -10,7 +10,9 @@ let package = Package(
             .linkedFramework("AppKit"), .linkedFramework("SwiftUI"),
             .linkedFramework("AVFoundation"), .linkedFramework("QuartzCore"),
             .linkedFramework("IOKit"), .linkedFramework("ServiceManagement"),
-            .linkedFramework("UniformTypeIdentifiers"), .linkedFramework("CoreImage")
+            .linkedFramework("UniformTypeIdentifiers"), .linkedFramework("CoreImage"),
+            // Swift Build searches an Xcode Developer tree that Command Line Tools do not ship.
+            .unsafeFlags(["-Xlinker", "-w"])
         ])
     ],
     swiftLanguageVersions: [.v5]

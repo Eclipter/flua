@@ -105,6 +105,10 @@ enum SmokeRunner {
         do {
             try FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
             await pause(1)
+            results["libraryVisibleOnLaunch"] = NSApp.windows.contains { $0.title == "Flua" && $0.isVisible }
+            if results["libraryVisibleOnLaunch"] as? Bool != true { failures.append("libraryVisibleOnLaunch") }
+            results["inspectorSceneInteraction"] = await verifyInspectorInteraction(library: library)
+            library.stop()
             let image = AmbientSceneView.thumbnail(scene: "ocean", size: NSSize(width: 640, height: 360))
             let imageURL = out.appendingPathComponent("sample.png")
             try png(image).write(to: imageURL)
@@ -302,7 +306,8 @@ enum SmokeRunner {
                 results["systemWallpaperPreserved"] = NSWorkspace.shared.desktopImageURL(for: screen) == baseline
             }
             library.selection = video.id
-            library.applySelected()
+            await pause(0.3)
+            results["inspectorVideoInteraction"] = await verifyInspectorInteraction(library: library)
             results["libraryApply"] = library.state.displays.values.allSatisfy { $0.desktop.wallpaperID == video.id } && library.engine.activeCount == NSScreen.screens.count
             library.startPlaylist("ambient")
             results["playlistStart"] = library.state.displays.values.allSatisfy { $0.desktop.wallpaperID == "aurora" && $0.desktop.playlistID == "ambient" }
@@ -443,13 +448,83 @@ enum SmokeRunner {
                 }
             }
             results["libraryRoundTrip"] = try library.disk.load().wallpapers == library.state.wallpapers
-            let required = ["explicitSystemAccent", "systemAccentDefault", "accentSelection", "unknownAccentFallback", "systemAccentReset", "importFacts", "rotatedFacts", "missingFacts", "legacyBackfill", "staleEditPreservesFacts", "unknownColorBackfill", "unknownColorRoundTrip", "blockedDiscover", "clickableTag", "combinedBrowsing", "clearFiltersPreservesBlockedTags", "clearFilters", "imageImport", "videoImport", "videoReady", "videoPlaying", "videoLooped", "videoPaused", "videoResumed", "liveAdjustmentPreservesTime", "liveAdjustmentSpeed", "stillHeld", "stillIgnoresResume", "stillPreservesSource", "sceneStillRetained", "desktopStill", "desktopStillSurvivesPause", "desktopStillPersisted", "desktopStillPreservesSource", "render_image", "render_aurora", "render_cosmos", "render_ocean", "render_ember", "desktopWindowVisible", "desktopIgnoresMouse", "desktopCleanup", "systemWallpaperPreserved", "libraryApply", "playlistStart", "playlistNext", "libraryStop", "libraryRoundTrip", "discoverWindow", "windowSnapshot", "videoInformation", "trimmedPlayback", "trimmedExport", "thumbnailExport", "rejectInvalidTrim", "preserveSourceOnExport", "packageRoundTrip", "editorPersistence", "editorWindow", "audioExport", "muteExport"]
+            let reopenResults = try await verifyReopening(library: library)
+            for (key, passed) in reopenResults {
+                results[key] = passed
+                if !passed { failures.append(key) }
+            }
+            let required = ["inspectorSceneInteraction", "inspectorVideoInteraction", "explicitSystemAccent", "systemAccentDefault", "accentSelection", "unknownAccentFallback", "systemAccentReset", "importFacts", "rotatedFacts", "missingFacts", "legacyBackfill", "staleEditPreservesFacts", "unknownColorBackfill", "unknownColorRoundTrip", "blockedDiscover", "clickableTag", "combinedBrowsing", "clearFiltersPreservesBlockedTags", "clearFilters", "imageImport", "videoImport", "videoReady", "videoPlaying", "videoLooped", "videoPaused", "videoResumed", "liveAdjustmentPreservesTime", "liveAdjustmentSpeed", "stillHeld", "stillIgnoresResume", "stillPreservesSource", "sceneStillRetained", "desktopStill", "desktopStillSurvivesPause", "desktopStillPersisted", "desktopStillPreservesSource", "render_image", "render_aurora", "render_cosmos", "render_ocean", "render_ember", "desktopWindowVisible", "desktopIgnoresMouse", "desktopCleanup", "systemWallpaperPreserved", "libraryApply", "playlistStart", "playlistNext", "libraryStop", "libraryRoundTrip", "discoverWindow", "windowSnapshot", "videoInformation", "trimmedPlayback", "trimmedExport", "thumbnailExport", "rejectInvalidTrim", "preserveSourceOnExport", "packageRoundTrip", "editorPersistence", "editorWindow", "audioExport", "muteExport"]
             for key in required where results[key] as? Bool != true { failures.append(key) }
         } catch { failures.append(String(reflecting: error)) }
         results["failures"] = failures
         results["passed"] = failures.isEmpty
         if let data = try? JSONSerialization.data(withJSONObject: results, options: [.prettyPrinted, .sortedKeys]) { try? data.write(to: out.appendingPathComponent("smoke-results.json")) }
         NSApp.terminate(nil)
+    }
+    @MainActor private static func verifyInspectorInteraction(library: Library) async -> Bool {
+        guard let window = NSApp.windows.first(where: { $0.title == "Flua" }),
+              let root = window.contentView, let parent = root.superview,
+              let selected = library.selected else { return false }
+        var controls: [NSControl] = []
+        func collect(_ view: NSView) {
+            if let control = view as? NSControl,
+               root.convert(control.bounds, from: control).minX > root.bounds.maxX - 360 {
+                controls.append(control)
+            }
+            for child in view.subviews { collect(child) }
+        }
+        collect(root)
+        guard let button = controls.compactMap({ $0 as? NSButton }).first,
+              let slider = controls.compactMap({ $0 as? NSSlider }).first else { return false }
+        // Accessibility actions bypass the mouse routing that broke in the native inspector.
+        for control in [button as NSControl, slider as NSControl] {
+            let center = NSPoint(x: control.bounds.midX, y: control.bounds.midY)
+            guard let hit = root.hitTest(parent.convert(center, from: control)),
+                  hit === control || hit.isDescendant(of: control) else { return false }
+        }
+        let point = button.convert(NSPoint(x: button.bounds.midX, y: button.bounds.midY), to: nil)
+        let time = ProcessInfo.processInfo.systemUptime
+        guard let down = NSEvent.mouseEvent(with: .leftMouseDown, location: point, modifierFlags: [], timestamp: time,
+                                           windowNumber: window.windowNumber, context: nil, eventNumber: 1, clickCount: 1, pressure: 1),
+              let up = NSEvent.mouseEvent(with: .leftMouseUp, location: point, modifierFlags: [], timestamp: time + 0.01,
+                                         windowNumber: window.windowNumber, context: nil, eventNumber: 2, clickCount: 1, pressure: 0) else { return false }
+        NSApp.postEvent(up, atStart: true)
+        window.sendEvent(down)
+        await pause(0.1)
+        return library.engine.activeCount == library.screens.count && !library.state.displays.isEmpty
+            && library.state.displays.values.allSatisfy { $0.desktop.wallpaperID == selected.id }
+    }
+    @MainActor private static func verifyReopening(library: Library) async throws -> [String: Bool] {
+        var results: [String: Bool] = [:]
+        func libraryWindows() -> [NSWindow] { NSApp.windows.filter { $0.title == "Flua" && $0.isVisible } }
+        func reopen() throws {
+            let event = NSAppleEventDescriptor(eventClass: AEEventClass(kCoreEventClass), eventID: AEEventID(kAEReopenApplication),
+                targetDescriptor: NSAppleEventDescriptor(processIdentifier: ProcessInfo.processInfo.processIdentifier),
+                returnID: AEReturnID(kAutoGenerateReturnID), transactionID: AETransactionID(kAnyTransactionID))
+            _ = try event.sendEvent(options: .noReply, timeout: 1)
+        }
+        library.selection = "aurora"
+        library.applySelected()
+        defer { library.stop() }
+        let activeCount = library.engine.activeCount
+        libraryWindows().first?.close()
+        await pause(0.3)
+        let libraryWasClosed = libraryWindows().isEmpty
+        try reopen()
+        await pause(0.5)
+        results["reopenClosedLibraryWithWallpaper"] = libraryWasClosed && libraryWindows().count == 1 && activeCount > 0
+            && library.engine.activeCount == activeCount
+        let minimizedWindow = libraryWindows().first
+        minimizedWindow?.miniaturize(nil)
+        await pause(0.5)
+        let libraryWasMinimized = minimizedWindow?.isMiniaturized == true
+        try reopen()
+        await pause(0.5)
+        results["reopenMinimizedLibrary"] = libraryWasMinimized && libraryWindows().count == 1 && libraryWindows().first?.isMiniaturized == false
+        try reopen()
+        await pause(0.3)
+        results["reopenKeepsSingleLibrary"] = libraryWindows().count == 1
+        return results
     }
     @MainActor static func captureView(_ window: NSWindow, to url: URL) {
         if let view = window.contentView, let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) {

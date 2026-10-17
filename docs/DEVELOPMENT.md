@@ -15,6 +15,10 @@ make wallpaper-test # isolated wallpaper extension tests, no OS activation
 
 The build script updates the app bundle's modification time after signing so Launch Services can detect changed metadata and icon resources on subsequent launches.
 
+The smoke launch suppresses automatic library-window creation to verify that the application opens it explicitly. Reopen checks send a process-targeted system reopen event after closing and minimizing the library while desktop playback continues.
+
+Inspector checks run in the actual library window with its unified toolbar. They verify mouse hit targets for Play Wallpaper and a playback slider, then send a mouse click to Play Wallpaper and check desktop playback for both a built-in scene and an imported video. The offscreen accessibility name audit alone does not cover this routing.
+
 The transparent menu bar PNG lives in `Sources/Flua/Resources/MenuBarSakura.png`. SwiftPM packages it in `Flua_Flua.bundle`; the build script copies that bundle into the app's `Contents/Resources/` before signing. `MenuBarIcon.swift` loads it as an 18-point template image so macOS supplies the menu bar color. The library sidebar draws the same image at 22 points and tints it with the accent color. The prompt that produced it is `docs/MENU_BAR_ICON_PROMPT.md`.
 
 ## Layout

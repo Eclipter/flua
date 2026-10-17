@@ -73,11 +73,16 @@ final class Library: ObservableObject {
         if let w = selected, state.isBlocked(w) { selection = nil }
     }
     var sectionTitle: String {
-        if section == "browse" { return "Browse" }
-        if section == "favorites" { return "Favorites" }
-        if section == "imports" { return "Your media" }
-        if section.hasPrefix("playlist:") { return state.playlist(String(section.dropFirst(9)))?.name ?? "Playlist" }
-        return "Library"
+        switch section {
+        case "discover": return "Discover"
+        case "browse": return "Browse"
+        case "favorites": return "Favorites"
+        case "imports": return "Your media"
+        case "all": return "All Wallpapers"
+        default:
+            if section.hasPrefix("playlist:") { return state.playlist(String(section.dropFirst(9)))?.name ?? "Playlist" }
+            return "Library"
+        }
     }
     var playbackMode: String { resolvedDisplayMode(state.displayMode) }
     var targets: [NSScreen] {
