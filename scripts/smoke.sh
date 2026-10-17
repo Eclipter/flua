@@ -3,7 +3,11 @@ set -euo pipefail
 cd "${0:A:h:h}"
 mkdir -p build/verification
 run_dir=$(mktemp -d "$PWD/build/verification/run.XXXXXX")
-open -n -W "$PWD/build/Flua.app" \
+# Offscreen accessibility names. Launching the binary directly does not activate the app.
+"$PWD/build/Flua.app/Contents/MacOS/Flua" \
+    --data-dir "$run_dir/accessibility-library" \
+    --accessibility-audit "$run_dir/results/accessibility.json"
+open -g -n -W "$PWD/build/Flua.app" \
     --args \
     --data-dir "$run_dir/library" \
     --smoke-test "$run_dir/results"

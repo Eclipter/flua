@@ -18,6 +18,8 @@ final class MediaSurface: NSView {
     private var desiredRate: Float = 1
     private var readyObservation: NSKeyValueObservation?
     private var isPaused = false
+    private(set) var holdsStill = false
+    private(set) var showsStillImage = false
     private var currentWallpaper: Wallpaper?
     private var currentURL: URL?
     var playbackTime: Double { queue?.currentTime().seconds ?? 0 }
@@ -30,13 +32,17 @@ final class MediaSurface: NSView {
         layer?.backgroundColor = NSColor.black.cgColor
     }
     required init?(coder: NSCoder) { fatalError() }
-    func configure(_ wallpaper: Wallpaper, url: URL?, autoplay: Bool = true) {
+    func configure(_ wallpaper: Wallpaper, url: URL?, autoplay: Bool = true, mode: WallpaperMode = .animated, stillImage: NSImage? = nil) {
         cleanup()
         currentWallpaper = wallpaper
         currentURL = url
-        isPaused = !autoplay
+        holdsStill = mode == .still
+        isPaused = holdsStill || !autoplay
         desiredRate = Float(wallpaper.speed)
-        if wallpaper.kind == "video", let url {
+        if holdsStill {
+            if let stillImage { addImage(stillImage, fit: wallpaper.fit) }
+            else if wallpaper.kind == "image", let url, let image = NSImage(contentsOf: url) { addImage(image, fit: wallpaper.fit) }
+        } else if wallpaper.kind == "video", let url {
             let asset = AVURLAsset(url: url)
             let item = AVPlayerItem(asset: asset)
             let player = AVQueuePlayer()
@@ -64,12 +70,7 @@ final class MediaSurface: NSView {
             }
             if autoplay { player.playImmediately(atRate: desiredRate) }
         } else if wallpaper.kind == "image", let url, let image = NSImage(contentsOf: url) {
-            var rect = NSRect(origin: .zero, size: image.size)
-            let il = CALayer()
-            il.contents = image.cgImage(forProposedRect: &rect, context: nil, hints: nil)
-            il.contentsGravity = wallpaper.fit ? .resizeAspect : .resizeAspectFill
-            layer?.addSublayer(il)
-            imageLayer = il
+            addImage(image, fit: wallpaper.fit)
         } else if ["aurora", "cosmos", "ocean", "ember"].contains(wallpaper.kind) {
             let scene = AmbientSceneView(frame: bounds, scene: wallpaper.kind)
             scene.autoresizingMask = [.width, .height]
@@ -91,12 +92,24 @@ final class MediaSurface: NSView {
         needsLayout = true
     }
     func setPaused(_ paused: Bool) {
-        guard paused != isPaused else { return }
+        guard !holdsStill, paused != isPaused else { return }
         isPaused = paused
         if paused { queue?.pause() } else { queue?.playImmediately(atRate: desiredRate) }
         sceneView?.isPaused = paused
     }
+    func useStill(_ image: NSImage) {
+        guard holdsStill, let wallpaper = currentWallpaper else { return }
+        imageLayer?.removeFromSuperlayer()
+        addImage(image, fit: wallpaper.fit)
+        needsLayout = true
+    }
     func updateParameters(_ w: Wallpaper) {
+        if holdsStill {
+            currentWallpaper = w
+            imageLayer?.contentsGravity = w.fit ? .resizeAspect : .resizeAspectFill
+            subviews.first { $0.identifier?.rawValue == "shade" }?.layer?.backgroundColor = NSColor.black.withAlphaComponent(w.dimming).cgColor
+            return
+        }
         if w.kind == "video", currentWallpaper?.videoEdit?.start != w.videoEdit?.start || currentWallpaper?.videoEdit?.end != w.videoEdit?.end {
             configure(w, url: currentURL, autoplay: !isPaused)
             return
@@ -133,6 +146,17 @@ final class MediaSurface: NSView {
         sceneView?.isPaused = true
         subviews.forEach { $0.removeFromSuperview() }
         sceneView = nil
+        holdsStill = false
+        showsStillImage = false
+    }
+    private func addImage(_ image: NSImage, fit: Bool) {
+        var rect = NSRect(origin: .zero, size: image.size)
+        let il = CALayer()
+        il.contents = image.cgImage(forProposedRect: &rect, context: nil, hints: nil) ?? NSBitmapImageRep(data: image.tiffRepresentation ?? Data())?.cgImage
+        il.contentsGravity = fit ? .resizeAspect : .resizeAspectFill
+        layer?.addSublayer(il)
+        imageLayer = il
+        if holdsStill { showsStillImage = il.contents != nil }
     }
     deinit { queue?.pause(); looper?.disableLooping() }
 }
@@ -161,7 +185,7 @@ final class DesktopEngine {
     var activeCount: Int { slots.count }
     var activeKeys: [String] { Array(slots.keys) }
     var windowDiagnostics: [[String: Any]] {
-        slots.map { key, slot in ["display": key, "visible": slot.window.isVisible, "ignoresMouseEvents": slot.window.ignoresMouseEvents, "level": slot.window.level.rawValue, "wallpaper": slot.wallpaperID] }
+        slots.map { key, slot in ["display": key, "visible": slot.window.isVisible, "ignoresMouseEvents": slot.window.ignoresMouseEvents, "level": slot.window.level.rawValue, "wallpaper": slot.wallpaperID, "still": slot.surface.holdsStill, "stillImage": slot.surface.showsStillImage, "rate": Double(slot.surface.playbackRate)] }
     }
     init() {
         let nc = NSWorkspace.shared.notificationCenter
@@ -185,7 +209,11 @@ final class DesktopEngine {
         timer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in self?.updatePowerState() }
         RunLoop.main.add(timer!, forMode: .common)
     }
-    func apply(_ wallpaper: Wallpaper, url: URL?, to screen: NSScreen) {
+    func showStill(_ image: NSImage, wallpaper id: String, display: String) {
+        guard slots[display]?.wallpaperID == id else { return }
+        slots[display]?.surface.useStill(image)
+    }
+    func apply(_ wallpaper: Wallpaper, url: URL?, to screen: NSScreen, mode: WallpaperMode = .animated, stillImage: NSImage? = nil) {
         let key = displayID(screen)
         stop(display: key)
         let window = WallpaperWindow(contentRect: screen.frame, styleMask: [.borderless], backing: .buffered, defer: false)
@@ -199,7 +227,8 @@ final class DesktopEngine {
         let surface = MediaSurface(frame: NSRect(origin: .zero, size: screen.frame.size))
         surface.onError = { [weak self] in self?.onError?($0) }
         window.contentView = surface
-        surface.configure(wallpaper, url: url, autoplay: !(manuallyPaused || sleeping || locked))
+        let suspended = manuallyPaused || sleeping || locked
+        surface.configure(wallpaper, url: url, autoplay: mode == .animated && !suspended, mode: mode, stillImage: stillImage)
         window.setFrame(screen.frame, display: true)
         window.orderFrontRegardless()
         slots[key] = Slot(window: window, surface: surface, wallpaperID: wallpaper.id)

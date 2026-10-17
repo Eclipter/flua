@@ -52,6 +52,8 @@ The installed Apple wallpaper extension also uses the `_NSExtensionMain` stub as
 
 The observed rendering, scoped access and brief Lock Screen test establish core feasibility on this OS. They do not establish a production installer, library integration, crash recovery, long-duration locking, actual idle/screen-saver transitions, sleep/wake, multi-display or Retina/HDR behavior. The test containing application is a disposable executable, not the main Flua application.
 
+A later check on the same OS selected the video-badged Flua Motion fixture. WallpaperAgent kept launching a renamed `FluaHostTest.app.disabled` until that process was restarted, then acquired desktop and Lock Screen sessions. The user confirmed motion on the Lock Screen. The desktop session reached 10 loops, but the visible desktop did not change while `build/Flua.app` was drawing its overlay. That disposable registration was still in place when the observation was recorded.
+
 ### Repeat the discovery check and restore state
 
 This procedure verifies startup and catalog discovery without selecting another wallpaper. Keep the verification directory outside the repository and retain the original store snapshot until cleanup is verified. Before starting, confirm `pluginkit -m -A -D -v -i org.flua.wallpaper.prototype` has no matches; if it already exists, record and preserve that registration instead of applying this cleanup blindly.

@@ -41,6 +41,14 @@ enum AppContext {
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        guard ProcessInfo.processInfo.arguments.contains("--accessibility-audit") else { return }
+        NSApp.setActivationPolicy(.accessory)
+    }
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        guard ProcessInfo.processInfo.arguments.contains("--accessibility-audit") else { return }
+        for window in NSApp.windows { SmokeRunner.park(window) }
+    }
     func applicationWillTerminate(_ notification: Notification) { AppContext.library.engine.stopAll() }
     func application(_ sender: NSApplication, openFiles filenames: [String]) { AppContext.library.importMedia(filenames.map { URL(fileURLWithPath: $0) }) }
 }
@@ -52,7 +60,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Window("Flua", id: "library") {
             LibraryView().environmentObject(library).preferredColorScheme(.dark)
                 .frame(minWidth: 1050, minHeight: 680)
-                .task { await SmokeRunner.runIfRequested(library: library) }
+                .task {
+                    await SmokeRunner.runAuditIfRequested(library: library)
+                    await SmokeRunner.runIfRequested(library: library)
+                }
         }
         .defaultSize(width: 1320, height: 840)
         .windowStyle(.hiddenTitleBar)
@@ -227,6 +238,7 @@ struct LibraryView: View {
                         HStack {
                             ForEach(library.filter.tags.sorted(), id: \.self) { tag in
                                 Button { library.filter.tags.remove(tag) } label: { Label(tag, systemImage: "xmark.circle") }
+                                    .accessibilityLabel("Remove " + tag + " filter")
                                     .help("Remove tag filter: " + tag)
                             }
                         }
@@ -267,11 +279,14 @@ struct LibraryView: View {
             }.padding(.top, 46).padding(.bottom, 10)
             HStack {
                 Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                TextField("Search", text: $library.query).textFieldStyle(.plain)
+                TextField("Search", text: $library.query).textFieldStyle(.plain).accessibilityLabel("Search")
                     .onChange(of: library.query) { _, value in
                         if !value.isEmpty && library.section == "discover" { library.section = "browse" }
                     }
-                if !library.query.isEmpty { Button { library.query = "" } label: { Image(systemName: "xmark.circle.fill") }.buttonStyle(.plain) }
+                if !library.query.isEmpty {
+                    Button { library.query = "" } label: { Image(systemName: "xmark.circle.fill") }
+                        .buttonStyle(.plain).accessibilityLabel("Clear search").help("Clear search")
+                }
             }.padding(9).background(.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 7)).padding(.bottom, 12)
             sideButton("Discover", symbol: "sparkles", section: "discover")
             sideButton("Browse", symbol: "rectangle.grid.2x2", section: "browse")
@@ -283,7 +298,7 @@ struct LibraryView: View {
             HStack {
                 Text("PLAYLISTS").font(.system(size: 10, weight: .semibold, design: .rounded)).tracking(2).foregroundStyle(.secondary)
                 Spacer()
-                Button { ui.creatingPlaylist = true } label: { Image(systemName: "plus") }.buttonStyle(.plain).help("Create playlist")
+                Button { ui.creatingPlaylist = true } label: { Image(systemName: "plus") }.buttonStyle(.plain).accessibilityLabel("Create playlist").help("Create playlist")
             }.padding(.top, 27).padding(.bottom, 4)
             ScrollView {
                 VStack(spacing: 6) {
@@ -323,10 +338,10 @@ struct LibraryView: View {
                 Text("Mirrored").tag("mirrored")
                 Text("Per Display").tag("perDisplay")
             }.labelsHidden().pickerStyle(.segmented).frame(width: 170)
-            Button { library.advancePlaylists(force: true, backwards: true) } label: { Image(systemName: "backward.end.fill") }.help("Previous in playlist")
-            Button { library.advancePlaylists(force: true) } label: { Image(systemName: "forward.end.fill") }.help("Next in playlist")
-            Button { library.togglePause() } label: { Image(systemName: library.state.paused ? "play.fill" : "pause.fill") }.help("Pause or resume")
-            Button { library.stop() } label: { Image(systemName: "stop.fill") }.help("Stop on selected displays")
+            Button { library.advancePlaylists(force: true, backwards: true) } label: { Image(systemName: "backward.end.fill") }.accessibilityLabel("Previous in playlist").help("Previous in playlist")
+            Button { library.advancePlaylists(force: true) } label: { Image(systemName: "forward.end.fill") }.accessibilityLabel("Next in playlist").help("Next in playlist")
+            Button { library.togglePause() } label: { Image(systemName: library.state.paused ? "play.fill" : "pause.fill") }.accessibilityLabel("Pause or resume").help("Pause or resume")
+            Button { library.stop() } label: { Image(systemName: "stop.fill") }.accessibilityLabel("Stop on selected displays").help("Stop on selected displays")
         }.buttonStyle(.plain).padding(14).padding(.horizontal, 14).background(.black.opacity(0.12))
     }
 }
@@ -347,7 +362,7 @@ struct WallpaperCard: View {
             LinearGradient(colors: [.clear, .black.opacity(0.78)], startPoint: .center, endPoint: .bottom)
             Button { library.favorite(wallpaper) } label: {
                 Image(systemName: wallpaper.favorite ? "heart.fill" : "heart").font(.system(size: 12)).padding(8).background(.black.opacity(0.35), in: Circle())
-            }.buttonStyle(.plain).padding(9)
+            }.buttonStyle(.plain).padding(9).accessibilityLabel(wallpaper.favorite ? "Remove favorite" : "Add favorite")
             VStack {
                 Spacer()
                 HStack(alignment: .bottom) {
@@ -391,8 +406,17 @@ struct SurfacePreview: NSViewRepresentable {
 struct InspectorView: View {
     @StateObject private var ui = ViewState()
     @EnvironmentObject var library: Library
+    @FocusState private var focusedTag: String?
     var body: some View {
-        ScrollView {
+        ScrollViewReader { proxy in
+            ScrollView { content }
+                .onChange(of: focusedTag) { _, tag in
+                    if let tag { proxy.scrollTo(tag, anchor: .center) }
+                }
+        }
+    }
+    private var content: some View {
+        Group {
             if let w = library.selected {
                 VStack(alignment: .leading, spacing: 20) {
                     Text("SCENE DETAILS").font(.system(size: 9, weight: .semibold)).tracking(2).foregroundStyle(.secondary).padding(.top, 42)
@@ -432,9 +456,9 @@ struct InspectorView: View {
                     Divider().opacity(0.3)
                     VStack(alignment: .leading, spacing: 9) {
                         Text("ORGANIZE").font(.system(size: 9, weight: .semibold)).tracking(1.5).foregroundStyle(.secondary)
-                        TextField("Scene name", text: $ui.draftTitle).onSubmit { var v = library.selected ?? w; if !ui.draftTitle.trimmingCharacters(in: .whitespaces).isEmpty { v.title = ui.draftTitle; library.edit(v) } }
-                        TextField("Tags, separated by commas", text: $ui.draftTags).onSubmit { var v = library.selected ?? w; v.tags = ui.draftTags; library.edit(v) }
-                        TextField("Category", text: $ui.draftCategory).onSubmit {
+                        TextField("Scene name", text: $ui.draftTitle).accessibilityLabel("Scene name").onSubmit { var v = library.selected ?? w; if !ui.draftTitle.trimmingCharacters(in: .whitespaces).isEmpty { v.title = ui.draftTitle; library.edit(v) } }
+                        TextField("Tags, separated by commas", text: $ui.draftTags).accessibilityLabel("Tags").onSubmit { var v = library.selected ?? w; v.tags = ui.draftTags; library.edit(v) }
+                        TextField("Category", text: $ui.draftCategory).accessibilityLabel("Category").onSubmit {
                             var value = library.selected ?? w
                             if value.metadata == nil { value.metadata = SceneMetadata() }
                             value.metadata?.category = ui.draftCategory.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -446,9 +470,19 @@ struct InspectorView: View {
                         Picker("Motion intensity", selection: classificationBinding(\.motion, w)) {
                             ForEach(LibraryChoices.motions, id: \.self) { Text($0).tag($0) }
                         }
-                        LazyVGrid(columns: [GridItem(.adaptive(minimum: 65))], alignment: .leading) {
-                            ForEach(normalizedTags(w.tags), id: \.self) { tag in
-                                Button(tag) { library.filterTag(tag) }.help("Filter library by tag: " + tag)
+                        let tags = normalizedTags(w.tags)
+                        // Eager rows keep offscreen tags in the keyboard focus order.
+                        Grid(alignment: .leading) {
+                            ForEach(Array(stride(from: 0, to: tags.count, by: 3)), id: \.self) { start in
+                                GridRow {
+                                    ForEach(tags[start..<min(start + 3, tags.count)], id: \.self) { tag in
+                                        Button(tag) { library.filterTag(tag) }
+                                            .accessibilityLabel("Filter by " + tag)
+                                            .help("Filter library by tag: " + tag)
+                                            .frame(maxWidth: .infinity)
+                                            .focused($focusedTag, equals: tag).id(tag)
+                                    }
+                                }
                             }
                         }
                         Text("Press Return to save text edits.").font(.system(size: 9)).foregroundStyle(.tertiary)
@@ -490,7 +524,7 @@ struct InspectorView: View {
         Binding(get: { (library.state.item(original.id) ?? original)[keyPath: key] }, set: { newValue in var v = library.state.item(original.id) ?? original; v[keyPath: key] = newValue; library.edit(v) })
     }
     private func slider(_ name: String, value: Binding<Double>, range: ClosedRange<Double>, suffix: String) -> some View {
-        VStack(spacing: 5) { HStack { Text(name); Spacer(); Text(suffix).foregroundStyle(.secondary).monospacedDigit() }.font(.system(size: 11)); Slider(value: value, in: range) }
+        VStack(spacing: 5) { HStack { Text(name); Spacer(); Text(suffix).foregroundStyle(.secondary).monospacedDigit() }.font(.system(size: 11)); Slider(value: value, in: range).accessibilityLabel(name) }
     }
 }
 
@@ -521,7 +555,7 @@ struct SettingsView: View {
             }
             Section("Blocked tags") {
                 HStack {
-                    TextField("Tags, separated by commas", text: $ui.blockedTagDraft).onSubmit { addBlockedTags() }
+                    TextField("Tags, separated by commas", text: $ui.blockedTagDraft).accessibilityLabel("Blocked tags").onSubmit { addBlockedTags() }
                     Button("Block") { addBlockedTags() }.disabled(normalizedTags(ui.blockedTagDraft).isEmpty)
                 }
                 if !library.state.blockedTags.isEmpty {
