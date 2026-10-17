@@ -370,6 +370,34 @@ enum SmokeRunner {
                 library.state.displays.removeAll()
                 library.save()
             }
+            if let screen = library.screens.first {
+                let key = displayID(screen)
+                library.selection = "aurora"
+                library.applySelected()
+                library.surface = .lockScreen
+                library.selection = "ember"
+                library.saveSelectedSurface()
+                library.setSurfaceMode(.still)
+                results["surfaceControlsIndependent"] = library.state.displays[key]?.desktop.wallpaperID == "aurora"
+                    && library.state.displays[key]?.lockScreen?.wallpaperID == "ember"
+                    && library.state.displays[key]?.lockScreen?.mode == .still
+                library.setSurfacesLinked(true)
+                results["surfaceControlsLinkCopiesDesktop"] = library.surfacesLinked
+                    && library.state.displays[key]?.lockScreen == library.state.displays[key]?.desktop
+                library.setSurfaceMode(.still)
+                results["surfaceControlsLinkedMode"] = library.state.displays[key]?.desktop.mode == .still
+                    && library.engine.windowDiagnostics.allSatisfy { $0["still"] as? Bool == true }
+                library.setSurfacesLinked(false)
+                library.setSurfaceMode(.animated)
+                results["surfaceControlsUnlinkPreservesDesktop"] = library.state.displays[key]?.desktop.mode == .still
+                    && library.state.displays[key]?.lockScreen?.mode == .animated
+                    && !library.surfacesLinked
+                results["surfaceControlsPersisted"] = try library.disk.load().displays == library.state.displays
+                library.surface = .desktop
+                library.engine.stopAll()
+                library.state.displays.removeAll()
+                library.save()
+            }
             library.selection = edited.id
             library.section = "discover"
             let savedAssignments = library.state.displays, savedPlaylists = library.state.playlists
@@ -455,6 +483,7 @@ enum SmokeRunner {
             }
             let required = ["inspectorSceneInteraction", "inspectorVideoInteraction", "explicitSystemAccent", "systemAccentDefault", "accentSelection", "unknownAccentFallback", "systemAccentReset", "importFacts", "rotatedFacts", "missingFacts", "legacyBackfill", "staleEditPreservesFacts", "unknownColorBackfill", "unknownColorRoundTrip", "blockedDiscover", "clickableTag", "combinedBrowsing", "clearFiltersPreservesBlockedTags", "clearFilters", "imageImport", "videoImport", "videoReady", "videoPlaying", "videoLooped", "videoPaused", "videoResumed", "liveAdjustmentPreservesTime", "liveAdjustmentSpeed", "stillHeld", "stillIgnoresResume", "stillPreservesSource", "sceneStillRetained", "desktopStill", "desktopStillSurvivesPause", "desktopStillPersisted", "desktopStillPreservesSource", "render_image", "render_aurora", "render_cosmos", "render_ocean", "render_ember", "desktopWindowVisible", "desktopIgnoresMouse", "desktopCleanup", "systemWallpaperPreserved", "libraryApply", "playlistStart", "playlistNext", "libraryStop", "libraryRoundTrip", "discoverWindow", "windowSnapshot", "videoInformation", "trimmedPlayback", "trimmedExport", "thumbnailExport", "rejectInvalidTrim", "preserveSourceOnExport", "packageRoundTrip", "editorPersistence", "editorWindow", "audioExport", "muteExport"]
             for key in required where results[key] as? Bool != true { failures.append(key) }
+            for (key, value) in results where key.hasPrefix("surfaceControls") && value as? Bool != true { failures.append(key) }
         } catch { failures.append(String(reflecting: error)) }
         results["failures"] = failures
         results["passed"] = failures.isEmpty
@@ -474,14 +503,19 @@ enum SmokeRunner {
             for child in view.subviews { collect(child) }
         }
         collect(root)
-        guard let button = controls.compactMap({ $0 as? NSButton }).first,
+        // The link checkbox precedes the desktop Play button.
+        guard let button = controls.compactMap({ $0 as? NSButton }).dropFirst().first,
               let slider = controls.compactMap({ $0 as? NSSlider }).first else { return false }
         // Accessibility actions bypass the mouse routing that broke in the native inspector.
         for control in [button as NSControl, slider as NSControl] {
+            control.scrollToVisible(control.bounds)
+            await pause(0.1)
             let center = NSPoint(x: control.bounds.midX, y: control.bounds.midY)
             guard let hit = root.hitTest(parent.convert(center, from: control)),
                   hit === control || hit.isDescendant(of: control) else { return false }
         }
+        button.scrollToVisible(button.bounds)
+        await pause(0.1)
         let point = button.convert(NSPoint(x: button.bounds.midX, y: button.bounds.midY), to: nil)
         let time = ProcessInfo.processInfo.systemUptime
         guard let down = NSEvent.mouseEvent(with: .leftMouseDown, location: point, modifierFlags: [], timestamp: time,

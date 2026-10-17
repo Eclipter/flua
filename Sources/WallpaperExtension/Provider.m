@@ -458,6 +458,12 @@ NSDictionary *FSInspectSettings(id settings) { return FSJSON(settings, @"Wallpap
         renderConfig[@"presentation"] = [payload[@"presentationMode"] allKeys].firstObject ?: @"default";
         NSError *mediaError;
         FSMediaRenderer *renderer = [[FSMediaRenderer alloc] initWithWidth:(NSUInteger)w height:(NSUInteger)h configuration:renderConfig fileWrappers:captured.objects[@"files"] ?: @[] error:&mediaError];
+        if (!renderer && ([configuration[@"kind"] isEqual:@"image"] || [configuration[@"kind"] isEqual:@"video"])) {
+            // Keep cached choices usable without changing their saved descriptor or reading alternate files.
+            NSLog(@"Flua media unavailable; showing static fallback. Reapply after restoring access: %@", mediaError.localizedDescription);
+            renderer = [[FSMediaRenderer alloc] initWithWidth:(NSUInteger)w height:(NSUInteger)h
+                configuration:@{@"kind":@"gradient"} fileWrappers:@[] error:&mediaError];
+        }
         if (!renderer) { reply(nil,mediaError ?: FSError(@"Cannot create renderer")); return; }
         FSSession *s = FSSession.new;
         s.request = payload;
@@ -813,6 +819,41 @@ int main(int argc,const char **argv) { @autoreleasepool {
         BOOL success=acquired && wrappers && before && after && paused && resumed && disposed && (![kind isEqual:@"video"] || (motion && loops>=1));
         results[kind]=@{@"ok":@(success),@"acquired":@(acquired),@"nonemptyScopedFiles":@(wrappers),@"motion":@(motion),@"suspendedStable":@(paused),@"resumed":@(resumed),@"loopCount":@(loops),@"frames":@(finalFrames),@"disposed":@(disposed),@"error":errorText,@"snapshot":after ?: @{}};
     }
+    BOOL recoveryOK = YES;
+    NSURL *broken = [dir URLByAppendingPathComponent:@"broken-media"];
+    [@"invalid media" writeToURL:broken atomically:YES encoding:NSUTF8StringEncoding error:nil];
+    for (NSString *kind in @[@"image", @"video"]) {
+        creation[@"configuration"] = FSEncodeConfiguration(@{@"version":@1, @"kind":kind, @"fileIndex":@0});
+        for (NSArray *files in @[@[], @[[dir URLByAppendingPathComponent:@"missing-media"]], @[broken]]) {
+            __block BOOL fallback = NO;
+            [provider acquireWithId:ident request:FSCreateRequest(creation, files) reply:^(id remote, NSError *error) {
+                fallback = remote != nil && error == nil;
+            }];
+            FSSession *session = provider.sessions.allValues.firstObject;
+            __block NSNumber *before = nil, *after = nil;
+            [provider snapshotWithId:ident reply:^(id snapshot, NSError *error) { before = FSInspectSnapshot(snapshot)[@"checksum"]; }];
+            [session.renderer setPresentation:@"locked"];
+            [session.renderer setPlaybackSuspended:YES];
+            [session.renderer setPlaybackSuspended:NO];
+            FSPump(0.1);
+            [provider snapshotWithId:ident reply:^(id snapshot, NSError *error) { after = FSInspectSnapshot(snapshot)[@"checksum"]; }];
+            recoveryOK = recoveryOK && fallback && before != nil && [before isEqual:after] && session.renderer.scopedFileCount == 0;
+            [provider invalidateWithId:ident reply:^(NSError *error) {}];
+        }
+        NSURL *restored = [dir URLByAppendingPathComponent:[kind isEqual:@"video"] ? @"FluaMotion.mov" : @"FluaStill.png"];
+        __block BOOL recovered = NO;
+        [provider acquireWithId:ident request:FSCreateRequest(creation, @[restored]) reply:^(id remote, NSError *error) {
+            recovered = remote != nil && error == nil;
+        }];
+        recoveryOK = recoveryOK && recovered && ((FSSession *)provider.sessions.allValues.firstObject).renderer.scopedFileCount == 1;
+        [provider invalidateWithId:ident reply:^(NSError *error) {}];
+    }
+    creation[@"configuration"] = FSEncodeConfiguration(@{@"version":@2, @"kind":@"video", @"fileIndex":@0});
+    __block BOOL rejectedConfiguration = NO;
+    [provider acquireWithId:ident request:FSCreateRequest(creation, @[]) reply:^(id remote, NSError *error) {
+        rejectedConfiguration = remote == nil && error != nil;
+    }];
+    recoveryOK = recoveryOK && rejectedConfiguration && provider.sessions.count == 0;
     NSURL *video=[dir URLByAppendingPathComponent:@"FluaMotion.mov"];
     NSURL *image=[dir URLByAppendingPathComponent:@"FluaStill.png"];
     NSData *videoBefore=[NSData dataWithContentsOfURL:video];
@@ -1007,11 +1048,25 @@ int main(int argc,const char **argv) { @autoreleasepool {
     foreign[@"version"]=@2; foreign[@"root"]=catalogRoot.path;
     [[NSJSONSerialization dataWithJSONObject:foreign options:0 error:nil] writeToURL:catalogFile atomically:YES];
     BOOL rejectedVersion=[FSSettingsModel()[@"desktop"][@"groups"][0][@"items"] count]==3;
+    // A cached descriptor and host scope remain usable when the current catalog is incompatible or gone.
+    BOOL cachedChoice = YES;
+    creation[@"configuration"] = FSEncodeConfiguration(@{@"version":@1, @"kind":@"image", @"fileIndex":@0});
+    for (int attempt = 0; attempt < 2; attempt++) {
+        if (attempt == 1) [[NSFileManager defaultManager] removeItemAtURL:catalogFile error:nil];
+        __block BOOL acquiredCached = NO;
+        [provider acquireWithId:ident request:FSCreateRequest(creation, @[image]) reply:^(id remote, NSError *error) {
+            acquiredCached = remote != nil && error == nil;
+        }];
+        cachedChoice = cachedChoice && acquiredCached && ((FSSession *)provider.sessions.allValues.firstObject).renderer.scopedFileCount == 1;
+        [provider invalidateWithId:ident reply:^(NSError *error) {}];
+    }
+    recoveryOK = recoveryOK && cachedChoice;
+    results[@"recovery"] = @{@"ok":@(recoveryOK), @"cachedChoiceWithoutCatalog":@(cachedChoice), @"unsupportedConfigurationRejected":@(rejectedConfiguration)};
     unsetenv("FLUA_CATALOG");
     results[@"catalog"]=@{@"ok":@(listedClip && rejectedRoot && rejectedVersion),@"listedClip":@(listedClip),@"rejectedRoot":@(rejectedRoot),@"rejectedVersion":@(rejectedVersion)};
     results[@"systemActivationPerformed"]=@NO;
     results[@"sandboxAuthorizationVerified"]=@NO;
     NSData *json=[NSJSONSerialization dataWithJSONObject:results options:NSJSONWritingPrettyPrinted error:nil];fwrite(json.bytes,1,json.length,stdout);puts("");
-    return [results[@"image"][@"ok"] boolValue] && [results[@"video"][@"ok"] boolValue] && [results[@"playback"][@"ok"] boolValue] && [results[@"scene"][@"ok"] boolValue] && [results[@"catalog"][@"ok"] boolValue] ? 0:2;
+    return recoveryOK && [results[@"image"][@"ok"] boolValue] && [results[@"video"][@"ok"] boolValue] && [results[@"playback"][@"ok"] boolValue] && [results[@"scene"][@"ok"] boolValue] && [results[@"catalog"][@"ok"] boolValue] ? 0:2;
 } }
 #endif
