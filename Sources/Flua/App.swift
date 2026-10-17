@@ -11,6 +11,7 @@ final class ViewState: ObservableObject {
     @Published var draftTags = ""
     @Published var draftCategory = ""
     @Published var blockedTagDraft = ""
+    @Published var confirmingNativeRemoval = false
 }
 
 
@@ -543,18 +544,38 @@ struct InspectorView: View {
                                 ForEach(library.screens, id: \.self) { screen in Text(screen.localizedName).tag(displayID(screen)) }
                             }.labelsHidden().frame(maxWidth: .infinity)
                         }
+                        Picker("Surface", selection: $library.surface) {
+                            Text("Desktop").tag(WallpaperSurface.desktop)
+                            Text("Lock Screen").tag(WallpaperSurface.lockScreen)
+                        }.pickerStyle(.segmented)
+                        Toggle("Link Desktop and Lock Screen", isOn: Binding(get: { library.surfacesLinked }, set: { library.setSurfacesLinked($0) }))
+                            .font(.caption).tint(library.accentOverride)
+                        Picker("Rendering mode", selection: Binding<WallpaperMode?>(get: { library.surfaceMode }, set: { if let mode = $0 { library.setSurfaceMode(mode) } })) {
+                            if library.surfaceMode == nil { Text("Mixed").tag(nil as WallpaperMode?) }
+                            Text("Animated").tag(WallpaperMode?.some(.animated))
+                            Text("Still").tag(WallpaperMode?.some(.still))
+                        }.pickerStyle(.segmented)
+                        LabeledContent("Desktop", value: library.surfaceSummary(.desktop)).font(.caption)
+                        LabeledContent("Lock Screen", value: library.surfaceSummary(.lockScreen)).font(.caption)
+                        if library.surface == .lockScreen {
+                            Button("Save Lock Screen Choice") { library.saveSelectedSurface() }.fluaGlassButton()
+                            Text("Apply Saved Wallpapers sends both saved surface choices and modes to macOS for the targeted displays.")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
                         fluaGlassGroup {
                             VStack(alignment: .leading, spacing: 8) {
-                                Button { library.applySelected() } label: { Label("Play Wallpaper", systemImage: "play.fill").frame(maxWidth: .infinity).padding(.vertical, 8) }.fluaProminentButton().tint(library.accentOverride)
+                                if library.surface == .desktop {
+                                    Button { library.applySelected() } label: { Label("Play Wallpaper", systemImage: "play.fill").frame(maxWidth: .infinity).padding(.vertical, 8) }.fluaProminentButton().tint(library.accentOverride)
+                                }
                                 if NativeWallpaper.available {
-                                    Button(library.nativeSetupBusy ? "Applying…" : "Apply to Lock Screen") {
-                                        library.applySelectedToLockScreen()
-                                    }.disabled(library.nativeSetupBusy || w.kind == "image").fluaGlassButton()
+                                    Button(library.nativeSetupBusy ? "Working…" : "Apply Saved Wallpapers") {
+                                        library.applySavedNativeAssignments()
+                                    }.disabled(library.nativeSetupBusy || library.targetAssignments.allSatisfy { $0.desktop.wallpaperID == nil && $0.lockScreen?.wallpaperID == nil }).fluaGlassButton()
                                 }
                             }
                         }
                         if NativeWallpaper.available {
-                            Text("All displays • Still desktop, animated Lock Screen")
+                            Text("Uses saved choices, modes and target displays")
                                 .font(.caption).foregroundStyle(.secondary)
                         }
                     }
@@ -720,10 +741,17 @@ struct SettingsView: View {
             Section("Lock Screen") {
                 Text(NativeWallpaper.explanation).font(.caption).foregroundStyle(.secondary)
                 if NativeWallpaper.available {
-                    Button(library.nativeSetupBusy ? "Applying…" : "Apply selected item to Lock Screen") { library.applySelectedToLockScreen() }
-                        .disabled(library.nativeSetupBusy || library.selected == nil || library.selected?.kind == "image")
+                    Button(library.nativeSetupBusy ? "Working…" : "Apply Saved Wallpapers") { library.applySavedNativeAssignments() }
+                        .disabled(library.nativeSetupBusy || library.targetAssignments.allSatisfy { $0.desktop.wallpaperID == nil && $0.lockScreen?.wallpaperID == nil })
                         .fluaProminentButton().tint(library.accentOverride)
-                    Text("To stop native playback, choose another wallpaper in System Settings. Keep this app and your library in place while it is selected.")
+                    Button("Remove native provider…", role: .destructive) { ui.confirmingNativeRemoval = true }
+                        .disabled(library.nativeSetupBusy)
+                        .confirmationDialog("Remove native wallpaper provider?", isPresented: $ui.confirmingNativeRemoval) {
+                            Button("Restore wallpapers and remove provider", role: .destructive) { library.removeNativeProvider() }
+                        } message: {
+                            Text("Restores the saved system wallpapers wherever Flua is still selected, then unregisters this copy of the provider. Your library and media are kept. Apply again to set it up later.")
+                        }
+                    Text("Removal restores saved system wallpapers and stops native playback. Keep this app and your library in place while Flua is selected.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }
