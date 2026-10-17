@@ -34,6 +34,30 @@ import Foundation
         try disk.save(nativeState)
         let nativeRoundTrip = try disk.load()
         precondition(nativeRoundTrip.nativePlayback == nativeState.nativePlayback)
+        precondition(nativeRoundTrip.nativeRestorationDisplays(connected: ["active", "stopped", "legacy"]) == ["active"])
+        precondition(nativeRoundTrip.nativeRestorationDisplays(connected: ["active", "disconnected", "stopped", "legacy"], previouslyConnected: ["active"]) == ["disconnected"])
+        precondition(nativeRoundTrip.nativeRestorationDisplays(connected: ["active"], previouslyConnected: ["active"]) == [])
+        precondition(nativeRoundTrip.nativeRestorationDisplays(connected: [], previouslyConnected: ["active"]) == [])
+        var activeNativeDisplays = nativeRoundTrip
+        activeNativeDisplays.nativePlayback = ["active": true, "second": true, "stopped": false]
+        precondition(activeNativeDisplays.nativeAssignmentRefreshDisplays(changed: ["stopped"], connected: ["active", "second", "stopped"], mirrored: false) == [])
+        precondition(activeNativeDisplays.nativeAssignmentRefreshDisplays(changed: ["active"], connected: ["active", "second", "stopped"], mirrored: false) == ["active", "second"])
+        precondition(activeNativeDisplays.nativeAssignmentRefreshDisplays(changed: ["stopped"], connected: ["active", "second", "stopped"], mirrored: true) == ["active", "second"])
+        precondition(activeNativeDisplays.nativeApplicationDisplays(targeted: ["stopped"], connected: ["active", "second", "stopped"]) == ["active", "second", "stopped"])
+        var nativeAssignments = LibraryState.initial
+        nativeAssignments.assign("aurora", display: "active")
+        nativeAssignments.assign("ocean", display: "active", surface: .lockScreen)
+        nativeAssignments.assign("ember", display: "other")
+        var changedNativeAssignments = nativeAssignments
+        changedNativeAssignments.setMode(.still, display: "active", surface: .lockScreen)
+        changedNativeAssignments.assign("cosmos", display: "other")
+        precondition(changedNativeAssignments.nativeAssignmentChanges(from: nativeAssignments.displays, displays: ["active", "other", "missing"]) == ["active", "other"])
+        var metadataOnlyNativeAssignment = nativeAssignments
+        metadataOnlyNativeAssignment.assign("aurora", display: "active", now: Date(timeIntervalSince1970: 42))
+        precondition(metadataOnlyNativeAssignment.nativeAssignmentChanges(from: nativeAssignments.displays, displays: ["active"]).isEmpty)
+        var removedNativeAssignment = nativeAssignments
+        removedNativeAssignment.remove("ocean")
+        precondition(removedNativeAssignment.nativeAssignmentChanges(from: nativeAssignments.displays, displays: ["active"]) == ["active"])
         var legacy = try JSONSerialization.jsonObject(with: JSONEncoder().encode(nativeState)) as! [String: Any]
         legacy.removeValue(forKey: "nativePlayback")
         let legacyNativeState = try JSONDecoder().decode(LibraryState.self, from: JSONSerialization.data(withJSONObject: legacy))

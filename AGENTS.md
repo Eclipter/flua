@@ -39,6 +39,8 @@
 
 Run the narrowest relevant checks, then expand when the change crosses boundaries:
 
+- After every UI change, visually inspect the current build in a real app window with a disposable `--data-dir`. Check the affected layout and interactions before reporting completion; builds and smoke tests alone do not count as visual verification.
+
 - Model, persistence, paths, or package import: `make test`.
 - Main app build or compile-sensitive UI changes: `make build`.
 - Playback, UI, import/export, or end-to-end behavior: `make smoke` after `make build` (the `make smoke` target builds automatically).

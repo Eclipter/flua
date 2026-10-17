@@ -26,6 +26,7 @@ final class Library: ObservableObject {
     private var saveBlocked = false
     private var nativeRefreshTask: Task<Void, Never>?
     private var stoppedNativeDisplays = Set<String>()
+    private var pendingNativeAssignmentDisplays = Set<String>()
     private var pendingNativeEdits = Set<String>()
     var importTasks = Set<UUID>()
     var onChange: (() -> Void)?
@@ -41,12 +42,17 @@ final class Library: ObservableObject {
         syncEngine()
         screenObserver = NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main) { [weak self] _ in
             guard let self else { return }
+            let previousDisplays = self.screens.map(displayID)
             self.screens = NSScreen.screens
+            let reconnected = self.state.nativeRestorationDisplays(connected: self.screens.map(displayID), previouslyConnected: previousDisplays)
             if self.display != "all" && !self.screens.contains(where: { displayID($0) == self.display }) {
                 self.display = self.playbackMode == "perDisplay" ? self.screens.first.map(displayID) ?? "all" : "all"
             }
             for key in self.engine.activeKeys where !self.screens.contains(where: { displayID($0) == key }) { self.engine.stop(display: key) }
             if self.restoreAssignments() { self.save() }
+            if !reconnected.isEmpty {
+                Task { @MainActor [weak self] in self?.restoreNativeAssignments(displays: reconnected) }
+            }
         }
         tick = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in self?.advancePlaylists(force: false) }
         RunLoop.main.add(tick!, forMode: .common)
@@ -96,11 +102,15 @@ final class Library: ObservableObject {
         return screens.filter { displayID($0) == display }
     }
     func setPlaybackMode(_ mode: String) {
+        let previousMode = playbackMode
+        let previousAssignments = state.displays
         let preferredDisplay = display == "all" ? nil : display
         state.displayMode = mode
         display = mode == "mirrored" ? "all" : screens.first.map(displayID) ?? "all"
         if mode == "mirrored" { _ = restoreAssignments(preferredDisplay: preferredDisplay) }
+        let changed = state.nativeAssignmentChanges(from: previousAssignments, displays: screens.map(displayID))
         save()
+        scheduleNativeAssignmentRefresh(for: previousMode == playbackMode ? changed : screens.map(displayID))
     }
     var targetAssignments: [DisplayAssignment] {
         targets.map { state.displays[displayID($0)] ?? DisplayAssignment() }
@@ -121,23 +131,41 @@ final class Library: ObservableObject {
         return summaries.allSatisfy { $0 == first } ? first : "Mixed assignments"
     }
     func setSurfaceMode(_ mode: WallpaperMode) {
-        for screen in targets { state.setMode(mode, display: displayID(screen), surface: surface) }
+        let ids = targets.map(displayID)
+        let previousAssignments = state.displays
+        for id in ids { state.setMode(mode, display: id, surface: surface) }
         refreshTargetDesktops()
+        let changed = state.nativeAssignmentChanges(from: previousAssignments, displays: ids)
         save()
+        scheduleNativeAssignmentRefresh(for: changed)
     }
     func setSurfacesLinked(_ linked: Bool) {
-        for screen in targets { state.setSurfacesLinked(linked, display: displayID(screen)) }
+        let ids = targets.map(displayID)
+        let previousAssignments = state.displays
+        for id in ids { state.setSurfacesLinked(linked, display: id) }
         save()
+        let changed = state.nativeAssignmentChanges(from: previousAssignments, displays: ids)
+        scheduleNativeAssignmentRefresh(for: changed)
     }
     func saveSelectedSurface() {
         guard let wallpaper = selected else { return }
-        for screen in targets { state.assign(wallpaper.id, display: displayID(screen), surface: surface) }
+        let ids = targets.map(displayID)
+        let previousAssignments = state.displays
+        for id in ids { state.assign(wallpaper.id, display: id, surface: surface) }
         refreshTargetDesktops()
-        activity = "Saved \(wallpaper.title) for the Lock Screen. Native application is separate."
         save()
+        let changed = state.nativeAssignmentChanges(from: previousAssignments, displays: ids)
+        scheduleNativeAssignmentRefresh(for: changed)
+        let nativeTargets = playbackMode == "mirrored" ? screens.map(displayID) : ids
+        let syncsActiveNative = nativeRoutingAvailable && !state.nativeRestorationDisplays(connected: nativeTargets).isEmpty
+        let surfaceName = surface == .desktop ? "Desktop" : "Lock Screen"
+        activity = syncsActiveNative
+            ? "Saved \(wallpaper.title) for the \(surfaceName). Active native displays stay in sync with saved choices."
+            : "Saved \(wallpaper.title) for the \(surfaceName). Apply Saved Wallpapers to start native playback."
     }
     private func refreshTargetDesktops() {
-        for screen in targets where surface == .desktop || state.displays[displayID(screen)]?.surfacesLinked == true {
+        for screen in targets where (surface == .desktop || state.displays[displayID(screen)]?.surfacesLinked == true)
+            && !(nativeRoutingAvailable && state.nativePlayback[displayID(screen)] == true) {
             if let wallpaper = state.item(state.displays[displayID(screen)]?.desktop.wallpaperID) { play(wallpaper, on: screen) }
         }
     }
@@ -216,8 +244,9 @@ final class Library: ObservableObject {
     }
     func stop() {
         guard !nativeSetupBusy else { return }
+        let ids = targets.map(displayID)
+        pendingNativeAssignmentDisplays.subtract(ids)
         if NativeWallpaper.available && NativeWallpaper.catalogURL.resolvingSymlinksInPath() == disk.catalog.resolvingSymlinksInPath() {
-            let ids = targets.map(displayID)
             let mirrored = playbackMode == "mirrored"
             let root = disk.root
             nativeSetupBusy = true
@@ -266,14 +295,23 @@ final class Library: ObservableObject {
     private var nativeRoutingAvailable: Bool {
         NativeWallpaper.available && NativeWallpaper.catalogURL.resolvingSymlinksInPath() == disk.catalog.resolvingSymlinksInPath()
     }
-    @MainActor private func restoreNativeAssignments() {
+    @MainActor private func restoreNativeAssignments(displays: [String]? = nil) {
         guard !saveBlocked, nativeRoutingAvailable else { return }
-        let ids = screens.map(displayID).filter { state.nativePlayback[$0] == true }
+        let ids = state.nativeRestorationDisplays(connected: screens.map(displayID)).filter { displays?.contains($0) ?? true }
         guard !ids.isEmpty else { return }
+        if nativeSetupBusy {
+            Task { @MainActor [weak self] in
+                do { try await Task.sleep(nanoseconds: 500_000_000) } catch { return }
+                self?.restoreNativeAssignments(displays: ids)
+            }
+            return
+        }
         applySavedNativeAssignments(displays: ids)
     }
     @MainActor func applySavedNativeAssignments() {
-        applySavedNativeAssignments(displays: targets.map(displayID))
+        let connected = screens.map(displayID)
+        let displays = state.nativeApplicationDisplays(targeted: targets.map(displayID), connected: connected)
+        applySavedNativeAssignments(displays: displays)
     }
     @MainActor private func applySavedNativeAssignments(displays: [String]) {
         guard !nativeSetupBusy else { return }
@@ -285,23 +323,43 @@ final class Library: ObservableObject {
         }
         do { try disk.save(state) } catch { self.error = error.localizedDescription; return }
         let assignments: [String: NativeWallpaperStore.Assignment]
-        do {
-            assignments = try NativeWallpaperStore.assignments(from: state, displays: displays, root: disk.root, provider: NativeWallpaper.identifier)
-        } catch { self.error = error.localizedDescription; return }
+        do { assignments = try savedNativeAssignments(for: displays) }
+        catch { self.error = error.localizedDescription; return }
+        guard !assignments.isEmpty || displays.contains(where: { state.nativePlayback[$0] == true }) else {
+            error = "Save a wallpaper choice for the targeted displays first."
+            return
+        }
+        pendingNativeAssignmentDisplays.subtract(displays)
         let mirrored = playbackMode == "mirrored" && Set(displays) == Set(screens.map(displayID))
         nativeSetupBusy = true
         let root = disk.root
         Task {
             defer { nativeSetupBusy = false }
             do {
-                try await Task.detached { try NativeWallpaper.apply(assignments, mirrored: mirrored, root: root) }.value
-                for id in assignments.keys { state.nativePlayback[id] = true }
-                save()
-                stoppedNativeDisplays.subtract(assignments.keys)
-                for (id, assignment) in assignments where assignment.desktop != nil { engine.stop(display: id) }
-                activity = "Applied saved wallpaper choices to \(assignments.count) display(s). Native playback continues after Flua quits."
+                try await Task.detached { try NativeWallpaper.apply(assignments, targeting: displays, mirrored: mirrored, root: root) }.value
+                rememberNativeAssignments(assignments, displays: displays)
+                activity = assignments.isEmpty
+                    ? "Previous system wallpapers restored; no saved native choices remain for the targeted displays."
+                    : "Applied saved wallpaper choices to \(assignments.count) display(s). Native playback continues after Flua quits."
             } catch { self.error = error.localizedDescription }
         }
+    }
+    private func savedNativeAssignments(for displays: [String]) throws -> [String: NativeWallpaperStore.Assignment] {
+        let hasSavedChoice = displays.contains { id in
+            guard let assignment = state.displays[id] else { return false }
+            return assignment.desktop.wallpaperID != nil || assignment.lockScreen?.wallpaperID != nil
+        }
+        guard hasSavedChoice else { return [:] }
+        return try NativeWallpaperStore.assignments(from: state, displays: displays, root: disk.root, provider: NativeWallpaper.identifier)
+    }
+    private func rememberNativeAssignments(_ assignments: [String: NativeWallpaperStore.Assignment], displays: [String]) {
+        for id in displays {
+            let active = assignments[id] != nil
+            state.nativePlayback[id] = active
+            if active { stoppedNativeDisplays.remove(id) } else { stoppedNativeDisplays.insert(id) }
+        }
+        for (id, assignment) in assignments where assignment.desktop != nil { engine.stop(display: id) }
+        save()
     }
     @MainActor func removeNativeProvider() {
         guard !nativeSetupBusy else { return }
@@ -311,6 +369,8 @@ final class Library: ObservableObject {
             return
         }
         nativeRefreshTask?.cancel()
+        pendingNativeAssignmentDisplays.removeAll()
+        pendingNativeEdits.removeAll()
         nativeSetupBusy = true
         let root = disk.root
         Task {
@@ -353,6 +413,14 @@ final class Library: ObservableObject {
             scheduleNativeRefresh()
         }
     }
+    private func scheduleNativeAssignmentRefresh(for displays: [String]) {
+        guard nativeRoutingAvailable, !displays.isEmpty else { return }
+        let connected = screens.map(displayID)
+        let refreshDisplays = state.nativeAssignmentRefreshDisplays(changed: displays, connected: connected, mirrored: playbackMode == "mirrored")
+        guard !refreshDisplays.isEmpty else { return }
+        pendingNativeAssignmentDisplays.formUnion(refreshDisplays)
+        scheduleNativeRefresh()
+    }
     private func scheduleNativeRefresh() {
         nativeRefreshTask?.cancel()
         nativeRefreshTask = Task { @MainActor [weak self] in
@@ -360,16 +428,27 @@ final class Library: ObservableObject {
             guard let self, !self.saveBlocked, NativeWallpaper.available,
                   NativeWallpaper.catalogURL.resolvingSymlinksInPath() == self.disk.catalog.resolvingSymlinksInPath() else { return }
             if self.nativeSetupBusy { self.scheduleNativeRefresh(); return }
+            let queuedDisplays = self.pendingNativeAssignmentDisplays
+            self.pendingNativeAssignmentDisplays.removeAll()
+            let connected = self.screens.map(displayID).filter { queuedDisplays.contains($0) }
+            let displays = self.state.nativeRestorationDisplays(connected: connected)
             let ids = self.pendingNativeEdits
             self.pendingNativeEdits.subtract(ids)
             let items = providerCatalog(from: self.state).items.filter { ids.contains($0.id) }
+            guard !displays.isEmpty || !items.isEmpty else { return }
             let root = self.disk.root
             self.nativeSetupBusy = true
             defer {
                 self.nativeSetupBusy = false
-                if !self.pendingNativeEdits.isEmpty { self.scheduleNativeRefresh() }
+                if !self.pendingNativeEdits.isEmpty || !self.pendingNativeAssignmentDisplays.isEmpty { self.scheduleNativeRefresh() }
             }
             do {
+                if !displays.isEmpty {
+                    let assignments = try self.savedNativeAssignments(for: displays)
+                    let mirrored = self.playbackMode == "mirrored" && Set(displays) == Set(self.screens.map(displayID))
+                    try await Task.detached { try NativeWallpaper.apply(assignments, targeting: displays, mirrored: mirrored, root: root) }.value
+                    self.rememberNativeAssignments(assignments, displays: displays)
+                }
                 try await Task.detached {
                     for item in items { try NativeWallpaper.refresh(item, root: root) }
                 }.value
@@ -456,9 +535,12 @@ final class Library: ObservableObject {
         save()
     }
     func remove(_ w: Wallpaper) {
+        let previousAssignments = state.displays
         for screen in screens where state.displays[displayID(screen)]?.desktop.wallpaperID == w.id { engine.stop(display: displayID(screen)) }
         state.remove(w.id)
         save()
+        let changed = state.nativeAssignmentChanges(from: previousAssignments, displays: screens.map(displayID))
+        scheduleNativeAssignmentRefresh(for: changed)
         // Retain the imported file so accidental removal never destroys the user's media.
         thumbnails.removeValue(forKey: w.id)
         selection = state.wallpapers.first(where: { !state.isBlocked($0) })?.id

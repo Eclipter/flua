@@ -133,6 +133,13 @@ enum NativeWallpaperStore {
         return try PropertyListSerialization.data(fromPropertyList: store, format: .binary, options: 0)
     }
 
+    static func replacing(_ assignments: [String: Assignment], displays: [String], provider: String,
+                         mirrored: Bool, in data: Data, baseline: Data?) throws -> Data {
+        let restored = try stopping(displays: displays, provider: provider, in: data, baseline: baseline, mirrored: mirrored)
+        guard !assignments.isEmpty else { return restored }
+        return try applying(assignments, mirrored: mirrored, to: restored)
+    }
+
     static func matches(_ assignments: [String: Assignment], mirrored: Bool, in data: Data) -> Bool {
         guard let store = try? decode(data), !assignments.isEmpty,
               let displays = store["Displays"] as? [String: Any],
@@ -231,7 +238,8 @@ enum NativeWallpaperStore {
                 }
             }
         }
-        if captureBaseline || mirrored {
+        let hasProvider = try containsProvider(provider, in: data)
+        if captureBaseline || mirrored || hasProvider {
             for key in ["SystemDefault", "AllSpacesAndDisplays"] {
                 if let current = store[key] as? [String: Any], !current.isEmpty {
                     let previous = saved?[key] as? [String: Any] ?? [:]
