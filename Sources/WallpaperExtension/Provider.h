@@ -3,6 +3,7 @@ BOOL FSConfigureConnection(NSXPCConnection *connection);
 int FSProviderSelfTest(void);
 
 void FSConfigureInterface(NSXPCInterface *interface);
+void FSConfigureHostInterface(NSXPCInterface *interface);
 
 NSDictionary *FSInspectSnapshot(id snapshot);
 

@@ -14,7 +14,14 @@ final class ViewState: ObservableObject {
 }
 
 
-let accent = Color(red: 0.12, green: 0.55, blue: 1)
+extension Library {
+    var accent: Color { accentOverride ?? AppAccent.system.color }
+    // Apply only to accent controls; a container tint also restyles neutral buttons.
+    var accentOverride: Color? {
+        let choice = AppAccent(rawValue: state.accentColor ?? "") ?? .system
+        return choice == .system ? nil : choice.color
+    }
+}
 
 enum AppContext {
     static let library: Library = {
@@ -69,7 +76,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         .windowStyle(.hiddenTitleBar)
         .commands {
             CommandGroup(after: .newItem) {
-                Button("Create New Flua…") { library.createBackdrop() }.keyboardShortcut("n")
+                Button("Create New Flua…") { library.createWallpaper() }.keyboardShortcut("n")
                 Button("Import media or scene package…") { library.chooseMedia() }.keyboardShortcut("i")
             }
             CommandMenu("Playback") {
@@ -80,7 +87,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
         Settings { SettingsView().environmentObject(library).frame(width: 530).preferredColorScheme(.dark) }
-        MenuBarExtra("Flua", systemImage: "camera.macro") { TrayView().environmentObject(library) }
+        MenuBarExtra {
+            TrayView().environmentObject(library)
+        } label: {
+            Image(nsImage: MenuBarIcon.sakura).accessibilityLabel("Flua")
+        }
     }
 }
 
@@ -116,9 +127,8 @@ struct LibraryView: View {
             InspectorView().frame(width: 280)
         }
         .background(Color(red: 0.078, green: 0.088, blue: 0.098))
-        .tint(accent)
         .overlay {
-            if ui.dragOver { RoundedRectangle(cornerRadius: 18).stroke(accent, lineWidth: 3).padding(10).overlay(Text("Drop videos or images to import").font(.title2).padding(30).background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))) }
+            if ui.dragOver { RoundedRectangle(cornerRadius: 18).stroke(library.accent, lineWidth: 3).padding(10).overlay(Text("Drop videos or images to import").font(.title2).padding(30).background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))) }
         }
         .onDrop(of: [.fileURL], isTargeted: $ui.dragOver) { providers in
             for p in providers { _ = p.loadObject(ofClass: URL.self) { url, _ in if let url { DispatchQueue.main.async { library.importMedia([url]) } } } }
@@ -161,12 +171,12 @@ struct LibraryView: View {
                                 set: { library.updatePlaylist(id, shuffle: $0) }))
                             Button("Duplicate Playlist") { library.duplicatePlaylist(id) }
                         } label: { Label("Playlist Options", systemImage: "ellipsis.circle") }
-                        Button { library.startPlaylist(id) } label: { Label("Play", systemImage: "play.fill") }.buttonStyle(.borderedProminent)
+                        Button { library.startPlaylist(id) } label: { Label("Play", systemImage: "play.fill") }.buttonStyle(.borderedProminent).tint(library.accentOverride)
                     }
                 }
                 browseToolbar
                 if displayed.isEmpty {
-                    ContentUnavailableView("No Backdrops Available", systemImage: "photo.on.rectangle.angled", description: Text("Import media or clear your search and filters. Hidden tags can be adjusted in Settings → Blocked tags."))
+                    ContentUnavailableView("No Wallpapers Available", systemImage: "photo.on.rectangle.angled", description: Text("Import media or clear your search and filters. Hidden tags can be adjusted in Settings → Blocked tags."))
                         .frame(maxWidth: .infinity, minHeight: 300)
                 } else {
                     LazyVGrid(columns: [GridItem(.adaptive(minimum: 230), spacing: 18)], spacing: 18) {
@@ -182,12 +192,12 @@ struct LibraryView: View {
                 Text("Discover").font(.largeTitle.bold())
                 browseToolbar
                 if library.eligible.isEmpty {
-                    ContentUnavailableView("No Backdrops Available", systemImage: "photo.on.rectangle.angled", description: Text("Clear filters or adjust Settings → Blocked tags to show hidden content."))
+                    ContentUnavailableView("No Wallpapers Available", systemImage: "photo.on.rectangle.angled", description: Text("Clear filters or adjust Settings → Blocked tags to show hidden content."))
                 }
                 discoverShelf("Featured", wallpapers: Array(library.eligible.prefix(3)), large: true)
                 discoverShelf("Animated", wallpapers: library.eligible.filter { $0.kind != "image" })
                 if library.eligible.contains(where: { $0.file != nil }) {
-                    discoverShelf("Your Backdrops", wallpapers: library.eligible.filter { $0.file != nil })
+                    discoverShelf("Your Wallpapers", wallpapers: library.eligible.filter { $0.file != nil })
                 }
             }.padding(28)
         }
@@ -252,7 +262,7 @@ struct LibraryView: View {
             .onTapGesture { library.selection = w.id }
             .onTapGesture(count: 2) { library.selection = w.id; library.applySelected() }
             .contextMenu {
-                Button("Play Backdrop") { library.selection = w.id; library.applySelected() }
+                Button("Play Wallpaper") { library.selection = w.id; library.applySelected() }
                 Button(w.favorite ? "Remove from Favorites" : "Add to Favorites") { library.favorite(w) }
                 if w.kind == "video", let source = library.disk.url(for: w) {
                     Button("Edit…") { VideoEditorWindow.open(wallpaper: w, source: source, library: library) }
@@ -274,7 +284,7 @@ struct LibraryView: View {
     private var sidebar: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 10) {
-                Image(systemName: "drop.fill").font(.title2).foregroundStyle(accent)
+                Image(nsImage: MenuBarIcon.sakura).renderingMode(.template).resizable().frame(width: 22, height: 22).foregroundStyle(library.accent).accessibilityHidden(true)
                 Text("Flua").font(.title3.weight(.semibold))
             }.padding(.top, 46).padding(.bottom, 10)
             HStack {
@@ -292,7 +302,7 @@ struct LibraryView: View {
             sideButton("Browse", symbol: "rectangle.grid.2x2", section: "browse")
             Text("LIBRARY").font(.system(size: 10, weight: .semibold, design: .rounded)).tracking(2).foregroundStyle(.secondary)
                 .padding(.top, 18)
-            sideButton("All Backdrops", symbol: "books.vertical", section: "all")
+            sideButton("All Wallpapers", symbol: "books.vertical", section: "all")
             sideButton("Favorites", symbol: "heart", section: "favorites")
             sideButton("Your media", symbol: "film", section: "imports")
             HStack {
@@ -317,8 +327,8 @@ struct LibraryView: View {
         Button { library.section = section; if section == "discover" { library.query = "" } } label: {
             Label(title, systemImage: symbol).font(.system(size: 13, weight: library.section == section ? .semibold : .regular))
                 .frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 10).padding(.horizontal, 10)
-                .foregroundStyle(library.section == section ? accent : .white.opacity(0.65))
-                .background(library.section == section ? accent.opacity(0.10) : .clear, in: RoundedRectangle(cornerRadius: 8))
+                .foregroundStyle(library.section == section ? library.accent : .white.opacity(0.65))
+                .background(library.section == section ? library.accent.opacity(0.10) : .clear, in: RoundedRectangle(cornerRadius: 8))
         }.buttonStyle(.plain)
     }
     private var header: some View {
@@ -326,12 +336,12 @@ struct LibraryView: View {
             Text("Flua").font(.headline)
             Spacer()
             Button { library.chooseMedia() } label: { Label(library.importing ? "Importing…" : "Import", systemImage: "square.and.arrow.down") }.disabled(library.importing)
-            Button { library.createBackdrop() } label: { Label("Create", systemImage: "plus") }.buttonStyle(.borderedProminent)
+            Button { library.createWallpaper() } label: { Label("Create", systemImage: "plus") }.buttonStyle(.borderedProminent).tint(library.accentOverride)
         }.padding(.horizontal, 28).padding(.top, 36).padding(.bottom, 14).background(.black.opacity(0.12))
     }
     private var footer: some View {
         HStack(spacing: 9) {
-            Circle().fill(library.state.paused ? Color.orange : accent).frame(width: 5, height: 5)
+            Circle().fill(library.state.paused ? Color.orange : library.accent).frame(width: 5, height: 5)
             Text(library.activity).font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(1)
             Spacer()
             Picker("Display Mode", selection: Binding(get: { library.playbackMode }, set: { library.setPlaybackMode($0) })) {
@@ -377,7 +387,7 @@ struct WallpaperCard: View {
         }
         .aspectRatio(16/10, contentMode: .fit)
         .clipShape(RoundedRectangle(cornerRadius: 10))
-        .overlay(RoundedRectangle(cornerRadius: 10).stroke(selected ? accent : .white.opacity(0.08), lineWidth: selected ? 2 : 1))
+        .overlay(RoundedRectangle(cornerRadius: 10).stroke(selected ? library.accent : .white.opacity(0.08), lineWidth: selected ? 2 : 1))
         .contentShape(Rectangle())
     }
 }
@@ -436,7 +446,14 @@ struct InspectorView: View {
                                 ForEach(library.screens, id: \.self) { screen in Text(screen.localizedName).tag(displayID(screen)) }
                             }.labelsHidden().frame(maxWidth: .infinity)
                         }
-                        Button { library.applySelected() } label: { Label("Play Backdrop", systemImage: "play.fill").frame(maxWidth: .infinity).padding(.vertical, 7) }.buttonStyle(.borderedProminent)
+                        Button { library.applySelected() } label: { Label("Play Wallpaper", systemImage: "play.fill").frame(maxWidth: .infinity).padding(.vertical, 7) }.buttonStyle(.borderedProminent).tint(library.accentOverride)
+                        if NativeWallpaper.available {
+                            Button(library.nativeSetupBusy ? "Applying…" : "Apply to Lock Screen") {
+                                library.applySelectedToLockScreen()
+                            }.disabled(library.nativeSetupBusy || w.kind == "image")
+                            Text("All displays • Still desktop, animated Lock Screen")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
                     }
                     mediaFacts(w)
                     Divider().opacity(0.3)
@@ -451,7 +468,7 @@ struct InspectorView: View {
                         if w.kind != "image" { slider("Speed", value: binding(\.speed, w), range: 0.25...2, suffix: String(format: "%.2f×", w.speed)) }
                         slider("Dim", value: binding(\.dimming, w), range: 0...0.85, suffix: "\(Int(w.dimming * 100))%")
                         if w.kind == "video" { slider("Volume", value: binding(\.volume, w), range: 0...1, suffix: "\(Int(w.volume * 100))%") }
-                        if w.file != nil { Toggle("Fit entire image", isOn: binding(\.fit, w)).font(.caption) }
+                        if w.file != nil { Toggle("Fit entire image", isOn: binding(\.fit, w)).font(.caption).tint(library.accentOverride) }
                     }
                     Divider().opacity(0.3)
                     VStack(alignment: .leading, spacing: 9) {
@@ -524,7 +541,7 @@ struct InspectorView: View {
         Binding(get: { (library.state.item(original.id) ?? original)[keyPath: key] }, set: { newValue in var v = library.state.item(original.id) ?? original; v[keyPath: key] = newValue; library.edit(v) })
     }
     private func slider(_ name: String, value: Binding<Double>, range: ClosedRange<Double>, suffix: String) -> some View {
-        VStack(spacing: 5) { HStack { Text(name); Spacer(); Text(suffix).foregroundStyle(.secondary).monospacedDigit() }.font(.system(size: 11)); Slider(value: value, in: range).accessibilityLabel(name) }
+        VStack(spacing: 5) { HStack { Text(name); Spacer(); Text(suffix).foregroundStyle(.secondary).monospacedDigit() }.font(.system(size: 11)); Slider(value: value, in: range).tint(library.accentOverride).accessibilityLabel(name) }
     }
 }
 
@@ -537,21 +554,36 @@ struct SettingsView: View {
     }
     var body: some View {
         Form {
+            Section("Appearance") {
+                Picker("Accent color", selection: Binding(
+                    get: { AppAccent(rawValue: library.state.accentColor ?? "") ?? .system },
+                    set: { library.state.accentColor = $0 == .system ? nil : $0.rawValue; library.save() }
+                )) {
+                    ForEach(AppAccent.allCases, id: \.self) { choice in
+                        Label {
+                            Text(choice.rawValue)
+                        } icon: {
+                            Image(nsImage: choice.swatch).renderingMode(.original)
+                        }.tag(choice)
+                    }
+                }
+                Text("System follows the accent color selected in macOS settings.").font(.caption).foregroundStyle(.secondary)
+            }
             Section("Playback") {
                 Picker("Display mode", selection: Binding(get: { library.playbackMode }, set: { library.setPlaybackMode($0) })) {
                     Text("Mirrored").tag("mirrored")
                     Text("Per Display").tag("perDisplay")
                 }
-                Toggle("Pause behind fullscreen apps", isOn: $library.state.pauseOnFullscreen)
-                Toggle("Pause while running on battery", isOn: $library.state.pauseOnBattery)
-                Toggle("Pause in Low Power Mode", isOn: Binding(get: { library.state.pauseOnLowPower ?? false }, set: { library.state.pauseOnLowPower = $0; library.settingChanged() }))
+                Toggle("Pause behind fullscreen apps", isOn: $library.state.pauseOnFullscreen).tint(library.accentOverride)
+                Toggle("Pause while running on battery", isOn: $library.state.pauseOnBattery).tint(library.accentOverride)
+                Toggle("Pause in Low Power Mode", isOn: Binding(get: { library.state.pauseOnLowPower ?? false }, set: { library.state.pauseOnLowPower = $0; library.settingChanged() })).tint(library.accentOverride)
                 Text("Wallpaper playback also pauses when the display sleeps or the session locks.").font(.caption).foregroundStyle(.secondary)
             }
             Section("Playlists") {
                 Picker("Change scene every", selection: $library.state.interval) {
                     Text("30 seconds").tag(30.0); Text("1 minute").tag(60.0); Text("5 minutes").tag(300.0); Text("15 minutes").tag(900.0); Text("30 minutes").tag(1800.0); Text("1 hour").tag(3600.0)
                 }
-                Toggle("Shuffle playlists", isOn: $library.state.shuffle)
+                Toggle("Shuffle playlists", isOn: $library.state.shuffle).tint(library.accentOverride)
             }
             Section("Blocked tags") {
                 HStack {
@@ -571,12 +603,21 @@ struct SettingsView: View {
                         }
                     }.frame(maxHeight: 110)
                 }
-                Text("Matching tags hide backdrops throughout the library. Files, playlists and playback assignments are preserved.").font(.caption).foregroundStyle(.secondary)
+                Text("Matching tags hide wallpapers throughout the library. Files, playlists and playback assignments are preserved.").font(.caption).foregroundStyle(.secondary)
             }
             Section("General") {
-                Toggle("Open at login", isOn: Binding(get: { library.loginEnabled() }, set: { library.setLogin($0) }))
+                Toggle("Open at login", isOn: Binding(get: { library.loginEnabled() }, set: { library.setLogin($0) })).tint(library.accentOverride)
                 Button("Show media folder in Finder") { NSWorkspace.shared.open(library.disk.assets) }
-                Text("Flua stores its own copies of imported media. Closing the window keeps wallpapers running; quitting restores the underlying wallpaper.").font(.caption).foregroundStyle(.secondary)
+                Text("Flua stores its own copies of imported media. Closing the window keeps desktop playback running. Quitting removes desktop overlays; a native Lock Screen choice keeps playing through macOS.").font(.caption).foregroundStyle(.secondary)
+            }
+            Section("Lock Screen") {
+                Text(NativeWallpaper.explanation).font(.caption).foregroundStyle(.secondary)
+                if NativeWallpaper.available {
+                    Button(library.nativeSetupBusy ? "Applying…" : "Apply selected item to Lock Screen") { library.applySelectedToLockScreen() }
+                        .disabled(library.nativeSetupBusy || library.selected == nil || library.selected?.kind == "image")
+                    Text("To stop native playback, choose another wallpaper in System Settings. Keep this app and your library in place while it is selected.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
             }
             Section("About") {
                 Text("Flua 1.2 • Independent native wallpaper app").font(.callout)

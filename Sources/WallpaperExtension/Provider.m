@@ -3,8 +3,10 @@
 #import <IOSurface/IOSurface.h>
 #import <QuartzCore/QuartzCore.h>
 #import <dlfcn.h>
+#import <fcntl.h>
 #import <objc/message.h>
 #import <objc/runtime.h>
+#import <pwd.h>
 
 // Original Flua prototype. Uses only dynamically loaded Apple classes.
 // Never registers itself or edits the user's wallpaper selection.
@@ -80,6 +82,7 @@ NSDictionary *FSInspectSnapshot(id snapshot) {
     IOSurfaceUnlock(surface,kIOSurfaceLockReadOnly,NULL);
     NSDictionary *out = @{
         @"checksum": @(checksum),
+        @"origin": bytes ? @[@(bytes[0]), @(bytes[1]), @(bytes[2]), @(bytes[3])] : @[],
         @"width" : @(IOSurfaceGetWidth(surface)),
         @"height" : @(IOSurfaceGetHeight(surface)),
         @"surfaceID" : @(IOSurfaceGetID(surface))
@@ -134,6 +137,49 @@ static NSString *FSEncodeConfiguration(NSDictionary *configuration) {
 }
 // A library file is accepted only as Media/<name> inside the catalog root.
 // shortcut: rows reuse the bundled prototype thumbnail, replace it when still frames exist.
+static NSURL *FSActiveCatalogURL;
+static NSMutableArray *FSHeldCatalogAccess;
+@protocol FSHostProxy <NSObject>
+- (void)updateSettingsViewModels:(id)models reply:(void (^)(NSError *error))reply;
+- (void)requestReadOnlyAccessTo:(NSURL *)url reply:(void (^)(id token, NSError *error))reply;
+@end
+// Env wins for tests. A bundled catalog.json is next. A running appex otherwise
+// reads FLUACatalogPath or the live library catalog beside library.json.
+static NSURL *FSCatalogURL(BOOL *bundledOut) {
+    NSString *env = NSProcessInfo.processInfo.environment[@"FLUA_CATALOG"];
+    if (env.length) {
+        if (bundledOut) *bundledOut = NO;
+        return [NSURL fileURLWithPath:env];
+    }
+    NSURL *bundled = [NSBundle.mainBundle URLForResource:@"catalog" withExtension:@"json"];
+    if (bundled) {
+        if (bundledOut) *bundledOut = YES;
+        return bundled;
+    }
+    NSString *configured = NSBundle.mainBundle.infoDictionary[@"FLUACatalogPath"];
+    if ([configured isKindOfClass:NSString.class] && [configured hasPrefix:@"/"]) {
+        if (bundledOut) *bundledOut = NO;
+        return [NSURL fileURLWithPath:configured];
+    }
+    if ([NSBundle.mainBundle.bundlePath.pathExtension isEqualToString:@"appex"]) {
+        struct passwd *pw = getpwuid(getuid());
+        if (pw && pw->pw_dir) {
+            if (bundledOut) *bundledOut = NO;
+            return [NSURL fileURLWithPath:[NSString stringWithFormat:@"%s/Library/Application Support/Flua/catalog.json", pw->pw_dir]];
+        }
+    }
+    return nil;
+}
+static BOOL FSAcceptCatalogToken(id token) {
+    if (!token) return NO;
+    NSURL *url = [token isKindOfClass:NSURL.class] ? token : nil;
+    if (!url && [token respondsToSelector:@selector(url)])
+        url = ((id (*)(id, SEL))objc_msgSend)(token, @selector(url));
+    if ([url isKindOfClass:NSURL.class]) [url startAccessingSecurityScopedResource];
+    if (!FSHeldCatalogAccess) FSHeldCatalogAccess = NSMutableArray.new;
+    [FSHeldCatalogAccess addObject:token];
+    return YES;
+}
 static NSURL *FSContainedMediaURL(NSString *root, NSString *relative) {
     if (![relative isKindOfClass:NSString.class] || relative.length < 7 || ![relative hasPrefix:@"Media/"]) return nil;
     if ([relative rangeOfString:@".."].location != NSNotFound || [relative containsString:@"//"]) return nil;
@@ -146,12 +192,10 @@ static NSURL *FSContainedMediaURL(NSString *root, NSString *relative) {
     return [NSURL fileURLWithPath:full];
 }
 static NSArray *FSLibraryChoices(NSString **directRead) {
-    NSString *path = NSProcessInfo.processInfo.environment[@"FLUA_CATALOG"];
     BOOL bundled = NO;
-    if (!path.length) {
-        path = [NSBundle.mainBundle URLForResource:@"catalog" withExtension:@"json"].path;
-        bundled = path.length > 0;
-    }
+    NSURL *catalogURL = FSCatalogURL(&bundled);
+    FSActiveCatalogURL = catalogURL;
+    NSString *path = catalogURL.path;
     NSData *data = path.length ? [NSData dataWithContentsOfFile:path] : nil;
     NSDictionary *json = data ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
     if (![json isKindOfClass:NSDictionary.class] || [json[@"version"] integerValue] != 1 || ![json[@"items"] isKindOfClass:NSArray.class])
@@ -167,25 +211,40 @@ static NSArray *FSLibraryChoices(NSString **directRead) {
     for (id entry in json[@"items"]) {
         if (![entry isKindOfClass:NSDictionary.class]) continue;
         NSString *kind = entry[@"kind"], *ident = entry[@"id"], *title = entry[@"title"];
-        if (![kind isEqual:@"image"] && ![kind isEqual:@"video"]) continue;
+        BOOL scene = FSIsSceneKind(kind);
+        if (!scene && ![kind isEqual:@"image"] && ![kind isEqual:@"video"]) continue;
         if (![ident isKindOfClass:NSString.class] || !ident.length) continue;
         if (![title isKindOfClass:NSString.class] || !title.length) title = ident;
-        NSURL *file = FSContainedMediaURL(root, entry[@"file"]);
-        if (!file) continue;
-        [choices addObject:@{@"id" : ident, @"title" : title, @"kind" : kind, @"url" : file,
-                             @"fit" : [entry[@"fit"] isEqual:@"fit"] ? @"fit" : @"fill"}];
+        NSURL *file = scene ? nil : FSContainedMediaURL(root, entry[@"file"]);
+        if (!scene && !file) continue;
+        NSMutableDictionary *choice = [@{@"id" : ident, @"title" : title, @"kind" : kind,
+                                        @"fit" : [entry[@"fit"] isEqual:@"fit"] ? @"fit" : @"fill",
+                                        @"speed" : [entry[@"speed"] isKindOfClass:NSNumber.class] ? entry[@"speed"] : @1,
+                                        @"dimming" : [entry[@"dimming"] isKindOfClass:NSNumber.class] ? entry[@"dimming"] : @0,
+                                        @"desktop" : [entry[@"desktop"] isEqual:@"still"] ? @"still" : @"animated",
+                                        @"lockScreen" : [entry[@"lockScreen"] isEqual:@"still"] ? @"still" : @"animated"} mutableCopy];
+        if (file) choice[@"url"] = file;
+        if ([entry[@"trimStart"] isKindOfClass:NSNumber.class] && [entry[@"trimEnd"] isKindOfClass:NSNumber.class]) {
+            choice[@"trimStart"] = entry[@"trimStart"];
+            choice[@"trimEnd"] = entry[@"trimEnd"];
+        }
+        if ([entry[@"still"] isKindOfClass:NSNumber.class]) choice[@"still"] = entry[@"still"];
+        [choices addObject:choice];
     }
-    if (directRead && choices.count)
-        *directRead = [[NSFileManager defaultManager] isReadableFileAtPath:[choices[0][@"url"] path]] ? @"yes" : @"no";
+    if (directRead && choices.count) {
+        NSURL *url = choices[0][@"url"];
+        *directRead = [url isKindOfClass:NSURL.class] && [[NSFileManager defaultManager] isReadableFileAtPath:url.path] ? @"yes" : @"no";
+    }
     return choices;
 }
-NSDictionary *FSSettingsModel(void) {
+static NSDictionary *FSBuildSettingsModel(BOOL libraryOnly) {
     NSURL *thumbnail = [NSBundle.mainBundle URLForResource:@"PrototypeThumbnail" withExtension:@"png"];
     if (!thumbnail)
         thumbnail = [[NSBundle.mainBundle.executableURL URLByDeletingLastPathComponent]
             URLByAppendingPathComponent:@"PrototypeThumbnail.png"];
     NSDictionary *image = @{@"image" : @{@"url" : thumbnail.absoluteString ?: @""}};
     NSString *provider = FSProviderIdentifier();
+    NSString *groupID = libraryOnly ? provider : @"org.flua.prototype";
     NSDictionary *choice = @{
         @"id" : @{
             @"descriptor" :
@@ -198,7 +257,7 @@ NSDictionary *FSSettingsModel(void) {
     };
     NSDictionary *item = @{
         @"id" : @{@"id" : @"org.flua.prototype.gradient"},
-        @"groupID" : @{@"id" : @"org.flua.prototype"},
+        @"groupID" : @{@"id" : groupID},
         @"localizedName" : @"Flua Gradient",
         @"thumbnail" : image,
         @"choice" : choice,
@@ -225,26 +284,36 @@ NSDictionary *FSSettingsModel(void) {
         if ([kind isEqual:@"video"]) mediaItem[@"contentBadge"]=@{@"video":@{}};
         [items addObject:mediaItem];
     }
+    if (libraryOnly) [items removeAllObjects];
+    NSUInteger fixtureCount = items.count;
     NSString *directRead = nil;
     for (NSDictionary *library in FSLibraryChoices(&directRead)) {
-        NSString *encoded = FSEncodeConfiguration(@{@"version":@1,@"kind":library[@"kind"],@"fileIndex":@0,@"fit":library[@"fit"]});
+        NSMutableDictionary *playback = [@{@"version":@1, @"kind":library[@"kind"], @"fit":library[@"fit"],
+                                           @"speed":library[@"speed"], @"dimming":library[@"dimming"],
+                                           @"modes":@{@"desktop":library[@"desktop"], @"lockScreen":library[@"lockScreen"]}} mutableCopy];
+        if (library[@"url"]) playback[@"fileIndex"] = @0;
+        if (library[@"trimStart"] && library[@"trimEnd"]) playback[@"trim"] = @[library[@"trimStart"], library[@"trimEnd"]];
+        if (library[@"still"]) playback[@"still"] = library[@"still"];
+        else if (FSIsSceneKind(library[@"kind"])) playback[@"still"] = @7;
+        NSString *encoded = FSEncodeConfiguration(playback);
+        NSArray *files = library[@"url"] ? @[((NSURL *)library[@"url"]).absoluteString] : @[];
         NSMutableDictionary *mediaChoice=[choice mutableCopy];
-        mediaChoice[@"id"]=@{@"descriptor":@{@"provider":provider,@"files":@[((NSURL *)library[@"url"]).absoluteString],@"configuration":encoded}};
+        mediaChoice[@"id"]=@{@"descriptor":@{@"provider":provider,@"files":files,@"configuration":encoded}};
         mediaChoice[@"localizedDescription"]=library[@"title"];
         NSMutableDictionary *mediaItem=[item mutableCopy];
         mediaItem[@"id"]=@{@"id":[@"org.flua.library." stringByAppendingString:library[@"id"]]};
         mediaItem[@"localizedName"]=library[@"title"];
         mediaItem[@"choice"]=mediaChoice;
         mediaItem[@"sortOrder"]=@(items.count);
-        if ([library[@"kind"] isEqual:@"video"]) mediaItem[@"contentBadge"]=@{@"video":@{}};
+        if ([library[@"kind"] isEqual:@"video"] || FSIsSceneKind(library[@"kind"])) mediaItem[@"contentBadge"]=@{@"video":@{}};
         [items addObject:mediaItem];
     }
-    if (directRead) NSLog(@"Flua catalog items=%lu directRead=%@", (unsigned long)(items.count - 3), directRead);
+    if (directRead) NSLog(@"Flua catalog items=%lu directRead=%@", (unsigned long)(items.count - fixtureCount), directRead);
     NSDictionary *group = @{
-        @"id" : @{@"id" : @"org.flua.prototype"},
+        @"id" : @{@"id" : groupID},
         @"localizedName" : @"Flua",
         @"disposability" : @{@"none" : @{}},
-        @"sortID" : @{@"id" : @"org.flua.prototype"},
+        @"sortID" : @{@"id" : groupID},
         @"sortOrder" : @0,
         @"shouldHideItemLabels" : @NO,
         @"items" : items
@@ -254,6 +323,9 @@ NSDictionary *FSSettingsModel(void) {
           @"refreshPolicy" : @{@"default" : @{}},
           @"isModificationDisabled" : @NO};
     return @{@"desktop" : model, @"screenSaver" : model};
+}
+NSDictionary *FSSettingsModel(void) {
+    return FSBuildSettingsModel([NSBundle.mainBundle.infoDictionary[@"FLUALibraryOnly"] boolValue]);
 }
 NSDictionary *FSInspectSettings(id settings) { return FSJSON(settings, @"WallpaperSettingsViewModels"); }
 @interface FSSession : NSObject
@@ -272,12 +344,84 @@ NSDictionary *FSInspectSettings(id settings) { return FSJSON(settings, @"Wallpap
 @end
 @interface FSProvider : NSObject
 @property NSMutableDictionary<NSString *, FSSession *> *sessions;
+@property(weak) NSXPCConnection *hostConnection;
+@property dispatch_source_t catalogWatch;
+@property BOOL askedForCatalog;
 @end
 @implementation FSProvider
 - (instancetype)init {
     if ((self = [super init]))
         _sessions = NSMutableDictionary.new;
     return self;
+}
+- (void)dealloc {
+    if (_catalogWatch) dispatch_source_cancel(_catalogWatch);
+}
+- (void)pushCatalog {
+    NSXPCConnection *connection = self.hostConnection;
+    if (!connection || !FSActiveCatalogURL) return;
+    id models = FSBox(@"WallpaperSettingsViewModelsXPC", @"WallpaperSettingsViewModels", FSSettingsModel());
+    id<FSHostProxy> proxy = [connection remoteObjectProxyWithErrorHandler:^(NSError *error) {
+        NSLog(@"Flua catalog refresh: %@", error.localizedDescription);
+    }];
+    [proxy updateSettingsViewModels:models reply:^(NSError *error) {
+        if (error) NSLog(@"Flua catalog refresh: %@", error.localizedDescription);
+    }];
+}
+- (void)watchCatalog:(NSURL *)url {
+    if (self.catalogWatch) return;
+    int fd = open(url.path.fileSystemRepresentation, O_EVTONLY);
+    __weak FSProvider *host = self;
+    if (fd < 0) {
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+            if (host.hostConnection) [host watchCatalog:url];
+        });
+        return;
+    }
+    dispatch_source_t source = dispatch_source_create(DISPATCH_SOURCE_TYPE_VNODE, fd,
+        DISPATCH_VNODE_WRITE | DISPATCH_VNODE_RENAME | DISPATCH_VNODE_DELETE, dispatch_get_main_queue());
+    dispatch_source_set_event_handler(source, ^{
+        FSProvider *provider = host;
+        if (!provider) return;
+        unsigned long flags = dispatch_source_get_data(provider.catalogWatch);
+        if (flags & (DISPATCH_VNODE_RENAME | DISPATCH_VNODE_DELETE)) {
+            dispatch_source_cancel(provider.catalogWatch);
+            provider.catalogWatch = nil;
+        }
+        [provider pushCatalog];
+        // Atomic saves replace the inode; watch the new catalog with the same file-only grant.
+        [provider watchCatalog:url];
+    });
+    dispatch_source_set_cancel_handler(source, ^{ close(fd); });
+    self.catalogWatch = source;
+    dispatch_resume(source);
+}
+// shortcut: one access request per connection; the next settings load retries a missing catalog.
+- (void)refreshCatalog {
+    NSURL *url = FSActiveCatalogURL;
+    if (!url || !self.hostConnection) return;
+    if ([NSFileManager.defaultManager isReadableFileAtPath:url.path]) {
+        [self watchCatalog:url];
+        return;
+    }
+    if (self.askedForCatalog) return;
+    self.askedForCatalog = YES;
+    NSXPCConnection *connection = self.hostConnection;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        id<FSHostProxy> proxy = [connection remoteObjectProxyWithErrorHandler:^(NSError *error) {
+            NSLog(@"Flua catalog access: %@", error.localizedDescription);
+        }];
+        [proxy requestReadOnlyAccessTo:url reply:^(id token, NSError *error) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                if (error || !FSAcceptCatalogToken(token)) {
+                    NSLog(@"Flua catalog access failed: %@", error.localizedDescription);
+                    return;
+                }
+                [self pushCatalog];
+                [self watchCatalog:url];
+            });
+        }];
+    });
 }
 - (NSString *)key:(id)ident {
     return FSJSON(ident, @"WallpaperID")[@"id"] ?: @"unknown";
@@ -310,8 +454,10 @@ NSDictionary *FSInspectSettings(id settings) { return FSJSON(settings, @"Wallpap
         NSDictionary *configuration = configurationData.length ? [NSJSONSerialization JSONObjectWithData:configurationData options:0 error:nil] : @{};
         if (![configuration isKindOfClass:NSDictionary.class]) { reply(nil,FSError(@"Invalid Flua configuration JSON")); return; }
         if (configuration.count && [configuration[@"version"] integerValue] != 1) { reply(nil,FSError(@"Unsupported Flua configuration version")); return; }
+        NSMutableDictionary *renderConfig = [configuration mutableCopy];
+        renderConfig[@"presentation"] = [payload[@"presentationMode"] allKeys].firstObject ?: @"default";
         NSError *mediaError;
-        FSMediaRenderer *renderer = [[FSMediaRenderer alloc] initWithWidth:(NSUInteger)w height:(NSUInteger)h configuration:configuration fileWrappers:captured.objects[@"files"] ?: @[] error:&mediaError];
+        FSMediaRenderer *renderer = [[FSMediaRenderer alloc] initWithWidth:(NSUInteger)w height:(NSUInteger)h configuration:renderConfig fileWrappers:captured.objects[@"files"] ?: @[] error:&mediaError];
         if (!renderer) { reply(nil,mediaError ?: FSError(@"Cannot create renderer")); return; }
         FSSession *s = FSSession.new;
         s.request = payload;
@@ -338,6 +484,12 @@ NSDictionary *FSInspectSettings(id settings) { return FSJSON(settings, @"Wallpap
               [s.mode isEqual:@"locked"], [s.mode isEqual:@"idle"], [payload[@"isPreview"] boolValue], cid, (unsigned long)renderer.frameCount,
               (unsigned long)renderer.scopedFileCount, (unsigned long)renderer.activeScopeCount);
         reply(box, nil);
+        // The host can reuse a cached choice after relaunch without requesting settings again.
+        if (!FSActiveCatalogURL) {
+            FSSettingsModel();
+            [self refreshCatalog];
+            [self pushCatalog];
+        }
     } @catch (NSException *e) {
         reply(nil, FSError(e.reason));
     }
@@ -357,6 +509,7 @@ NSDictionary *FSInspectSettings(id settings) { return FSJSON(settings, @"Wallpap
     }
     s.mode = [p[@"presentationMode"] allKeys].firstObject ?: @"default";
     BOOL suspended = p[@"activityState"][@"suspended"] != nil;
+    [s.renderer setPresentation:s.mode];
     s.root.speed = suspended ? 0 : 1;
     [s.renderer setPlaybackSuspended:suspended];
     NSLog(@"Flua updated locked=%d idle=%d suspended=%d frames=%lu loops=%ld",
@@ -400,6 +553,7 @@ NSDictionary *FSInspectSettings(id settings) { return FSJSON(settings, @"Wallpap
         return;
     }
     reply(FSBox(@"WallpaperSettingsViewModelsXPC", @"WallpaperSettingsViewModels", FSSettingsModel()), nil);
+    [self refreshCatalog];
 }
 - (void)addChoiceRequestWithChoiceRequest:(id)request
                         onBehalfOfProcess:(id)process
@@ -489,6 +643,23 @@ void FSConfigureInterface(NSXPCInterface *interface) {
             argumentIndex:0
                   ofReply:YES];
 }
+void FSConfigureHostInterface(NSXPCInterface *interface) {
+    [interface setClasses:[NSSet setWithObject:NSClassFromString(@"WallpaperSettingsViewModelsXPC")]
+              forSelector:@selector(updateSettingsViewModels:reply:)
+            argumentIndex:0
+                  ofReply:NO];
+    [interface setClasses:[NSSet setWithObject:NSURL.class]
+              forSelector:@selector(requestReadOnlyAccessTo:reply:)
+            argumentIndex:0
+                  ofReply:NO];
+    Class wrapper = NSClassFromString(@"NSSecurityScopedURLWrapper");
+    NSMutableSet *tokens = [NSMutableSet setWithObject:NSURL.class];
+    if (wrapper) [tokens addObject:wrapper];
+    [interface setClasses:tokens
+              forSelector:@selector(requestReadOnlyAccessTo:reply:)
+            argumentIndex:0
+                  ofReply:YES];
+}
 BOOL FSConfigureConnection(NSXPCConnection *connection) {
     if (!FSLoad())
         return NO;
@@ -498,7 +669,14 @@ BOOL FSConfigureConnection(NSXPCConnection *connection) {
     class_addProtocol(FSProvider.class, p);
     connection.exportedInterface = [NSXPCInterface interfaceWithProtocol:p];
     FSConfigureInterface(connection.exportedInterface);
-    connection.exportedObject = FSProvider.new;
+    Protocol *proxy = objc_getProtocol("WallpaperExtensionKit.WallpaperExtensionProxyXPCProtocol");
+    FSProvider *provider = FSProvider.new;
+    if (proxy) {
+        connection.remoteObjectInterface = [NSXPCInterface interfaceWithProtocol:proxy];
+        FSConfigureHostInterface(connection.remoteObjectInterface);
+        provider.hostConnection = connection;
+    }
+    connection.exportedObject = provider;
     [connection resume];
     return YES;
 }
@@ -567,7 +745,11 @@ int FSProviderSelfTest(void) {
                                                                 [items[1][@"contentBadge"][@"none"] isKindOfClass:NSDictionary.class] &&
                                                                 [items[2][@"contentBadge"][@"video"] isKindOfClass:NSDictionary.class];
                                                }];
+        NSDictionary *libraryOnly = FSBuildSettingsModel(YES);
+        BOOL noFixtures = [libraryOnly[@"desktop"][@"groups"][0][@"items"] count] == 0 &&
+            FSBox(@"WallpaperSettingsViewModelsXPC", @"WallpaperSettingsViewModels", libraryOnly) != nil;
         NSDictionary *out = @{
+            @"libraryOnlyCatalog" : @(noFixtures),
             @"settingsCatalog" : @(settingsOK),
             @"acquire" : @(acquired),
             @"updateLockedSuspended" : @(updated),
@@ -578,7 +760,7 @@ int FSProviderSelfTest(void) {
         NSData *d = [NSJSONSerialization dataWithJSONObject:out options:NSJSONWritingPrettyPrinted error:nil];
         fwrite(d.bytes, 1, d.length, stdout);
         puts("");
-        return acquired && updated && invalidated && snapshotted && settingsOK ? 0 : 2;
+        return acquired && updated && invalidated && snapshotted && settingsOK && noFixtures ? 0 : 2;
     }
 }
 #ifdef FS_SELF_TEST
@@ -631,26 +813,193 @@ int main(int argc,const char **argv) { @autoreleasepool {
         BOOL success=acquired && wrappers && before && after && paused && resumed && disposed && (![kind isEqual:@"video"] || (motion && loops>=1));
         results[kind]=@{@"ok":@(success),@"acquired":@(acquired),@"nonemptyScopedFiles":@(wrappers),@"motion":@(motion),@"suspendedStable":@(paused),@"resumed":@(resumed),@"loopCount":@(loops),@"frames":@(finalFrames),@"disposed":@(disposed),@"error":errorText,@"snapshot":after ?: @{}};
     }
+    NSURL *video=[dir URLByAppendingPathComponent:@"FluaMotion.mov"];
+    NSURL *image=[dir URLByAppendingPathComponent:@"FluaStill.png"];
+    NSData *videoBefore=[NSData dataWithContentsOfURL:video];
+    NSDictionary *tuned=@{@"version":@1,@"kind":@"video",@"fileIndex":@0,@"fit":@"fill",@"speed":@2,@"dimming":@0,@"trim":@[@0.4,@1.2],@"still":@0.5,@"modes":@{@"desktop":@"animated",@"lockScreen":@"still"}};
+    creation[@"configuration"]=[[NSJSONSerialization dataWithJSONObject:tuned options:0 error:nil] base64EncodedStringWithOptions:0];
+    creation[@"presentationMode"]=@{@"default":@{}}; creation[@"activityState"]=@{@"active":@{}};
+    __block BOOL tunedAcquired=NO;
+    [provider acquireWithId:ident request:FSCreateRequest(creation,@[video]) reply:^(id remote,NSError *error){tunedAcquired=remote!=nil && !error;}];
+    FSSession *tunedSession=provider.sessions.allValues.firstObject;
+    FSPump(0.45);
+    NSMutableArray *times=NSMutableArray.new;
+    for (int i=0;i<6;i++) { FSPump(0.08); [times addObject:@(tunedSession.renderer.playbackTime)]; }
+    BOOL inTrim=times.count == 6;
+    BOOL moved=NO;
+    for (NSUInteger i=0;i<times.count;i++) {
+        double time=[times[i] doubleValue];
+        if (time < 0.35 || time > 1.25) inTrim=NO;
+        if (i > 0 && time > [times[i - 1] doubleValue] + 0.02) moved=YES;
+    }
+    BOOL rate=fabs(tunedSession.renderer.playbackRate - 2) < 0.15 && !tunedSession.renderer.holdsStill;
+    NSMutableDictionary *modeUpdate=[creation mutableCopy]; [modeUpdate removeObjectForKey:@"configuration"]; [modeUpdate removeObjectForKey:@"isPreview"];
+    modeUpdate[@"presentationMode"]=@{@"default":@{}}; modeUpdate[@"activityState"]=@{@"suspended":@{}};
+    [provider updateWithId:ident request:FSBox(@"WallpaperUpdateRequestXPC",@"WallpaperUpdateRequest",modeUpdate) reply:^(NSError *error){}];
+    double heldTime=tunedSession.renderer.playbackTime; NSUInteger heldFrames=tunedSession.renderer.frameCount;
+    FSPump(0.25);
+    BOOL suspendedHoldsMode=!tunedSession.renderer.holdsStill && tunedSession.renderer.playbackRate == 0 && tunedSession.renderer.frameCount == heldFrames && fabs(tunedSession.renderer.playbackTime - heldTime) < 0.05;
+    modeUpdate[@"activityState"]=@{@"active":@{}};
+    [provider updateWithId:ident request:FSBox(@"WallpaperUpdateRequestXPC",@"WallpaperUpdateRequest",modeUpdate) reply:^(NSError *error){}];
+    FSPump(0.3);
+    BOOL resumedSameMode=!tunedSession.renderer.holdsStill && tunedSession.renderer.frameCount > heldFrames && tunedSession.renderer.playbackRate > 1;
+    modeUpdate[@"presentationMode"]=@{@"locked":@{}};
+    [provider updateWithId:ident request:FSBox(@"WallpaperUpdateRequestXPC",@"WallpaperUpdateRequest",modeUpdate) reply:^(NSError *error){}];
+    NSUInteger stillFrames=tunedSession.renderer.frameCount;
+    FSPump(0.35);
+    BOOL lockedStill=tunedSession.renderer.holdsStill && tunedSession.renderer.playbackRate == 0 && tunedSession.renderer.frameCount == stillFrames;
+    modeUpdate[@"presentationMode"]=@{@"idle":@{}};
+    [provider updateWithId:ident request:FSBox(@"WallpaperUpdateRequestXPC",@"WallpaperUpdateRequest",modeUpdate) reply:^(NSError *error){}];
+    BOOL idleUsesLock=tunedSession.renderer.holdsStill;
+    modeUpdate[@"presentationMode"]=@{@"default":@{}};
+    [provider updateWithId:ident request:FSBox(@"WallpaperUpdateRequestXPC",@"WallpaperUpdateRequest",modeUpdate) reply:^(NSError *error){}];
+    FSPump(0.3);
+    BOOL desktopPlays=!tunedSession.renderer.holdsStill && tunedSession.renderer.frameCount > stillFrames;
+    [provider invalidateWithId:ident reply:^(NSError *error){}];
+    BOOL sourceUntouched=videoBefore.length > 0 && [videoBefore isEqual:[NSData dataWithContentsOfURL:video]];
+    NSDictionary *plainImage=@{@"version":@1,@"kind":@"image",@"fileIndex":@0,@"fit":@"fill",@"dimming":@0};
+    creation[@"configuration"]=[[NSJSONSerialization dataWithJSONObject:plainImage options:0 error:nil] base64EncodedStringWithOptions:0];
+    creation[@"destination"]=[@{@"size":@[@96,@64],@"scaleFactor":@1,@"colorSpace":creation[@"destination"][@"colorSpace"]} mutableCopy];
+    [provider acquireWithId:ident request:FSCreateRequest(creation,@[image]) reply:^(id remote,NSError *error){}];
+    __block NSArray *bright=nil;
+    [provider snapshotWithId:ident reply:^(id snapshot,NSError *error){bright=FSInspectSnapshot(snapshot)[@"origin"];}];
+    [provider invalidateWithId:ident reply:^(NSError *error){}];
+    NSMutableDictionary *dimmedImage=[plainImage mutableCopy]; dimmedImage[@"dimming"]=@0.5;
+    creation[@"configuration"]=[[NSJSONSerialization dataWithJSONObject:dimmedImage options:0 error:nil] base64EncodedStringWithOptions:0];
+    [provider acquireWithId:ident request:FSCreateRequest(creation,@[image]) reply:^(id remote,NSError *error){}];
+    __block NSArray *dark=nil;
+    [provider snapshotWithId:ident reply:^(id snapshot,NSError *error){dark=FSInspectSnapshot(snapshot)[@"origin"];}];
+    [provider invalidateWithId:ident reply:^(NSError *error){}];
+    creation[@"destination"][@"size"]=@[@32,@64];
+    NSMutableDictionary *fillImage=[plainImage mutableCopy]; fillImage[@"fit"]=@"fill";
+    creation[@"configuration"]=[[NSJSONSerialization dataWithJSONObject:fillImage options:0 error:nil] base64EncodedStringWithOptions:0];
+    [provider acquireWithId:ident request:FSCreateRequest(creation,@[image]) reply:^(id remote,NSError *error){}];
+    __block NSDictionary *filled=nil;
+    [provider snapshotWithId:ident reply:^(id snapshot,NSError *error){filled=FSInspectSnapshot(snapshot);}];
+    [provider invalidateWithId:ident reply:^(NSError *error){}];
+    NSMutableDictionary *fittedImage=[plainImage mutableCopy]; fittedImage[@"fit"]=@"fit";
+    creation[@"configuration"]=[[NSJSONSerialization dataWithJSONObject:fittedImage options:0 error:nil] base64EncodedStringWithOptions:0];
+    [provider acquireWithId:ident request:FSCreateRequest(creation,@[image]) reply:^(id remote,NSError *error){}];
+    __block NSDictionary *fitted=nil;
+    [provider snapshotWithId:ident reply:^(id snapshot,NSError *error){fitted=FSInspectSnapshot(snapshot);}];
+    NSArray *fillOrigin=[filled[@"origin"] isKindOfClass:NSArray.class] ? filled[@"origin"] : @[];
+    NSArray *fitOrigin=[fitted[@"origin"] isKindOfClass:NSArray.class] ? fitted[@"origin"] : @[];
+    int fillSum=fillOrigin.count > 2 ? [fillOrigin[0] intValue] + [fillOrigin[1] intValue] + [fillOrigin[2] intValue] : 0;
+    int fitSum=fitOrigin.count > 2 ? [fitOrigin[0] intValue] + [fitOrigin[1] intValue] + [fitOrigin[2] intValue] : 0;
+    BOOL fitDiffers=filled && fitted && ![filled[@"checksum"] isEqual:fitted[@"checksum"]] && fitSum < 30 && fillSum > 80;
+    [provider invalidateWithId:ident reply:^(NSError *error){}];
+    BOOL dimOK=bright.count > 2 && dark.count > 2 && [bright[2] intValue] > 100 && [dark[2] intValue] < [bright[2] intValue];
+    BOOL playbackOK=tunedAcquired && inTrim && moved && rate && suspendedHoldsMode && resumedSameMode && lockedStill && idleUsesLock && desktopPlays && sourceUntouched && dimOK && fitDiffers;
+    results[@"playback"]=@{@"ok":@(playbackOK),@"acquired":@(tunedAcquired),@"inTrim":@(inTrim),@"moved":@(moved),@"rate":@(rate),@"times":times,@"suspendedHoldsMode":@(suspendedHoldsMode),@"resumedSameMode":@(resumedSameMode),@"lockedStill":@(lockedStill),@"idleUsesLock":@(idleUsesLock),@"desktopPlays":@(desktopPlays),@"sourceUntouched":@(sourceUntouched),@"dimming":@(dimOK),@"fit":@(fitDiffers),@"bright":bright ?: @[],@"dark":dark ?: @[],@"fillSum":@(fillSum),@"fitSum":@(fitSum)};
+    creation[@"destination"]=[@{@"size":@[@96,@64],@"scaleFactor":@1,@"colorSpace":creation[@"destination"][@"colorSpace"]} mutableCopy];
+    creation[@"presentationMode"]=@{@"default":@{}};
+    creation[@"activityState"]=@{@"active":@{}};
+    NSMutableDictionary *scenePlayback=[@{@"version":@1,@"kind":@"aurora",@"fit":@"fill",@"speed":@2,@"dimming":@0,@"modes":@{@"desktop":@"still",@"lockScreen":@"animated"}} mutableCopy];
+    NSMutableArray *sceneSums=NSMutableArray.new;
+    BOOL scenesDrawn=YES;
+    for (NSString *scene in @[@"aurora",@"cosmos",@"ocean",@"ember"]) {
+        scenePlayback[@"kind"]=scene;
+        creation[@"configuration"]=[[NSJSONSerialization dataWithJSONObject:scenePlayback options:0 error:nil] base64EncodedStringWithOptions:0];
+        __block BOOL sceneAcquired=NO;
+        [provider acquireWithId:ident request:FSCreateRequest(creation,@[]) reply:^(id remote,NSError *error){sceneAcquired=remote!=nil && !error;}];
+        FSSession *sceneSession=provider.sessions.allValues.firstObject;
+        __block NSDictionary *sceneSnap=nil;
+        [provider snapshotWithId:ident reply:^(id snapshot,NSError *error){sceneSnap=FSInspectSnapshot(snapshot);}];
+        NSArray *origin=[sceneSnap[@"origin"] isKindOfClass:NSArray.class] ? sceneSnap[@"origin"] : @[];
+        BOOL opaque=origin.count>3 && [origin[3] intValue]==255;
+        BOOL colored=origin.count>2 && [origin[0] intValue]+[origin[1] intValue]+[origin[2] intValue]>0;
+        if (!sceneAcquired || !opaque || !colored || sceneSession.renderer.scopedFileCount!=0 || !sceneSession.renderer.holdsStill) scenesDrawn=NO;
+        if (sceneSnap[@"checksum"]) [sceneSums addObject:sceneSnap[@"checksum"]];
+        [provider invalidateWithId:ident reply:^(NSError *error){}];
+    }
+    BOOL distinctScenes=sceneSums.count==4 && [NSSet setWithArray:sceneSums].count==4;
+    NSNumber *plainAurora=sceneSums.firstObject;
+    scenePlayback[@"kind"]=@"aurora";
+    scenePlayback[@"dimming"]=@0.8;
+    creation[@"configuration"]=[[NSJSONSerialization dataWithJSONObject:scenePlayback options:0 error:nil] base64EncodedStringWithOptions:0];
+    [provider acquireWithId:ident request:FSCreateRequest(creation,@[]) reply:^(id remote,NSError *error){}];
+    __block NSNumber *dimAurora=nil;
+    [provider snapshotWithId:ident reply:^(id snapshot,NSError *error){dimAurora=FSInspectSnapshot(snapshot)[@"checksum"];}];
+    [provider invalidateWithId:ident reply:^(NSError *error){}];
+    BOOL sceneDimmed=plainAurora && dimAurora && ![plainAurora isEqual:dimAurora];
+    scenePlayback[@"kind"]=@"aurora";
+    scenePlayback[@"dimming"]=@0;
+    scenePlayback[@"modes"]=@{@"desktop":@"animated",@"lockScreen":@"still"};
+    creation[@"configuration"]=[[NSJSONSerialization dataWithJSONObject:scenePlayback options:0 error:nil] base64EncodedStringWithOptions:0];
+    __block BOOL scenePlaying=NO;
+    [provider acquireWithId:ident request:FSCreateRequest(creation,@[]) reply:^(id remote,NSError *error){scenePlaying=remote!=nil && !error;}];
+    FSSession *playing=provider.sessions.allValues.firstObject;
+    __block NSNumber *sceneBefore=nil;
+    [provider snapshotWithId:ident reply:^(id snapshot,NSError *error){sceneBefore=FSInspectSnapshot(snapshot)[@"checksum"];}];
+    FSPump(0.55);
+    __block NSNumber *sceneAfter=nil;
+    [provider snapshotWithId:ident reply:^(id snapshot,NSError *error){sceneAfter=FSInspectSnapshot(snapshot)[@"checksum"];}];
+    BOOL sceneMotion=scenePlaying && playing.renderer.frameCount>2 && playing.renderer.playbackRate>1 && sceneBefore && ![sceneBefore isEqual:sceneAfter];
+    NSMutableDictionary *sceneUpdate=[creation mutableCopy];
+    [sceneUpdate removeObjectForKey:@"configuration"]; [sceneUpdate removeObjectForKey:@"isPreview"];
+    sceneUpdate[@"activityState"]=@{@"suspended":@{}};
+    [provider updateWithId:ident request:FSBox(@"WallpaperUpdateRequestXPC",@"WallpaperUpdateRequest",sceneUpdate) reply:^(NSError *error){}];
+    NSUInteger suspendedFrames=playing.renderer.frameCount;
+    __block NSNumber *heldScene=nil;
+    [provider snapshotWithId:ident reply:^(id snapshot,NSError *error){heldScene=FSInspectSnapshot(snapshot)[@"checksum"];}];
+    FSPump(0.3);
+    __block NSNumber *heldSceneAfter=nil;
+    [provider snapshotWithId:ident reply:^(id snapshot,NSError *error){heldSceneAfter=FSInspectSnapshot(snapshot)[@"checksum"];}];
+    BOOL sceneSuspended=!playing.renderer.holdsStill && playing.renderer.playbackRate==0 && playing.renderer.frameCount==suspendedFrames && [heldScene isEqual:heldSceneAfter];
+    sceneUpdate[@"activityState"]=@{@"active":@{}};
+    [provider updateWithId:ident request:FSBox(@"WallpaperUpdateRequestXPC",@"WallpaperUpdateRequest",sceneUpdate) reply:^(NSError *error){}];
+    FSPump(0.35);
+    BOOL sceneResumed=!playing.renderer.holdsStill && playing.renderer.playbackRate>1 && playing.renderer.frameCount>suspendedFrames;
+    sceneUpdate[@"presentationMode"]=@{@"locked":@{}};
+    [provider updateWithId:ident request:FSBox(@"WallpaperUpdateRequestXPC",@"WallpaperUpdateRequest",sceneUpdate) reply:^(NSError *error){}];
+    NSUInteger lockFrames=playing.renderer.frameCount;
+    FSPump(0.3);
+    BOOL sceneLockStill=playing.renderer.holdsStill && playing.renderer.playbackRate==0 && playing.renderer.frameCount==lockFrames;
+    [provider invalidateWithId:ident reply:^(NSError *error){}];
+    BOOL sceneOK=scenesDrawn && distinctScenes && sceneDimmed && sceneMotion && sceneSuspended && sceneResumed && sceneLockStill;
+    results[@"scene"]=@{@"ok":@(sceneOK),@"drawn":@(scenesDrawn),@"distinct":@(distinctScenes),@"dimmed":@(sceneDimmed),@"motion":@(sceneMotion),@"suspended":@(sceneSuspended),@"resumed":@(sceneResumed),@"lockStill":@(sceneLockStill),@"frames":@(playing.renderer.frameCount)};
     NSURL *catalogRoot=[dir URLByAppendingPathComponent:@"library" isDirectory:YES];
     [[NSFileManager defaultManager] createDirectoryAtURL:[catalogRoot URLByAppendingPathComponent:@"Media"] withIntermediateDirectories:YES attributes:nil error:nil];
     NSURL *catalogFile=[catalogRoot URLByAppendingPathComponent:@"catalog.json"];
     NSDictionary *catalog=@{@"version":@1,@"items":@[
         @{@"id":@"escape",@"title":@"Escape",@"kind":@"video",@"file":@"Media/../secret.mov",@"fit":@"fill"},
-        @{@"id":@"clip",@"title":@"Clip",@"kind":@"video",@"file":@"Media/clip.mov",@"fit":@"fill"},
-        @{@"id":@"scene",@"title":@"Scene",@"kind":@"aurora",@"file":@"Media/scene.mov",@"fit":@"fill"}
+        @{@"id":@"plain",@"title":@"Plain",@"kind":@"image",@"file":@"Media/plain.png",@"fit":@"fill"},
+        @{@"id":@"clip",@"title":@"Clip",@"kind":@"video",@"file":@"Media/clip.mov",@"fit":@"fit",@"speed":@1.5,@"dimming":@0.25,@"trimStart":@0.25,@"trimEnd":@0.75,@"still":@0.5,@"desktop":@"still",@"lockScreen":@"animated"},
+        @{@"id":@"scene",@"title":@"Scene",@"kind":@"aurora",@"file":@"Media/scene.mov",@"fit":@"fill"},
+        @{@"id":@"plugin",@"title":@"Plugin",@"kind":@"plugin",@"file":@"Media/plugin.mov",@"fit":@"fill"}
     ]};
     NSData *catalogData=[NSJSONSerialization dataWithJSONObject:catalog options:0 error:nil];
     [catalogData writeToURL:catalogFile atomically:YES];
     setenv("FLUA_CATALOG", catalogFile.path.UTF8String, 1);
     NSArray *listed=FSSettingsModel()[@"screenSaver"][@"groups"][0][@"items"];
-    NSDictionary *descriptor=listed.lastObject[@"choice"][@"id"][@"descriptor"];
-    NSData *configData=[[NSData alloc] initWithBase64EncodedString:descriptor[@"configuration"] options:0];
-    NSDictionary *config=[NSJSONSerialization JSONObjectWithData:configData options:0 error:nil];
-    BOOL listedClip=listed.count==4 && [listed.lastObject[@"localizedName"] isEqual:@"Clip"] && [descriptor[@"files"] count]==1
+    NSDictionary *clipItem=listed.count>4 ? listed[4] : @{};
+    NSDictionary *descriptor=clipItem[@"choice"][@"id"][@"descriptor"];
+    NSData *configData=[[NSData alloc] initWithBase64EncodedString:descriptor[@"configuration"] ?: @"" options:0];
+    NSDictionary *config=configData.length ? [NSJSONSerialization JSONObjectWithData:configData options:0 error:nil] : nil;
+    NSDictionary *sceneItem=listed.count>5 ? listed[5] : @{};
+    NSDictionary *sceneDescriptor=sceneItem[@"choice"][@"id"][@"descriptor"];
+    NSData *sceneData=[[NSData alloc] initWithBase64EncodedString:sceneDescriptor[@"configuration"] ?: @"" options:0];
+    NSDictionary *listedSceneConfig=sceneData.length ? [NSJSONSerialization JSONObjectWithData:sceneData options:0 error:nil] : nil;
+    NSDictionary *plainConfig=nil;
+    if (listed.count > 3) {
+        NSData *plainData=[[NSData alloc] initWithBase64EncodedString:listed[3][@"choice"][@"id"][@"descriptor"][@"configuration"] ?: @"" options:0];
+        plainConfig=plainData.length ? [NSJSONSerialization JSONObjectWithData:plainData options:0 error:nil] : nil;
+    }
+    NSArray *trim=[config[@"trim"] isKindOfClass:NSArray.class] ? config[@"trim"] : nil;
+    BOOL listedScene=[sceneItem[@"localizedName"] isEqual:@"Scene"] && [sceneDescriptor[@"files"] count]==0
+        && [listedSceneConfig[@"kind"] isEqual:@"aurora"] && listedSceneConfig[@"fileIndex"]==nil
+        && [listedSceneConfig[@"still"] doubleValue]==7 && [listedSceneConfig[@"modes"][@"desktop"] isEqual:@"animated"]
+        && [sceneItem[@"contentBadge"][@"video"] isKindOfClass:NSDictionary.class];
+    BOOL listedClip=listed.count==6 && [clipItem[@"localizedName"] isEqual:@"Clip"] && [descriptor[@"files"] count]==1 && listedScene
         && [config[@"kind"] isEqual:@"video"] && [config[@"fileIndex"] integerValue]==0 && ![config[@"source"] isEqual:@"bundle"]
+        && fabs([config[@"speed"] doubleValue] - 1.5) < 0.001 && fabs([config[@"dimming"] doubleValue] - 0.25) < 0.001
+        && [config[@"fit"] isEqual:@"fit"] && trim.count == 2 && [trim[0] doubleValue] == 0.25 && [trim[1] doubleValue] == 0.75
+        && [config[@"still"] doubleValue] == 0.5 && [config[@"modes"][@"desktop"] isEqual:@"still"] && [config[@"modes"][@"lockScreen"] isEqual:@"animated"]
+        && [plainConfig[@"speed"] doubleValue] == 1 && [plainConfig[@"dimming"] doubleValue] == 0 && plainConfig[@"trim"] == nil
+        && [plainConfig[@"modes"][@"desktop"] isEqual:@"animated"] && [plainConfig[@"modes"][@"lockScreen"] isEqual:@"animated"]
         && [listed[1][@"contentBadge"][@"none"] isKindOfClass:NSDictionary.class]
         && [listed[2][@"contentBadge"][@"video"] isKindOfClass:NSDictionary.class]
-        && [listed.lastObject[@"contentBadge"][@"video"] isKindOfClass:NSDictionary.class];
+        && [clipItem[@"contentBadge"][@"video"] isKindOfClass:NSDictionary.class];
     NSMutableDictionary *foreign=[catalog mutableCopy];
     foreign[@"root"]=@"/tmp/not-the-library";
     [[NSJSONSerialization dataWithJSONObject:foreign options:0 error:nil] writeToURL:catalogFile atomically:YES];
@@ -663,6 +1012,6 @@ int main(int argc,const char **argv) { @autoreleasepool {
     results[@"systemActivationPerformed"]=@NO;
     results[@"sandboxAuthorizationVerified"]=@NO;
     NSData *json=[NSJSONSerialization dataWithJSONObject:results options:NSJSONWritingPrettyPrinted error:nil];fwrite(json.bytes,1,json.length,stdout);puts("");
-    return [results[@"image"][@"ok"] boolValue] && [results[@"video"][@"ok"] boolValue] && [results[@"catalog"][@"ok"] boolValue] ? 0:2;
+    return [results[@"image"][@"ok"] boolValue] && [results[@"video"][@"ok"] boolValue] && [results[@"playback"][@"ok"] boolValue] && [results[@"scene"][@"ok"] boolValue] && [results[@"catalog"][@"ok"] boolValue] ? 0:2;
 } }
 #endif

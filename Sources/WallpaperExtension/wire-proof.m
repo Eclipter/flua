@@ -1,6 +1,7 @@
 #import "Provider.h"
 #import <CoreGraphics/CoreGraphics.h>
 #import <dlfcn.h>
+#import <objc/message.h>
 #import <objc/runtime.h>
 
 @protocol FSWireProxy
@@ -38,6 +39,40 @@ static id Box(NSString *name, NSString *key, id value) {
     return [[NSClassFromString(name) alloc] initWithCoder:coder];
 }
 
+@interface FSCatalogHost : NSObject
+@property BOOL expecting;
+@property NSURL *catalogURL;
+@property BOOL refreshed;
+@property NSString *expectedTitle;
+@property NSString *failure;
+@property dispatch_semaphore_t pending;
+@end
+@implementation FSCatalogHost
+- (void)requestReadOnlyAccessTo:(NSURL *)url reply:(void (^)(id, NSError *))reply {
+    if (!self.expecting || ![url.path isEqualToString:self.catalogURL.path]) {
+        reply(nil, [NSError errorWithDomain:@"org.flua.WallpaperPrototype" code:2 userInfo:@{NSLocalizedDescriptionKey : @"Unexpected catalog access"}]);
+        return;
+    }
+    NSURL *media = [self.catalogURL.URLByDeletingLastPathComponent URLByAppendingPathComponent:@"Media" isDirectory:YES];
+    [[NSFileManager defaultManager] createDirectoryAtURL:media withIntermediateDirectories:YES attributes:nil error:nil];
+    NSDictionary *catalog = @{@"version" : @1, @"items" : @[ @{@"id" : @"clip", @"title" : @"Clip", @"kind" : @"video", @"file" : @"Media/clip.mov"} ]};
+    [[NSJSONSerialization dataWithJSONObject:catalog options:0 error:nil] writeToURL:self.catalogURL atomically:YES];
+    id wrapper = ((id (*)(id, SEL, id, BOOL))objc_msgSend)([NSClassFromString(@"NSSecurityScopedURLWrapper") alloc], NSSelectorFromString(@"initWithURL:readonly:"), self.catalogURL, YES);
+    reply(wrapper ?: self.catalogURL, nil);
+}
+- (void)updateSettingsViewModels:(id)models reply:(void (^)(NSError *))reply {
+    NSArray *items = FSInspectSettings(models)[@"screenSaver"][@"groups"][0][@"items"];
+    NSDictionary *clip = items.count >= 4 ? items[3] : nil;
+    self.refreshed = [clip[@"localizedName"] isEqual:self.expectedTitle ?: @"Clip"] &&
+                     [clip[@"contentBadge"][@"video"] isKindOfClass:NSDictionary.class] &&
+                     [clip[@"choice"][@"id"][@"descriptor"][@"files"] count] == 1;
+    if (!self.refreshed)
+        self.failure = @"Catalog refresh omitted the library video";
+    if (self.pending)
+        dispatch_semaphore_signal(self.pending);
+    reply(nil);
+}
+@end
 @interface Listener : NSObject <NSXPCListenerDelegate>
 @end
 @implementation Listener
@@ -69,6 +104,11 @@ int main(void) {
         Protocol *protocol = objc_getProtocol("WallpaperExtensionKit.WallpaperExtensionXPCProtocol");
         client.remoteObjectInterface = [NSXPCInterface interfaceWithProtocol:protocol];
         FSConfigureInterface(client.remoteObjectInterface);
+        FSCatalogHost *catalogHost = FSCatalogHost.new;
+        Protocol *proxyProtocol = objc_getProtocol("WallpaperExtensionKit.WallpaperExtensionProxyXPCProtocol");
+        client.exportedInterface = [NSXPCInterface interfaceWithProtocol:proxyProtocol];
+        FSConfigureHostInterface(client.exportedInterface);
+        client.exportedObject = catalogHost;
         [client resume];
 
         CGColorSpaceRef colorSpace = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
@@ -181,9 +221,33 @@ int main(void) {
                                     }];
             complete = Wait(pending);
         }
+        BOOL catalogRefresh = NO, atomicRefresh = YES;
+        if (complete && downloaded) {
+            NSURL *root = [NSURL fileURLWithPath:[NSTemporaryDirectory() stringByAppendingPathComponent:[[NSUUID UUID] UUIDString]] isDirectory:YES];
+            [[NSFileManager defaultManager] createDirectoryAtURL:root withIntermediateDirectories:YES attributes:nil error:nil];
+            catalogHost.catalogURL = [root URLByAppendingPathComponent:@"catalog.json"];
+            catalogHost.expecting = YES;
+            catalogHost.pending = dispatch_semaphore_create(0);
+            setenv("FLUA_CATALOG", catalogHost.catalogURL.path.UTF8String, 1);
+            [proxy provideSettingsViewModelsWithContentTypes:nil reply:^(id settings, NSError *error) {}];
+            catalogRefresh = Wait(catalogHost.pending) && catalogHost.refreshed;
+            if (!catalogRefresh && failure.length == 0)
+                failure = catalogHost.failure ?: @"Catalog refresh timed out";
+            for (NSString *title in @[@"Updated clip", @"Updated again"]) {
+                catalogHost.expectedTitle = title;
+                catalogHost.refreshed = NO;
+                catalogHost.pending = dispatch_semaphore_create(0);
+                NSDictionary *edited = @{@"version":@1, @"items":@[@{@"id":@"clip", @"title":title, @"kind":@"video", @"file":@"Media/clip.mov"}]};
+                [[NSJSONSerialization dataWithJSONObject:edited options:0 error:nil] writeToURL:catalogHost.catalogURL atomically:YES];
+                atomicRefresh = Wait(catalogHost.pending) && catalogHost.refreshed && atomicRefresh;
+            }
+            if (!atomicRefresh && failure.length == 0) failure = @"Atomic catalog replacement was not refreshed";
+            unsetenv("FLUA_CATALOG");
+            [[NSFileManager defaultManager] removeItemAtURL:root error:nil];
+        }
         [client invalidate];
         [listener invalidate];
-        BOOL ok = complete && acquired && updated && snapshotted && catalog && invalidated && downloaded;
+        BOOL ok = complete && acquired && updated && snapshotted && catalog && invalidated && downloaded && catalogRefresh && atomicRefresh;
         if (!complete && failure.length == 0)
             failure = @"Timed out";
         NSDictionary *result = @{
@@ -193,6 +257,8 @@ int main(void) {
             @"snapshotSurfaceRoundtrip" : @(snapshotted),
             @"settingsCatalogRoundtrip" : @(catalog),
             @"downloadStatusRoundtrip" : @(downloaded),
+            @"catalogRefresh" : @(catalogRefresh),
+            @"atomicCatalogRefresh" : @(atomicRefresh),
             @"invalidateRoundtrip" : @(invalidated),
             @"failure" : failure,
             @"systemActivationPerformed" : @NO

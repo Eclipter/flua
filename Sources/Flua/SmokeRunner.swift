@@ -46,7 +46,7 @@ enum SmokeRunner {
         park(settings)
         settings.orderBack(nil)
         await pause(0.4)
-        missing += missingNames("Flua Settings Audit", ["Blocked tags", "Block", "Unblock test"])
+        missing += missingNames("Flua Settings Audit", ["Accent color", "Blocked tags", "Block", "Unblock test"])
         let report: [String: Any] = ["passed": missing.isEmpty, "missing": missing]
         if let data = try? JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys]) {
             try? data.write(to: destination)
@@ -405,6 +405,26 @@ enum SmokeRunner {
             settings.orderFront(nil)
             await pause(0.3)
             captureView(settings, to: out.appendingPathComponent("Flua-settings.png"))
+            if let mainWindow = NSApp.windows.first(where: { $0.title == "Flua" }) {
+                captureView(mainWindow, to: out.appendingPathComponent("Flua-library-system.png"))
+            }
+            results["systemAccentDefault"] = library.state.accentColor == nil && library.accent == AppAccent.system.color && library.accentOverride == nil
+            library.state.accentColor = AppAccent.purple.rawValue
+            library.save()
+            let savedAccent = try library.disk.load().accentColor
+            results["accentSelection"] = savedAccent == "Purple" && library.accent == AppAccent.purple.color && library.accentOverride == AppAccent.purple.color
+            await pause(0.3)
+            captureView(settings, to: out.appendingPathComponent("Flua-settings-purple.png"))
+            if let mainWindow = NSApp.windows.first(where: { $0.title == "Flua" }) {
+                captureView(mainWindow, to: out.appendingPathComponent("Flua-library-purple.png"))
+            }
+            library.state.accentColor = AppAccent.system.rawValue
+            results["explicitSystemAccent"] = library.accentOverride == nil
+            library.state.accentColor = "Unknown future color"
+            results["unknownAccentFallback"] = library.accent == AppAccent.system.color && library.accentOverride == nil
+            library.state.accentColor = nil
+            library.save()
+            results["systemAccentReset"] = try library.disk.load().accentColor == nil
             settings.close()
             library.unblockTag("example")
             library.selection = "aurora"
@@ -423,7 +443,7 @@ enum SmokeRunner {
                 }
             }
             results["libraryRoundTrip"] = try library.disk.load().wallpapers == library.state.wallpapers
-            let required = ["importFacts", "rotatedFacts", "missingFacts", "legacyBackfill", "staleEditPreservesFacts", "unknownColorBackfill", "unknownColorRoundTrip", "blockedDiscover", "clickableTag", "combinedBrowsing", "clearFiltersPreservesBlockedTags", "clearFilters", "imageImport", "videoImport", "videoReady", "videoPlaying", "videoLooped", "videoPaused", "videoResumed", "liveAdjustmentPreservesTime", "liveAdjustmentSpeed", "stillHeld", "stillIgnoresResume", "stillPreservesSource", "sceneStillRetained", "desktopStill", "desktopStillSurvivesPause", "desktopStillPersisted", "desktopStillPreservesSource", "render_image", "render_aurora", "render_cosmos", "render_ocean", "render_ember", "desktopWindowVisible", "desktopIgnoresMouse", "desktopCleanup", "systemWallpaperPreserved", "libraryApply", "playlistStart", "playlistNext", "libraryStop", "libraryRoundTrip", "discoverWindow", "windowSnapshot", "videoInformation", "trimmedPlayback", "trimmedExport", "thumbnailExport", "rejectInvalidTrim", "preserveSourceOnExport", "packageRoundTrip", "editorPersistence", "editorWindow", "audioExport", "muteExport"]
+            let required = ["explicitSystemAccent", "systemAccentDefault", "accentSelection", "unknownAccentFallback", "systemAccentReset", "importFacts", "rotatedFacts", "missingFacts", "legacyBackfill", "staleEditPreservesFacts", "unknownColorBackfill", "unknownColorRoundTrip", "blockedDiscover", "clickableTag", "combinedBrowsing", "clearFiltersPreservesBlockedTags", "clearFilters", "imageImport", "videoImport", "videoReady", "videoPlaying", "videoLooped", "videoPaused", "videoResumed", "liveAdjustmentPreservesTime", "liveAdjustmentSpeed", "stillHeld", "stillIgnoresResume", "stillPreservesSource", "sceneStillRetained", "desktopStill", "desktopStillSurvivesPause", "desktopStillPersisted", "desktopStillPreservesSource", "render_image", "render_aurora", "render_cosmos", "render_ocean", "render_ember", "desktopWindowVisible", "desktopIgnoresMouse", "desktopCleanup", "systemWallpaperPreserved", "libraryApply", "playlistStart", "playlistNext", "libraryStop", "libraryRoundTrip", "discoverWindow", "windowSnapshot", "videoInformation", "trimmedPlayback", "trimmedExport", "thumbnailExport", "rejectInvalidTrim", "preserveSourceOnExport", "packageRoundTrip", "editorPersistence", "editorWindow", "audioExport", "muteExport"]
             for key in required where results[key] as? Bool != true { failures.append(key) }
         } catch { failures.append(String(reflecting: error)) }
         results["failures"] = failures

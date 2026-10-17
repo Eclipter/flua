@@ -4,13 +4,23 @@ A free native live wallpaper app for Apple Silicon Macs running macOS 15 or late
 
 ## Use it
 
-Open `Flua.app` and use **Discover** for local featured shelves or **Browse** to filter the full collection. Choose a backdrop and click **Play Backdrop**. Mirrored mode plays it across every display; Per Display mode lets each display use a different choice. Use **Create** to import a video straight into the editor, or **Import** for videos, images, video manifest folders, direct manifests, `.zip`, and `.bdpkg` archives. Interactive package runtimes are still unsupported. Imported files are copied into Flua’s library; your originals stay where they are.
+Open `Flua.app` and use **Discover** for local featured shelves or **Browse** to filter the full collection. Choose a wallpaper and click **Play Wallpaper**. Mirrored mode plays it across every display; Per Display mode lets each display use a different choice. Use **Create** to import a video straight into the editor, or **Import** for videos, images, video manifest folders, direct manifests, `.zip`, and `.bdpkg` archives. Interactive package runtimes are still unsupported. Imported files are copied into Flua’s library; your originals stay where they are.
 
-Use the inspector to adjust speed, dimming, volume, and image fit. Right-click a backdrop or use **Add to Playlist** to organize it. Create playlists with the **+** beside Playlists, then use **Playlist Options** for that playlist’s interval, shuffle mode, or duplication. Use the previous/next controls for navigation; right-click an item inside a playlist to move it earlier or later. Global rotation defaults, fullscreen pause, battery pause, Low Power Mode pause and login startup are in Settings. Text edits save when you press Return. Combine category, color, motion intensity, resolution and aspect filters in any library view; click inspector tags to open exact-tag results. The inspector shows source media facts and trimmed duration. Manage hidden tags in Settings → Blocked tags; this preserves files, playlists and playback assignments.
+Use the inspector to adjust speed, dimming, volume, and image fit. Right-click a wallpaper or use **Add to Playlist** to organize it. Create playlists with the **+** beside Playlists, then use **Playlist Options** for that playlist’s interval, shuffle mode, or duplication. Use the previous/next controls for navigation; right-click an item inside a playlist to move it earlier or later. Global rotation defaults, fullscreen pause, battery pause, Low Power Mode pause and login startup are in Settings. Text edits save when you press Return. Combine category, color, motion intensity, resolution and aspect filters in any library view; click inspector tags to open exact-tag results. The inspector shows source media facts and trimmed duration. Manage hidden tags in Settings → Blocked tags; this preserves files, playlists and playback assignments.
 
 The menu-bar icon provides pause/resume, next scene in each active playlist, stop, and quit. Closing the library window keeps wallpapers playing. **Stop** removes the selected desktop overlays. **Quit** removes every overlay and reveals your existing system wallpaper. Saved display assignments restore the next time Flua opens.
 
 Data lives in `~/Library/Application Support/Flua/`. The bundle identifier is `local.flua.desktop`. All library data and settings are stored locally; the app does not connect to a remote service. Native fullscreen detection uses the system window inventory; display sleep and session lock pause playback. Procedural scenes render at up to 24 fps with a bounded drawing surface; CPU use varies by scene and display.
+
+## Lock Screen wallpapers
+
+The **Apply to Lock Screen** button appears only on macOS 27, in the inspector and in Settings → Lock Screen.
+
+On macOS 27, import a video or select one of the four animated scenes, then click **Apply to Lock Screen** in the inspector. Settings → Lock Screen offers the same action for the selected item. Flua applies it directly to all displays and Spaces; no System Settings selection is needed, including for newly imported media. Keep `Flua.app` in a permanent folder.
+
+Lock the Mac with Control-Command-Q to see it move. The underlying native desktop shows a still frame; Flua's desktop overlays remain independent. Native playback continues after Flua quits. Applying briefly reloads the user's wallpaper service, requires no administrator password or login item, and saves the previous system store as `NativeWallpaperBackup.plist` inside the library. Unsupported store formats are rejected before changes.
+
+Keep the app and its library in place while a native choice is selected. To stop native playback, choose another wallpaper in System Settings. Click **Apply to Lock Screen** again after editing playback settings. Native choices do not follow Flua playlists or the saved per-display Lock Screen/link model. Imported images are not animated Lock Screen choices. Sleep/wake, actual idle/screen-saver transitions, multiple displays, HDR and other macOS versions remain unverified. This build uses private interfaces and is ad-hoc signed, without notarization.
 
 ## Video editing and portable scenes
 
@@ -32,10 +42,10 @@ Select an imported video and click **Edit and export video…**. Set the trim st
 | Speed, dimming, volume, fit/fill | Yes |
 | Sleep/lock/fullscreen/battery pause controls | Implemented; real sleep/lock/battery transitions not simulated in verification |
 | Menu bar and start at login | Implemented; login registration left to user, not enabled during tests |
-| Native animated Lock Screen provider | Experimental: test-video motion verified on the real Lock Screen on macOS 27.0.1. Flua writes a local image/video catalog; the provider and setup UI are not installed or connected |
+| Lock Screen wallpaper | macOS 27; apply local videos and the four scenes directly from Flua to all displays |
 | System-audio-reactive, Rive, or Metal scene editor | No |
 
-Flua renders desktop wallpapers in click-through windows. A separate experimental image/video provider uses private macOS wallpaper interfaces. Real-host selection, scoped media access, video looping and visible Lock Screen motion were verified on macOS 27.0.1. The prototype is not installed by Flua. A library save writes `catalog.json` for image and video files; setup controls and Lock Screen selection remain unfinished. See [feature status](docs/FEATURES.md) and the [provider documentation](experimental/WallpaperExtension/README.md).
+Flua renders desktop wallpapers in click-through windows. `make build` embeds a sandboxed provider using private macOS wallpaper interfaces. Its catalog contains local videos, images and the four built-in scenes. Lock Screen playback belongs to macOS; the desktop playlist, Stop and Pause controls manage Flua’s overlays. See [feature status](docs/FEATURES.md) and the [provider documentation](Sources/WallpaperExtension/README.md).
 
 ## Build and verify
 

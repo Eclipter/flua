@@ -1,14 +1,16 @@
 # Feature status
 
-Flua provides local desktop wallpapers, a media library and video export. The experimental native provider is built separately from the desktop application.
+Flua provides local desktop wallpapers, a media library and video export. The wallpaper provider is compiled separately and embedded in `Flua.app`.
 
 Remaining implementation work is tracked in [PLAN.md](PLAN.md). Community features and profiles are outside its scope.
 
 | Area | Support | Validation and limitations |
 |---|---|---|
+| Appearance | Settings → Appearance → Accent color: System (default) or the eight macOS accent colors | Saved with the local library; applies to accent highlights in the library, settings and video editor. Neutral controls, including segmented pickers, retain their native system styling. Existing libraries default to the macOS accent color |
+| Menu bar | Single sakura blossom with five filled petals separated by curved transparent gaps | Generated transparent PNG template adapts to the menu bar appearance. The library sidebar shows the same mark at 22 points, tinted with the accent color |
 | Video/image wallpapers | Local videos and images | Playback, looping, pause/resume and overlay cleanup covered by smoke tests |
-| Procedural wallpapers | Aurora, cosmos, ocean and ember | Four locally rendered scenes |
-| Displays | Mirrored or per-display desktop selection and restoration | Stable display UUIDs. The library stores a Lock Screen choice, Animated/Still mode and a link between the two surfaces. Desktop Still shows a retained frame for videos and procedural scenes, and the image itself for photos; there is no inspector control for mode, link or Lock Screen, and Lock Screen is not applied. Physical multi-display behavior remains unverified |
+| Procedural wallpapers | Aurora, cosmos, ocean and ember | Four locally rendered scenes. The wallpaper provider draws the same scenes from `catalog.json`; standalone tests cover motion, suspension and Lock Screen Still rendering |
+| Displays | Mirrored or per-display desktop selection and restoration | Stable display UUIDs. The library stores a Lock Screen choice, Animated/Still mode and a link between the two surfaces. Desktop Still shows a retained frame for videos and procedural scenes, and the image itself for photos; there is no inspector control for saved surface mode or linking, and the app does not apply the saved Lock Screen assignment. **Apply to Lock Screen** separately sets the selected item on all displays and Spaces. Physical multi-display behavior remains unverified |
 | Library | Discover shelves, combined filters, favorites, clickable tags, search, media facts and blocked tags | Model and isolated smoke tests cover category/color/motion/resolution/aspect filters, exact tags, legacy decoding, measured import facts, rotated video, metadata backfill, package classifications and Discover blocking; no hosted catalog |
 | Playlists | Per-playlist timing and shuffle, duplication, previous history and reorder | Model scheduling/history and runtime tests |
 | Playback controls | Speed, volume, dimming and fit | Live changes and trimmed playback covered by smoke tests |
@@ -16,14 +18,14 @@ Remaining implementation work is tracked in [PLAN.md](PLAN.md). Community featur
 | Video editor | Create flow, preview, trim, thumbnail and metadata | Editor presentation and saved edits covered by smoke tests |
 | Video export | MP4, quality presets, optional audio, preview and PNG | Duration, audio tracks and thumbnail decoding checked by smoke tests |
 | Scene packages | Manifest folders, JSON, ZIP and `.bdpkg` imports; `.flua` folder exports | Roundtrip, path validation and malicious archive tests |
-| Native provider | Experimental image/video `.appex` | Entrypoint, standalone lifecycle, XPC serialization, download-status and rendering tests pass. A disposable sandbox-signed containing app passed real-host selection, context creation, snapshots and looping video on macOS 27.0.1 (26A434). A separate sandboxed probe verified host-wrapped access to external image/video fixtures, with playback independent of the exited containing application. See the [host-check result](../experimental/WallpaperExtension/README.md#real-host-feasibility-result). Flua writes `catalog.json` for image and video files; the provider lists those entries when a test or host harness supplies the file. The app does not register the provider or apply a Lock Screen choice. Retina/HDR remain unverified |
-| Lock Screen and screen saver | Video choices are marked for Lock Screen and screen-saver playback; still choices stay desktop-only | On macOS 27.0.1 the user confirmed Flua Motion moving on the Lock Screen after the video badge was selected. That run also acquired a desktop session which looped; the visible desktop stayed unchanged while `build/Flua.app` was drawing its own overlay. WallpaperAgent kept launching a renamed `.disabled` copy until it was restarted. Actual idle/screen-saver transitions, long-duration locking, recovery and other OS versions remain unverified |
+| Wallpaper provider | Sandboxed provider embedded in `Flua.app` by `make build` | Apply registers the containing app and extension on macOS 27. Videos, images and four scenes are published from the file-only catalog grant; media uses host wrappers. Library-only catalogs and atomic refresh pass standalone/XPC tests. Real-host scoped playback and catalog refresh passed on macOS 27.0.1 (26A434). Private APIs, ad-hoc signing; other OS versions remain unavailable |
+| Lock Screen and screen saver | Apply a selected video or scene directly from Flua with **Apply to Lock Screen** | Applies to all displays and Spaces with a still underlying desktop and animated Lock Screen. Uses a validated, backed-up store transaction and guarded WallpaperAgent reload, without opening Settings or relying on its cached catalog. A newly imported video passed the app-button, persisted-choice and real-host scoped-access checks. The user confirmed motion during a real lock/unlock with the direct method. Overlay Stop/Pause and playlists remain separate. Actual idle/screen-saver transitions, long-duration locking, recovery, Retina/HDR and physical multi-display behavior remain unverified |
 | Interactive scene runtimes | Unsupported | Imports report unsupported scene types |
 | Audio-reactive scenes | Unsupported | No system-audio capture or reactive renderer |
 | Shared catalog | Unsupported | Libraries and media are local |
 | Login startup | Opt-in | Requires user activation; not enabled during tests |
 
-Run `make test` for model and package validation, `make smoke` for application checks, and `make native-test` for the standalone provider. Application smoke results are written to `build/verification/`; provider results are written to `experimental/WallpaperExtension/Built/`. Standalone provider tests do not establish acceptance by the system wallpaper host.
+Run `make test` for model and package validation, `make smoke` for application checks, and `make wallpaper-test` for the standalone provider. Application smoke results are written to `build/verification/`; provider results are written to `Sources/WallpaperExtension/Built/`. Standalone provider tests do not establish acceptance by the system wallpaper host.
 
 ## Library filtering and metadata
 
