@@ -2,6 +2,16 @@
 
 A free native live wallpaper app for Apple Silicon Macs running macOS 27 or later. No account, subscription, watermark, or media-count limit. The source is included under the MIT license.
 
+## Install
+
+Install the latest release directly to `/Applications`:
+
+```sh
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Eclipter/flua/main/install.sh)"
+```
+
+The script verifies Apple Silicon and macOS 27+, downloads `Flua.zip` from the latest GitHub release, installs `Flua.app` to `/Applications`, and clears the quarantine attribute.
+
 ## Use it
 
 Open `Flua.app` and use **Discover** for local featured shelves or **Browse** to filter the full collection. Choose a wallpaper and click **Play Wallpaper** (or the play button directly on the wallpaper card). Mirrored mode plays it across every display; Per Display mode lets each display use a different choice. Wallpapers play directly and natively through macOS via the embedded wallpaper provider. Use **Create** to import a video straight into the editor, or **Import** for videos, images, video manifest folders, direct manifests, `.zip`, and `.bdpkg` archives. Interactive package runtimes are still unsupported. Imported files are copied into Flua’s library; your originals stay where they are.

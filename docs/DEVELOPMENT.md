@@ -7,7 +7,7 @@ make build          # Flua.app with the wallpaper extension, ad-hoc signature
 make test           # model, library path, package security tests
 make smoke          # isolated end-to-end app tests, then exits
 make run            # open the app
-make release        # dist/Flua-macOS.zip
+make release        # dist/Flua.zip
 make wallpaper-test # isolated wallpaper extension tests, no OS activation
 ```
 
