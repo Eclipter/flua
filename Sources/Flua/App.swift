@@ -3,6 +3,7 @@ import AppKit
 import Combine
 
 final class ViewState: ObservableObject {
+    @Published var columnVisibility: NavigationSplitViewVisibility = .all
     @Published var transportHeight: CGFloat = 0
     @Published var creatingPlaylist = false
     @Published var playlistName = ""
@@ -71,6 +72,43 @@ struct FluaGlassTextFieldStyle: TextFieldStyle {
     }
 }
 
+struct ClearInitialFocus: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView { FocusClearView() }
+    func updateNSView(_ nsView: NSView, context: Context) {}
+}
+
+private final class FocusClearView: NSView {
+    private var closeObserver: Any?
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if let closeObserver {
+            NotificationCenter.default.removeObserver(closeObserver)
+            self.closeObserver = nil
+        }
+        guard let window = self.window else { return }
+        window.initialFirstResponder = self
+        DispatchQueue.main.async { [weak window] in
+            if !(window?.firstResponder is NSTextView) {
+                window?.makeFirstResponder(nil)
+            }
+        }
+        closeObserver = NotificationCenter.default.addObserver(
+            forName: NSWindow.willCloseNotification,
+            object: window,
+            queue: .main
+        ) { [weak window] _ in
+            window?.makeFirstResponder(nil)
+        }
+    }
+
+    deinit {
+        if let closeObserver {
+            NotificationCenter.default.removeObserver(closeObserver)
+        }
+    }
+}
+
 struct FluaSegmentedPicker<Value: Hashable>: View {
     @EnvironmentObject private var library: Library
     let title: String
@@ -83,7 +121,15 @@ struct FluaSegmentedPicker<Value: Hashable>: View {
         LabeledContent {
             HStack(spacing: 2) {
                 ForEach(choices, id: \.1) { label, value in
-                    Button { selection = value; focusedChoice = value } label: {
+                    let isTabTarget = (selection == value) || (!choices.contains(where: { $0.1 == selection }) && choices.first?.1 == value)
+                    Button {
+                        selection = value
+                        if NSApp.currentEvent?.type == .keyDown || NSApp.currentEvent?.type == .keyUp {
+                            focusedChoice = value
+                        } else {
+                            focusedChoice = nil
+                        }
+                    } label: {
                         Text(label)
                             .lineLimit(1)
                             .fixedSize(horizontal: true, vertical: false)
@@ -99,6 +145,7 @@ struct FluaSegmentedPicker<Value: Hashable>: View {
                     }
                     .buttonStyle(.plain)
                     .focused($focusedChoice, equals: value)
+                    .focusable(isTabTarget || focusedChoice == value)
                     .accessibilityLabel(title + ": " + label)
                     .accessibilityAddTraits(selection == value ? [.isSelected] : [])
                 }
@@ -179,7 +226,7 @@ extension View {
         buttonStyle(FluaGlassButtonStyle())
     }
     func fluaGlassMenu() -> some View {
-        menuStyle(.borderlessButton).buttonStyle(.borderless).toggleStyle(.checkbox)
+        menuStyle(.borderlessButton).buttonStyle(.borderless)
             .padding(.horizontal, 10).padding(.vertical, 6)
             .fluaGlass(clear: true, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
@@ -191,6 +238,9 @@ extension View {
     }
     func fluaGlassRow<Content: View>(@ViewBuilder content: () -> Content) -> some View {
         HStack(spacing: 8, content: content)
+    }
+    func fluaClearInitialFocus() -> some View {
+        background(ClearInitialFocus())
     }
     func fluaBackdrop(accent: Color) -> some View {
         background {
@@ -310,8 +360,22 @@ struct LibraryView: View {
     @StateObject private var ui = ViewState()
     @EnvironmentObject var library: Library
     var body: some View {
-        NavigationSplitView {
+        NavigationSplitView(columnVisibility: $ui.columnVisibility) {
             sidebar
+                .toolbar(removing: .sidebarToggle)
+                .toolbar {
+                    ToolbarItem(placement: ui.columnVisibility == .detailOnly ? .navigation : .automatic) {
+                        Button {
+                            withAnimation { ui.columnVisibility = ui.columnVisibility == .detailOnly ? .all : .detailOnly }
+                        } label: {
+                            Image(systemName: "sidebar.left")
+                        }
+                        .fluaGlassButton()
+                        .help(ui.columnVisibility == .detailOnly ? "Show Sidebar" : "Hide Sidebar")
+                        .accessibilityLabel(ui.columnVisibility == .detailOnly ? "Show Sidebar" : "Hide Sidebar")
+                    }
+                    .sharedBackgroundVisibility(.hidden)
+                }
         } detail: {
             GeometryReader { geometry in
                 ScrollView {
@@ -888,9 +952,6 @@ struct SettingsView: View {
                 Text("Wallpaper playback also pauses when the display sleeps or the session locks.").font(.caption).foregroundStyle(.secondary)
             }
             Section("Playlists") {
-                Picker("Change scene every", selection: $library.state.interval) {
-                    Text("30 seconds").tag(30.0); Text("1 minute").tag(60.0); Text("5 minutes").tag(300.0); Text("15 minutes").tag(900.0); Text("30 minutes").tag(1800.0); Text("1 hour").tag(3600.0); Text("Every day").tag(86400.0)
-                }.fluaMenuPicker()
                 Toggle("Shuffle playlists", isOn: $library.state.shuffle).tint(library.accentOverride)
             }
             Section("Blocked tags") {
@@ -943,12 +1004,12 @@ struct SettingsView: View {
             }
         }.formStyle(.grouped).scrollContentBackground(.hidden).padding(8)
             .fluaBackdrop(accent: library.accent)
+            .fluaClearInitialFocus()
             .toggleStyle(.switch)
             .buttonStyle(FluaGlassButtonStyle())
             .textFieldStyle(FluaGlassTextFieldStyle())
             .onChange(of: library.state.pauseOnFullscreen) { _, _ in library.settingChanged() }
             .onChange(of: library.state.pauseOnBattery) { _, _ in library.settingChanged() }
-            .onChange(of: library.state.interval) { _, _ in library.save() }
             .onChange(of: library.state.shuffle) { _, _ in library.save() }
     }
 }
