@@ -416,6 +416,7 @@ struct LibraryView: View {
                         Text("Every 5 minutes").tag(300.0)
                         Text("Every 15 minutes").tag(900.0)
                         Text("Every hour").tag(3600.0)
+                        Text("Every day").tag(86400.0)
                     }
                     Toggle("Shuffle", isOn: Binding(
                         get: { library.state.playlist(id)?.shuffle ?? library.state.shuffle },
@@ -882,7 +883,7 @@ struct SettingsView: View {
             }
             Section("Playlists") {
                 Picker("Change scene every", selection: $library.state.interval) {
-                    Text("30 seconds").tag(30.0); Text("1 minute").tag(60.0); Text("5 minutes").tag(300.0); Text("15 minutes").tag(900.0); Text("30 minutes").tag(1800.0); Text("1 hour").tag(3600.0)
+                    Text("30 seconds").tag(30.0); Text("1 minute").tag(60.0); Text("5 minutes").tag(300.0); Text("15 minutes").tag(900.0); Text("30 minutes").tag(1800.0); Text("1 hour").tag(3600.0); Text("Every day").tag(86400.0)
                 }.fluaMenuPicker()
                 Toggle("Shuffle playlists", isOn: $library.state.shuffle).tint(library.accentOverride)
             }
