@@ -165,6 +165,8 @@ struct LibraryState: Codable {
     var accentColor: String?
     var nativePlayback: [String: Bool] = [:]
     var blockedTags: [String] = []
+    var showInMenuBar: Bool?
+    var hideFromDock: Bool?
 
     init() {}
 
@@ -197,9 +199,22 @@ struct LibraryState: Codable {
         return connected.filter { selected.contains($0) }
     }
 
+    var showsMenuBar: Bool { showInMenuBar != false }
+    var hidesDockIcon: Bool { showsMenuBar && hideFromDock == true }
+
+    mutating func setShowsMenuBar(_ shown: Bool) {
+        showInMenuBar = shown ? nil : false
+        if !shown { hideFromDock = nil }
+    }
+
+    mutating func setHidesDockIcon(_ hidden: Bool) {
+        hideFromDock = showsMenuBar && hidden ? true : nil
+    }
+
     private enum CodingKeys: String, CodingKey {
         case wallpapers, playlists, displays, interval, shuffle, pauseOnBattery, pauseOnLowPower
         case pauseOnFullscreen, paused, displayMode, blockedTags, accentColor, nativePlayback
+        case showInMenuBar, hideFromDock
     }
 
     init(from decoder: Decoder) throws {
@@ -217,6 +232,9 @@ struct LibraryState: Codable {
         nativePlayback = try c.decodeIfPresent([String: Bool].self, forKey: .nativePlayback) ?? [:]
         accentColor = try c.decodeIfPresent(String.self, forKey: .accentColor)
         blockedTags = normalizedTags((try c.decodeIfPresent([String].self, forKey: .blockedTags) ?? []).joined(separator: ","))
+        showInMenuBar = try c.decodeIfPresent(Bool.self, forKey: .showInMenuBar)
+        hideFromDock = try c.decodeIfPresent(Bool.self, forKey: .hideFromDock)
+        if !showsMenuBar { hideFromDock = nil }
     }
     static var initial: LibraryState {
         var s = LibraryState()

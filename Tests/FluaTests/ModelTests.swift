@@ -76,6 +76,28 @@ import Foundation
         precondition(legacyAccent.accentColor == nil && legacyAccent.wallpapers == state.wallpapers)
         try disk.save(state)
         print("PASS: accent preference persists and missing preferences follow the system")
+        var presence = LibraryState.initial
+        precondition(presence.showsMenuBar && presence.hidesDockIcon == false)
+        let defaultJSON = try JSONSerialization.jsonObject(with: JSONEncoder().encode(presence)) as! [String: Any]
+        precondition(defaultJSON["showInMenuBar"] == nil && defaultJSON["hideFromDock"] == nil)
+        presence.setHidesDockIcon(true)
+        precondition(presence.hidesDockIcon)
+        let savedPresence = try JSONDecoder().decode(LibraryState.self, from: JSONEncoder().encode(presence))
+        precondition(savedPresence.hidesDockIcon && savedPresence.showsMenuBar && savedPresence.wallpapers == presence.wallpapers)
+        presence.setShowsMenuBar(false)
+        precondition(presence.showsMenuBar == false && presence.hidesDockIcon == false && presence.hideFromDock == nil)
+        presence.setHidesDockIcon(true)
+        precondition(presence.hidesDockIcon == false)
+        var inconsistent = try JSONSerialization.jsonObject(with: JSONEncoder().encode(LibraryState.initial)) as! [String: Any]
+        inconsistent["showInMenuBar"] = false
+        inconsistent["hideFromDock"] = true
+        let rejected = try JSONDecoder().decode(LibraryState.self, from: JSONSerialization.data(withJSONObject: inconsistent))
+        precondition(rejected.showsMenuBar == false && rejected.hidesDockIcon == false && rejected.hideFromDock == nil)
+        inconsistent.removeValue(forKey: "showInMenuBar")
+        inconsistent.removeValue(forKey: "hideFromDock")
+        let legacyPresence = try JSONDecoder().decode(LibraryState.self, from: JSONSerialization.data(withJSONObject: inconsistent))
+        precondition(legacyPresence.showsMenuBar && legacyPresence.hidesDockIcon == false)
+        print("PASS: dock hiding requires the menu bar icon and legacy libraries keep both defaults")
         precondition(resolvedDisplayMode(nil) == "perDisplay")
         precondition(initialDisplaySelection(mode: "perDisplay", displayIDs: ["display-A"]) == "display-A")
         precondition(initialDisplaySelection(mode: nil, displayIDs: ["display-A"]) == "display-A")

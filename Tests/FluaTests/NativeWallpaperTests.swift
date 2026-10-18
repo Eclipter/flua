@@ -7,6 +7,8 @@ import Foundation
             precondition(NativeWallpaper.agentPID(value) == nil, value)
         }
         precondition(!NativeWallpaper.available)
+        let plugins = NativeWallpaper.pluginPaths(in: "+    local.flua.desktop.wallpaper(0.1)\tUUID\t2026-10-17 17:34:16 +0000\t/tmp/Other.app/Contents/Extensions/FluaWallpaperExtension.appex\nnot a plugin\n")
+        precondition(plugins == [URL(fileURLWithPath: "/tmp/Other.app/Contents/Extensions/FluaWallpaperExtension.appex").resolvingSymlinksInPath().path])
         print("PASS: wallpaper-service PID parsing rejects missing, invalid and unsafe process IDs; the test process has no wallpaper extension")
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root.appendingPathComponent("Media"), withIntermediateDirectories: true)
@@ -60,6 +62,13 @@ import Foundation
             do { _ = try NativeWallpaperStore.stopping(displays: ["display"], provider: "local.flua.desktop.wallpaper", in: updated, baseline: baseline); preconditionFailure("Stopped without a usable baseline") }
             catch is NativeWallpaperError {}
         }
+        let reappliedWithoutBaseline = try NativeWallpaperStore.replacing(assignments, displays: ["display"], provider: "local.flua.desktop.wallpaper",
+            mirrored: true, in: updated, baseline: nil)
+        precondition(NativeWallpaperStore.matches(assignments, mirrored: true, in: reappliedWithoutBaseline))
+        let captureFresh = try NativeWallpaperStore.shouldCaptureBaseline(nil, provider: "local.flua.desktop.wallpaper", in: original)
+        let skipExisting = try NativeWallpaperStore.shouldCaptureBaseline(nil, provider: "local.flua.desktop.wallpaper", in: updated)
+        let refreshSaved = try NativeWallpaperStore.shouldCaptureBaseline(original, provider: "local.flua.desktop.wallpaper", in: updated)
+        precondition(captureFresh && !skipExisting && refreshSaved)
         let captured = try NativeWallpaperStore.stopping(displays: ["second"], provider: "local.flua.desktop.wallpaper", in: updated, baseline: original, captureBaseline: true)
         let recaptured = try NativeWallpaperStore.stopping(displays: ["display"], provider: "local.flua.desktop.wallpaper", in: updated, baseline: captured, captureBaseline: true)
         let repeatedStop = try NativeWallpaperStore.stopping(displays: ["display"], provider: "local.flua.desktop.wallpaper", in: updated, baseline: recaptured)

@@ -264,7 +264,7 @@ struct VideoEditorView: View {
                         Text("Start"); TextField("Start", value: editBinding(\.start, fallback: 0), format: .number.precision(.fractionLength(2))).frame(width: 75)
                         Text("End"); TextField("End", value: Binding(get: { model.draft.videoEdit?.end ?? info.duration }, set: { model.draft.videoEdit?.end = $0 }), format: .number.precision(.fractionLength(2))).frame(width: 75)
                         Spacer(); Text("Thumbnail \(String(format: "%.2f", model.draft.videoEdit?.thumbnail ?? 0)) s").foregroundStyle(.secondary)
-                    }.font(.caption).textFieldStyle(.roundedBorder)
+                    }.font(.caption).textFieldStyle(FluaGlassTextFieldStyle())
                 } else { ProgressView("Reading video…") }
                 Spacer(minLength: 0)
                 if let error = model.error { Text(error).font(.caption).foregroundStyle(.red).textSelection(.enabled) }
@@ -272,41 +272,50 @@ struct VideoEditorView: View {
                 if model.busy { HStack { ProgressView(value: model.exportProgress).tint(library.accentOverride); Button("Cancel export") { model.cancelExport() } } }
             }.padding(24).frame(minWidth: 580, maxWidth: .infinity)
             Divider()
-            VStack(alignment: .leading, spacing: 16) {
-                Text("Details").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-                TextField("Title", text: $model.draft.title)
-                TextField("Description", text: metadataBinding(\.details), axis: .vertical).lineLimit(3...5)
-                TextField("Category", text: metadataBinding(\.category))
-                Picker("Color", selection: classificationBinding(\.color)) {
-                    ForEach(LibraryChoices.colors, id: \.self) { Text($0).tag($0) }
-                }
-                Picker("Motion intensity", selection: classificationBinding(\.motion)) {
-                    ForEach(LibraryChoices.motions, id: \.self) { Text($0).tag($0) }
-                }
-                TextField("Tags, separated by commas", text: $model.draft.tags)
-                TextField("Credit title", text: metadataBinding(\.creditTitle))
-                TextField("Credit URL", text: metadataBinding(\.creditURL))
-                Divider()
-                Text("Export").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-                Picker("Quality", selection: editBinding(\.quality, fallback: "high")) { Text("Original resolution").tag("high"); Text("1080p").tag("1080"); Text("720p").tag("medium"); Text("Small, 480p").tag("small") }
-                Toggle("Include audio", isOn: editBinding(\.includeAudio, fallback: true)).tint(library.accentOverride).disabled(model.info?.hasAudio != true)
-                fluaGlassGroup {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Button("Export trimmed video…") { model.chooseExport("video") }.fluaGlassButton()
-                        Button("Export 5-second preview…") { model.chooseExport("preview") }.fluaGlassButton()
-                        Button("Export thumbnail…") { model.chooseExport("thumbnail") }.fluaGlassButton()
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    Text("Details").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                    TextField("Title", text: $model.draft.title)
+                    TextField("Description", text: metadataBinding(\.details), axis: .vertical).lineLimit(3...5)
+                    TextField("Category", text: metadataBinding(\.category))
+                    Picker("Color", selection: classificationBinding(\.color)) {
+                        ForEach(LibraryChoices.colors, id: \.self) { color in
+                            LibraryColorOption(color: color).tag(color)
+                        }
+                    }.fluaMenuPicker()
+                    Picker("Motion intensity", selection: classificationBinding(\.motion)) {
+                        ForEach(LibraryChoices.motions, id: \.self) { Text($0).tag($0) }
+                    }.fluaMenuPicker()
+                    TextField("Tags, separated by commas", text: $model.draft.tags)
+                    TextField("Credit title", text: metadataBinding(\.creditTitle))
+                    TextField("Credit URL", text: metadataBinding(\.creditURL))
+                    Divider()
+                    Text("Export").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                    Picker("Quality", selection: editBinding(\.quality, fallback: "high")) { Text("Original resolution").tag("high"); Text("1080p").tag("1080"); Text("720p").tag("medium"); Text("Small, 480p").tag("small") }.fluaMenuPicker()
+                    Toggle("Include audio", isOn: editBinding(\.includeAudio, fallback: true)).tint(library.accentOverride).disabled(model.info?.hasAudio != true)
+                    fluaGlassGroup {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Button("Export trimmed video…") { model.chooseExport("video") }.fluaGlassButton()
+                            Button("Export 5-second preview…") { model.chooseExport("preview") }.fluaGlassButton()
+                            Button("Export thumbnail…") { model.chooseExport("thumbnail") }.fluaGlassButton()
+                        }
                     }
-                }
-                Spacer()
-                fluaGlassGroup {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Button("Undo changes") { model.revert() }.fluaGlassButton()
-                        Button("Save to library") { model.save() }.fluaProminentButton().tint(library.accentOverride)
+                    Spacer()
+                    fluaGlassGroup {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Button("Undo changes") { model.revert() }.fluaGlassButton()
+                            Button("Save to library") { model.save() }.fluaProminentButton().tint(library.accentOverride)
+                        }
                     }
-                }
-                Text("Trim and thumbnail choices are saved without changing the source file. Export creates a new file.").font(.caption2).foregroundStyle(.secondary)
-            }.padding(24).frame(width: 304).textFieldStyle(.roundedBorder).disabled(model.busy || model.info == nil)
-        }.frame(minWidth: 980, minHeight: 650).background(Color(nsColor: .windowBackgroundColor))
+                    Text("Trim and thumbnail choices are saved without changing the source file. Export creates a new file.").font(.caption2).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }.padding(24).textFieldStyle(FluaGlassTextFieldStyle()).disabled(model.busy || model.info == nil)
+            }.frame(width: 352)
+                .background(.ultraThinMaterial)
+        }.frame(minWidth: 980, minHeight: 650).fluaBackdrop(accent: library.accent)
+            .toggleStyle(.switch)
+            .buttonStyle(FluaGlassButtonStyle())
+            .textFieldStyle(FluaGlassTextFieldStyle())
     }
 }
 

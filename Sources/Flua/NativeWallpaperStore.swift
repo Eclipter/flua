@@ -135,7 +135,8 @@ enum NativeWallpaperStore {
 
     static func replacing(_ assignments: [String: Assignment], displays: [String], provider: String,
                          mirrored: Bool, in data: Data, baseline: Data?) throws -> Data {
-        let restored = try stopping(displays: displays, provider: provider, in: data, baseline: baseline, mirrored: mirrored)
+        let restored = try stopping(displays: displays, provider: provider, in: data, baseline: baseline,
+                                    mirrored: mirrored, allowMissingBaseline: baseline == nil)
         guard !assignments.isEmpty else { return restored }
         return try applying(assignments, mirrored: mirrored, to: restored)
     }
@@ -168,7 +169,13 @@ enum NativeWallpaperStore {
         return true
     }
 
-    static func stopping(displays targets: [String], provider: String, in data: Data, baseline: Data?, captureBaseline: Bool = false, mirrored: Bool = false) throws -> Data {
+    static func shouldCaptureBaseline(_ baseline: Data?, provider: String, in data: Data) throws -> Bool {
+        guard baseline == nil else { return true }
+        return try !containsProvider(provider, in: data)
+    }
+
+    static func stopping(displays targets: [String], provider: String, in data: Data, baseline: Data?, captureBaseline: Bool = false,
+                         mirrored: Bool = false, allowMissingBaseline: Bool = false) throws -> Data {
         var store = try decode(data)
         let saved = try baseline.map(decode)
         func fallback(_ store: [String: Any]) throws -> [String: Any] {
@@ -196,6 +203,7 @@ enum NativeWallpaperStore {
                 guard let previous, let replacement = surface(key, in: previous), !owned(replacement),
                       let content = replacement["Content"] as? [String: Any],
                       let choices = content["Choices"] as? [[String: Any]], !choices.isEmpty else {
+                    if allowMissingBaseline && previous == nil { return current }
                     throw NativeWallpaperError("The previous system wallpaper is unavailable. Choose another wallpaper in System Settings, then apply Flua again to establish a restoration baseline.")
                 }
                 if result["Type"] as? String == "linked" {

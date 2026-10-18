@@ -1138,6 +1138,22 @@ int main(int argc,const char **argv) { @autoreleasepool {
         [provider invalidateWithId:ident reply:^(NSError *error){}];
     }
     BOOL distinctScenes=sceneSums.count==4 && [NSSet setWithArray:sceneSums].count==4;
+    creation[@"destination"][@"size"]=@[@3840,@2160];
+    scenePlayback[@"kind"]=@"aurora";
+    scenePlayback[@"modes"]=@{@"desktop":@"still",@"lockScreen":@"still"};
+    creation[@"configuration"]=[[NSJSONSerialization dataWithJSONObject:scenePlayback options:0 error:nil] base64EncodedStringWithOptions:0];
+    [provider acquireWithId:ident request:FSCreateRequest(creation,@[]) reply:^(id remote,NSError *error){}];
+    FSSession *fullScene=provider.sessions.allValues.firstObject;
+    __block NSDictionary *fullSceneSnap=nil;
+    [provider snapshotWithId:ident reply:^(id snapshot,NSError *error){fullSceneSnap=FSInspectSnapshot(snapshot);}];
+    NSArray *fullOrigin=[fullSceneSnap[@"origin"] isKindOfClass:NSArray.class] ? fullSceneSnap[@"origin"] : @[];
+    BOOL sceneFullFrame=fullScene && [fullSceneSnap[@"width"] integerValue]==3840 &&
+        [fullSceneSnap[@"height"] integerValue]==2160 && fullScene.root.frame.size.width==3840 &&
+        fullScene.root.frame.size.height==2160 && fullOrigin.count>3 && [fullOrigin[3] intValue]==255 &&
+        [fullOrigin[0] intValue]+[fullOrigin[1] intValue]+[fullOrigin[2] intValue]>0;
+    [provider invalidateWithId:ident reply:^(NSError *error){}];
+    creation[@"destination"][@"size"]=@[@96,@64];
+    scenePlayback[@"modes"]=@{@"desktop":@"still",@"lockScreen":@"animated"};
     NSNumber *plainAurora=sceneSums.firstObject;
     scenePlayback[@"kind"]=@"aurora";
     scenePlayback[@"dimming"]=@0.8;
@@ -1195,8 +1211,8 @@ int main(int argc,const char **argv) { @autoreleasepool {
     FSPump(0.3);
     BOOL sceneDesktopResumed=!playing.renderer.holdsStill && playing.renderer.playbackRate>1 && playing.renderer.frameCount>lockFrames;
     [provider invalidateWithId:ident reply:^(NSError *error){}];
-    BOOL sceneOK=scenesDrawn && distinctScenes && sceneDimmed && sceneMotion && sceneSuspended && sceneResumed && sceneLockStill && sceneIdleStill && sceneIdleResumeStill && sceneDesktopResumed;
-    results[@"scene"]=@{@"ok":@(sceneOK),@"drawn":@(scenesDrawn),@"distinct":@(distinctScenes),@"dimmed":@(sceneDimmed),@"motion":@(sceneMotion),@"suspended":@(sceneSuspended),@"resumed":@(sceneResumed),@"lockStill":@(sceneLockStill),@"idleStill":@(sceneIdleStill),@"idleResumeStill":@(sceneIdleResumeStill),@"desktopResumed":@(sceneDesktopResumed),@"frames":@(playing.renderer.frameCount)};
+    BOOL sceneOK=scenesDrawn && distinctScenes && sceneFullFrame && sceneDimmed && sceneMotion && sceneSuspended && sceneResumed && sceneLockStill && sceneIdleStill && sceneIdleResumeStill && sceneDesktopResumed;
+    results[@"scene"]=@{@"ok":@(sceneOK),@"drawn":@(scenesDrawn),@"distinct":@(distinctScenes),@"fullFrame":@(sceneFullFrame),@"dimmed":@(sceneDimmed),@"motion":@(sceneMotion),@"suspended":@(sceneSuspended),@"resumed":@(sceneResumed),@"lockStill":@(sceneLockStill),@"idleStill":@(sceneIdleStill),@"idleResumeStill":@(sceneIdleResumeStill),@"desktopResumed":@(sceneDesktopResumed),@"frames":@(playing.renderer.frameCount)};
     NSURL *catalogRoot=[dir URLByAppendingPathComponent:@"library" isDirectory:YES];
     [[NSFileManager defaultManager] createDirectoryAtURL:[catalogRoot URLByAppendingPathComponent:@"Media"] withIntermediateDirectories:YES attributes:nil error:nil];
     NSURL *catalogFile=[catalogRoot URLByAppendingPathComponent:@"catalog.json"];
