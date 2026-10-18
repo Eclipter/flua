@@ -9,6 +9,7 @@
 
 @interface FSMediaRenderer ()
 @property IOSurfaceRef surface;
+@property IOSurfaceRef backSurface;
 @property CVPixelBufferRef targetBuffer;
 @property CALayer *layer;
 @property CIContext *imageContext;
@@ -48,7 +49,9 @@ static double FSClamped(id value, double fallback, double lo, double hi) {
     if (!isfinite(number)) return fallback;
     return MIN(MAX(number, lo), hi);
 }
-@implementation FSMediaRenderer
+@implementation FSMediaRenderer {
+    CGContextRef _sceneCanvas;
+}
 - (instancetype)initWithWidth:(NSUInteger)width height:(NSUInteger)height configuration:(NSDictionary *)configuration
                  fileWrappers:(NSArray *)wrappers error:(NSError **)error {
     if (!(self = [super init])) return nil;
@@ -81,6 +84,7 @@ static double FSClamped(id value, double fallback, double lo, double hi) {
     _lockMode = [modes[@"lockScreen"] isEqual:@"still"] ? @"still" : @"animated";
     NSString *presentation = configuration[@"presentation"];
     _presentation = [presentation isEqual:@"locked"] || [presentation isEqual:@"idle"] ? presentation : @"default";
+    _kind = configuration[@"kind"] ?: @"gradient";
     _surface = IOSurfaceCreate((__bridge CFDictionaryRef)@{
         (__bridge NSString *)kIOSurfaceWidth:@(width), (__bridge NSString *)kIOSurfaceHeight:@(height),
         (__bridge NSString *)kIOSurfaceBytesPerElement:@4, (__bridge NSString *)kIOSurfacePixelFormat:@(kCVPixelFormatType_32BGRA)
@@ -93,7 +97,6 @@ static double FSClamped(id value, double fallback, double lo, double hi) {
     _layer = CALayer.layer;
     _layer.frame = CGRectMake(0,0,width,height);
     _layer.contents = (__bridge id)_surface;
-    _kind = configuration[@"kind"] ?: @"gradient";
     if (FSIsSceneKind(_kind) && ![configuration[@"still"] isKindOfClass:NSNumber.class]) _stillTime = 7;
     if ([_kind isEqual:@"gradient"]) {
         IOSurfaceLock(_surface,0,NULL);
@@ -337,25 +340,52 @@ static double FSClamped(id value, double fallback, double lo, double hi) {
     _sceneTime += delta * _speed;
     [self drawSceneAtTime:_sceneTime];
 }
-// shortcut: full destination resolution; cap the long edge near 1280 if a host surface makes drawing expensive.
 - (void)drawSceneAtTime:(double)time {
     size_t width = IOSurfaceGetWidth(_surface), height = IOSurfaceGetHeight(_surface);
     Class sceneClass = NSClassFromString(@"FSSceneFrame");
     if (!width || !height || !sceneClass) return;
-    IOSurfaceLock(_surface, 0, NULL);
-    CGColorSpaceRef space = CGColorSpaceCreateDeviceRGB();
-    CGContextRef dest = CGBitmapContextCreate(IOSurfaceGetBaseAddress(_surface), width, height, 8,
-        IOSurfaceGetBytesPerRow(_surface), space, kCGBitmapByteOrder32Little | kCGImageAlphaPremultipliedFirst);
-    if (dest) {
-        ((void (*)(id, SEL, id, double, double, CGContextRef, NSInteger, NSInteger))objc_msgSend)(
-            sceneClass, @selector(drawScene:time:dimming:context:width:height:),
-            _kind, time, _dimming, dest, (NSInteger)width, (NSInteger)height);
+    // Full-size in-place drawing tears and misses 24 fps on Retina; draw at the desktop cap, then copy onto an unpublished surface.
+    // shortcut: two surfaces; add a third if a host snapshot is still visible when its surface is reused.
+    double scale = MIN(1, 1280.0 / MAX((double)width, (double)height));
+    size_t canvasWidth = MAX(1, (size_t)ceil(width * scale));
+    size_t canvasHeight = MAX(1, (size_t)ceil(height * scale));
+    if (!_sceneCanvas || (size_t)CGBitmapContextGetWidth(_sceneCanvas) != canvasWidth || (size_t)CGBitmapContextGetHeight(_sceneCanvas) != canvasHeight) {
+        CGContextRelease(_sceneCanvas);
+        CGColorSpaceRef canvasSpace = CGColorSpaceCreateDeviceRGB();
+        _sceneCanvas = CGBitmapContextCreate(NULL, canvasWidth, canvasHeight, 8, 0, canvasSpace, (CGBitmapInfo)kCGImageAlphaPremultipliedLast);
+        CGColorSpaceRelease(canvasSpace);
     }
+    if (!_sceneCanvas) return;
+    ((void (*)(id, SEL, id, double, double, CGContextRef, NSInteger, NSInteger))objc_msgSend)(
+        sceneClass, @selector(drawScene:time:dimming:context:width:height:),
+        _kind, time, _dimming, _sceneCanvas, (NSInteger)canvasWidth, (NSInteger)canvasHeight);
+    if (!_backSurface) {
+        _backSurface = IOSurfaceCreate((__bridge CFDictionaryRef)@{
+            (__bridge NSString *)kIOSurfaceWidth:@(width), (__bridge NSString *)kIOSurfaceHeight:@(height),
+            (__bridge NSString *)kIOSurfaceBytesPerElement:@4, (__bridge NSString *)kIOSurfacePixelFormat:@(kCVPixelFormatType_32BGRA)
+        });
+        if (!_backSurface) return;
+    }
+    IOSurfaceRef frame = _backSurface;
+    IOSurfaceLock(frame, 0, NULL);
+    CGColorSpaceRef space = CGColorSpaceCreateDeviceRGB();
+    CGContextRef dest = CGBitmapContextCreate(IOSurfaceGetBaseAddress(frame), width, height, 8,
+        IOSurfaceGetBytesPerRow(frame), space, kCGBitmapByteOrder32Little | kCGImageAlphaPremultipliedFirst);
+    CGImageRef picture = CGBitmapContextCreateImage(_sceneCanvas);
+    BOOL drew = dest && picture;
+    if (drew) {
+        CGContextSetInterpolationQuality(dest, kCGInterpolationHigh);
+        CGContextDrawImage(dest, CGRectMake(0, 0, width, height), picture);
+    }
+    CGImageRelease(picture);
     CGContextRelease(dest);
     CGColorSpaceRelease(space);
-    IOSurfaceUnlock(_surface, 0, NULL);
+    IOSurfaceUnlock(frame, 0, NULL);
+    if (!drew) return;
+    _backSurface = _surface;
+    _surface = frame;
     [CATransaction begin]; [CATransaction setDisableActions:YES];
-    _layer.contents = nil; _layer.contents = (__bridge id)_surface;
+    _layer.contents = (__bridge id)_surface;
     [CATransaction commit]; [CATransaction flush];
     _frameCount++;
     if (_frameCount == 2 || _frameCount == 90)
@@ -376,5 +406,7 @@ static double FSClamped(id value, double fallback, double lo, double hi) {
     [self dispose];
     if (_targetBuffer) CVPixelBufferRelease(_targetBuffer);
     if (_surface) CFRelease(_surface);
+    if (_backSurface) CFRelease(_backSurface);
+    CGContextRelease(_sceneCanvas);
 }
 @end

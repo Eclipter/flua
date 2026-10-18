@@ -688,6 +688,27 @@ final class Library: ObservableObject {
             }
         }
     }
+    func setShowsMenuBar(_ shown: Bool) {
+        guard shown != state.showsMenuBar else { return }
+        state.setShowsMenuBar(shown)
+        save()
+        applyPresence()
+    }
+    func setHidesDockIcon(_ hidden: Bool) {
+        guard state.showsMenuBar, hidden != state.hidesDockIcon else { return }
+        state.setHidesDockIcon(hidden)
+        save()
+        applyPresence()
+    }
+    func applyPresence() {
+        let policy: NSApplication.ActivationPolicy = state.hidesDockIcon ? .accessory : .regular
+        guard NSApp.activationPolicy() != policy else { return }
+        // Accessory removes the Dock icon; the menu bar icon is what keeps Flua reachable.
+        let windows = NSApp.windows.filter { $0.isVisible && $0.level == .normal && !$0.ignoresMouseEvents }
+        NSApp.setActivationPolicy(policy)
+        if !windows.isEmpty { NSApp.activate(ignoringOtherApps: true) }
+        for window in windows { window.orderFront(nil) }
+    }
     func loginEnabled() -> Bool { SMAppService.mainApp.status == .enabled }
     func setLogin(_ enabled: Bool) {
         do {

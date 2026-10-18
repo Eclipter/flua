@@ -25,29 +25,181 @@ extension Library {
     }
 }
 
-extension View {
-    @ViewBuilder func fluaGlass(clear: Bool = false, in shape: some Shape) -> some View {
-        if #available(macOS 26, *) {
-            self.glassEffect(clear ? .clear : .regular, in: shape)
-        } else {
-            self.background(.ultraThinMaterial, in: shape)
+private struct FrostedSurface<S: Shape>: ViewModifier {
+    @Environment(\.colorScheme) private var scheme
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    let shape: S
+    let clear: Bool
+
+    func body(content: Content) -> some View {
+        content
+            .background {
+                if reduceTransparency {
+                    shape.fill(Color(nsColor: .windowBackgroundColor))
+                } else {
+                    shape.fill(.ultraThinMaterial)
+                        .overlay {
+                            shape.fill(scheme == .dark ? Color.black.opacity(clear ? 0.12 : 0.2) : Color.white.opacity(clear ? 0.12 : 0.3))
+                        }
+                }
+            }
+            .overlay {
+                shape.stroke(LinearGradient(colors: [.white.opacity(scheme == .dark ? 0.24 : 0.7), .white.opacity(0.06)], startPoint: .topLeading, endPoint: .bottomTrailing), lineWidth: 0.75)
+                    .allowsHitTesting(false)
+            }
+            .shadow(color: .black.opacity(scheme == .dark ? 0.16 : 0.06), radius: 12, y: 4)
+    }
+}
+
+struct FluaGlassButtonStyle: PrimitiveButtonStyle {
+    @Environment(\.isEnabled) private var enabled
+
+    func makeBody(configuration: Configuration) -> some View {
+        Button(configuration).buttonStyle(.borderless)
+            .foregroundStyle(configuration.role == .destructive ? Color.red : Color.primary)
+            .padding(.horizontal, 12).padding(.vertical, 7)
+            .fluaGlass(in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+            .opacity(enabled ? 1 : 0.45)
+    }
+}
+
+struct FluaGlassTextFieldStyle: TextFieldStyle {
+    func _body(configuration: TextField<Self._Label>) -> some View {
+        configuration.textFieldStyle(.plain).multilineTextAlignment(.leading)
+            .padding(.horizontal, 10).padding(.vertical, 7)
+            .fluaGlass(clear: true, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+}
+
+struct FluaSegmentedPicker<Value: Hashable>: View {
+    @EnvironmentObject private var library: Library
+    let title: String
+    @Binding var selection: Value
+    let choices: [(String, Value)]
+    var showsLabel = true
+    @FocusState private var focusedChoice: Value?
+
+    var body: some View {
+        LabeledContent {
+            HStack(spacing: 2) {
+                ForEach(choices, id: \.1) { label, value in
+                    Button { selection = value; focusedChoice = value } label: {
+                        Text(label)
+                            .lineLimit(1)
+                            .fixedSize(horizontal: true, vertical: false)
+                            .padding(.horizontal, 6).padding(.vertical, 5)
+                            .background {
+                                if selection == value {
+                                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                        .fill(.tint.opacity(0.15))
+                                        .fluaGlass(clear: true, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                                }
+                            }
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .focused($focusedChoice, equals: value)
+                    .accessibilityLabel(title + ": " + label)
+                    .accessibilityAddTraits(selection == value ? [.isSelected] : [])
+                }
+            }
+            .font(.system(size: 13))
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel(title)
+            .padding(3)
+            .fluaGlass(clear: true, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+            .onMoveCommand { direction in
+                guard let index = choices.firstIndex(where: { $0.1 == (focusedChoice ?? selection) }) else { return }
+                let next: Int
+                switch direction {
+                case .left: next = max(0, index - 1)
+                case .right: next = min(choices.count - 1, index + 1)
+                default: return
+                }
+                selection = choices[next].1
+                focusedChoice = selection
+            }
+        } label: {
+            if showsLabel { Text(title).fixedSize(horizontal: true, vertical: false) }
+        }.tint(library.accent)
+    }
+}
+
+struct LibraryColorOption: View {
+    let color: String
+
+    private var swatchColor: NSColor {
+        let color: Color
+        switch self.color {
+        case "Red": color = .red
+        case "Orange": color = .orange
+        case "Yellow": color = .yellow
+        case "Green": color = .green
+        case "Cyan": color = .cyan
+        case "Blue": color = .blue
+        case "Purple": color = .purple
+        case "Pink": color = .pink
+        default: color = .gray
+        }
+        return NSColor(color)
+    }
+
+    private var swatch: NSImage {
+        let nativeColor = swatchColor
+        return NSImage(size: NSSize(width: 14, height: 14), flipped: false) { rect in
+            nativeColor.setFill()
+            NSBezierPath(ovalIn: rect.insetBy(dx: 1, dy: 1)).fill()
+            return true
         }
     }
-    @ViewBuilder func fluaProminentButton() -> some View {
-        if #available(macOS 26, *) { self.buttonStyle(.glassProminent) }
-        else { self.buttonStyle(.borderedProminent) }
+
+    var body: some View {
+        Label {
+            Text(color)
+        } icon: {
+            Image(nsImage: swatch).renderingMode(.original)
+        }
     }
-    @ViewBuilder func fluaGlassButton() -> some View {
-        if #available(macOS 26, *) { self.buttonStyle(.glass).tint(.clear) }
-        else { self.buttonStyle(.bordered) }
+}
+
+extension View {
+    func fluaGlass(clear: Bool = false, in shape: some Shape) -> some View {
+        modifier(FrostedSurface(shape: shape, clear: clear))
     }
-    /// Groups nearby glass controls so they sample one backdrop.
-    @ViewBuilder func fluaGlassGroup<Content: View>(@ViewBuilder content: () -> Content) -> some View {
-        if #available(macOS 26, *) { GlassEffectContainer(spacing: 8) { content() } }
-        else { content() }
+    func fluaProminentButton() -> some View {
+        fluaGlassButton()
+            .overlay {
+                RoundedRectangle(cornerRadius: 9, style: .continuous)
+                    .fill(.tint.opacity(0.16))
+                    .overlay { RoundedRectangle(cornerRadius: 9, style: .continuous).strokeBorder(.tint.opacity(0.4), lineWidth: 1) }
+                    .allowsHitTesting(false)
+            }
     }
-    @ViewBuilder func fluaGlassRow<Content: View>(@ViewBuilder content: () -> Content) -> some View {
-        fluaGlassGroup { HStack(spacing: 8, content: content) }
+    func fluaGlassButton() -> some View {
+        buttonStyle(FluaGlassButtonStyle())
+    }
+    func fluaGlassMenu() -> some View {
+        menuStyle(.borderlessButton).buttonStyle(.borderless).toggleStyle(.checkbox)
+            .padding(.horizontal, 10).padding(.vertical, 6)
+            .fluaGlass(clear: true, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+    func fluaMenuPicker() -> some View {
+        pickerStyle(.menu).fluaGlassMenu()
+    }
+    func fluaGlassGroup<Content: View>(@ViewBuilder content: () -> Content) -> some View {
+        content()
+    }
+    func fluaGlassRow<Content: View>(@ViewBuilder content: () -> Content) -> some View {
+        HStack(spacing: 8, content: content)
+    }
+    func fluaBackdrop(accent: Color) -> some View {
+        background {
+            ZStack {
+                Color(nsColor: .windowBackgroundColor)
+                RadialGradient(colors: [accent.opacity(0.16), .clear], center: .topLeading, startRadius: 0, endRadius: 700)
+                RadialGradient(colors: [Color.orange.opacity(0.07), .clear], center: .bottomTrailing, startRadius: 0, endRadius: 600)
+            }.ignoresSafeArea()
+        }
     }
 }
 
@@ -83,8 +235,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
     func applicationWillFinishLaunching(_ notification: Notification) {
-        guard ProcessInfo.processInfo.arguments.contains("--accessibility-audit") else { return }
-        NSApp.setActivationPolicy(.accessory)
+        if ProcessInfo.processInfo.arguments.contains("--accessibility-audit") {
+            NSApp.setActivationPolicy(.accessory)
+            return
+        }
+        AppContext.library.applyPresence()
     }
     func applicationDidFinishLaunching(_ notification: Notification) {
         if ProcessInfo.processInfo.arguments.contains("--accessibility-audit") {
@@ -129,7 +284,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
         Settings { SettingsView().environmentObject(library).frame(width: 530) }
-        MenuBarExtra {
+        MenuBarExtra(isInserted: Binding(get: { library.state.showsMenuBar }, set: { library.setShowsMenuBar($0) })) {
             TrayView().environmentObject(library)
         } label: {
             Image(nsImage: MenuBarIcon.sakura).accessibilityLabel("Flua")
@@ -170,8 +325,9 @@ struct LibraryView: View {
                 }
                 .ignoresSafeArea(.container, edges: .top)
                 .overlay(alignment: .bottom) {
-                    transport
-                        .background(.bar)
+                    transport(compact: geometry.size.width < 650)
+                        .fluaGlass(in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                        .padding(12)
                         .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { ui.transportHeight = $0 }
                         .padding(.trailing, NSScroller.scrollerWidth(for: .regular, scrollerStyle: NSScroller.preferredScrollerStyle))
                 }
@@ -183,6 +339,10 @@ struct LibraryView: View {
         .toolbar(removing: .title)
         .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .fluaBackdrop(accent: library.accent)
+        .toggleStyle(.switch)
+        .buttonStyle(FluaGlassButtonStyle())
+        .textFieldStyle(FluaGlassTextFieldStyle())
         .overlay {
             if ui.dragOver {
                 RoundedRectangle(cornerRadius: 16).strokeBorder(library.accent, lineWidth: 2).padding(16)
@@ -216,7 +376,7 @@ struct LibraryView: View {
     }
     private var libraryContent: some View {
         VStack(alignment: .leading, spacing: 24) {
-            pageHeader(count: displayed.count)
+            pageHeader
             browseToolbar
             if displayed.isEmpty {
                 ContentUnavailableView("No Wallpapers Available", systemImage: "photo.on.rectangle.angled", description: Text("Import media or clear your search and filters. Hidden tags can be adjusted in Settings → Blocked tags."))
@@ -230,7 +390,7 @@ struct LibraryView: View {
     }
     private var discoverContent: some View {
         VStack(alignment: .leading, spacing: 32) {
-            pageHeader(count: nil)
+            pageHeader
             browseToolbar
             if library.eligible.isEmpty {
                 ContentUnavailableView("No Wallpapers Available", systemImage: "photo.on.rectangle.angled", description: Text("Clear filters or adjust Settings → Blocked tags to show hidden content."))
@@ -242,12 +402,9 @@ struct LibraryView: View {
             }
         }.padding(24)
     }
-    private func pageHeader(count: Int?) -> some View {
+    private var pageHeader: some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
             Text(library.sectionTitle).font(.system(size: 32, weight: .bold, design: .serif))
-            if let count {
-                Text("\(count)").font(.caption.monospacedDigit()).foregroundStyle(.secondary)
-            }
             Spacer()
             if library.section.hasPrefix("playlist:") {
                 let id = String(library.section.dropFirst(9))
@@ -264,7 +421,7 @@ struct LibraryView: View {
                         get: { library.state.playlist(id)?.shuffle ?? library.state.shuffle },
                         set: { library.updatePlaylist(id, shuffle: $0) }))
                     Button("Duplicate Playlist") { library.duplicatePlaylist(id) }
-                } label: { Label("Playlist Options", systemImage: "ellipsis.circle") }
+                } label: { Label("Playlist Options", systemImage: "ellipsis.circle") }.fluaGlassMenu()
             }
             fluaGlassRow {
                 if library.section.hasPrefix("playlist:") {
@@ -306,20 +463,20 @@ struct LibraryView: View {
     private var browseToolbar: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Picker("Playback type", selection: $library.filter.kind) {
-                    Text("All").tag("all"); Text("Animated").tag("animated"); Text("Still").tag("still")
-                }.pickerStyle(.segmented).frame(width: 240)
+                FluaSegmentedPicker(title: "Playback type", selection: $library.filter.kind,
+                    choices: [("All", "all"), ("Animated", "animated"), ("Still", "still")])
+                    .frame(width: 260)
                 Spacer()
                 if library.section == "browse" {
                     Picker("Sort By", selection: $library.browseSort) {
                         Text("Name").tag("name"); Text("Favorites First").tag("favorites")
-                    }.frame(width: 176)
+                    }.fluaMenuPicker().frame(width: 176)
                 }
             }
             ScrollView(.horizontal) {
                 HStack {
                     FilterMenu(title: "Category", choices: Array(Set(LibraryChoices.categories + library.state.wallpapers.filter { !library.state.isBlocked($0) }.map(\.category))).sorted(), selection: $library.filter.categories)
-                    FilterMenu(title: "Color", choices: LibraryChoices.colors, selection: $library.filter.colors)
+                    FilterMenu(title: "Color", choices: LibraryChoices.colors, selection: $library.filter.colors, showsColorSwatches: true)
                     FilterMenu(title: "Motion", choices: LibraryChoices.motions, selection: $library.filter.motions)
                     FilterMenu(title: "Resolution", choices: LibraryChoices.resolutions, selection: $library.filter.resolutions)
                     FilterMenu(title: "Aspect", choices: LibraryChoices.aspects, selection: $library.filter.aspects)
@@ -344,6 +501,8 @@ struct LibraryView: View {
                 }
             }
         }
+        .padding(16)
+        .fluaGlass(in: RoundedRectangle(cornerRadius: 16, style: .continuous))
     }
     private func wallpaperCard(_ w: Wallpaper) -> some View {
         WallpaperCard(wallpaper: w, selected: library.selection == w.id)
@@ -390,6 +549,8 @@ struct LibraryView: View {
             }
         }
         .listStyle(.sidebar)
+        .scrollContentBackground(.hidden)
+        .background(.ultraThinMaterial)
         .tint(library.accent)
         .safeAreaInset(edge: .top, spacing: 0) { sidebarHeader }
         .safeAreaInset(edge: .bottom, spacing: 0) { sidebarFooter }
@@ -414,7 +575,7 @@ struct LibraryView: View {
             }
             .padding(.horizontal, 8)
             .padding(.vertical, 8)
-            .background(Color(nsColor: .quaternarySystemFill), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .fluaGlass(in: RoundedRectangle(cornerRadius: 9, style: .continuous))
         }
         .padding(16)
     }
@@ -429,27 +590,31 @@ struct LibraryView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(16)
     }
-    private var transport: some View {
-        HStack(spacing: 16) {
-            Circle().fill(library.state.paused ? Color.orange : library.accent).frame(width: 8, height: 8)
-            Text(library.activity).font(.caption).foregroundStyle(.secondary).lineLimit(1)
-            Spacer()
-            Picker("Display Mode", selection: Binding(get: { library.playbackMode }, set: { library.setPlaybackMode($0) })) {
-                Text("Mirrored").tag("mirrored")
-                Text("Per Display").tag("perDisplay")
-            }.labelsHidden().pickerStyle(.segmented).frame(width: 176)
-            fluaGlassRow {
-                Button { library.advancePlaylists(force: true, backwards: true) } label: { Image(systemName: "backward.end.fill") }
-                    .accessibilityLabel("Previous in playlist").help("Previous in playlist").fluaGlassButton()
-                Button { library.advancePlaylists(force: true) } label: { Image(systemName: "forward.end.fill") }
-                    .accessibilityLabel("Next in playlist").help("Next in playlist").fluaGlassButton()
-                Button { library.togglePause() } label: { Image(systemName: library.state.paused ? "play.fill" : "pause.fill") }
-                    .accessibilityLabel("Pause or resume").help("Pause or resume").fluaGlassButton()
-                Button { library.stop() } label: { Image(systemName: "stop.fill") }
-                    .accessibilityLabel("Stop on selected displays").help("Stop on selected displays").fluaGlassButton()
+    private func transport(compact: Bool) -> some View {
+        let layout = compact ? AnyLayout(VStackLayout(alignment: .leading, spacing: 12)) : AnyLayout(HStackLayout(spacing: 16))
+        return layout {
+            HStack(spacing: 8) {
+                Circle().fill(library.state.paused ? Color.orange : library.accent).frame(width: 8, height: 8)
+                Text(library.activity).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                Spacer(minLength: 0)
+            }
+            HStack(spacing: 12) {
+                FluaSegmentedPicker(title: "Display Mode", selection: Binding(get: { library.playbackMode }, set: { library.setPlaybackMode($0) }),
+                    choices: [("Mirrored", "mirrored"), ("Per Display", "perDisplay")], showsLabel: false)
+                    .frame(width: 190)
+                fluaGlassRow {
+                    Button { library.advancePlaylists(force: true, backwards: true) } label: { Image(systemName: "backward.end.fill") }
+                        .accessibilityLabel("Previous in playlist").help("Previous in playlist").fluaGlassButton()
+                    Button { library.advancePlaylists(force: true) } label: { Image(systemName: "forward.end.fill") }
+                        .accessibilityLabel("Next in playlist").help("Next in playlist").fluaGlassButton()
+                    Button { library.togglePause() } label: { Image(systemName: library.state.paused ? "play.fill" : "pause.fill") }
+                        .accessibilityLabel("Pause or resume").help("Pause or resume").fluaGlassButton()
+                    Button { library.stop() } label: { Image(systemName: "stop.fill") }
+                        .accessibilityLabel("Stop on selected displays").help("Stop on selected displays").fluaGlassButton()
+                }
             }
         }
-        .padding(.horizontal, 24)
+        .padding(.horizontal, 16)
         .padding(.vertical, 16)
     }
 }
@@ -478,11 +643,15 @@ struct WallpaperCard: View {
                     }
                     Spacer(minLength: 0)
                     Image(systemName: wallpaper.kind == "image" ? "photo" : "play.fill").font(.caption).foregroundStyle(.white.opacity(0.8))
-                }.padding(16)
+                }.padding(12)
+                    .fluaGlass(clear: true, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    .environment(\.colorScheme, .dark)
+                    .padding(8)
             }
             .overlay(alignment: .topTrailing) {
                 Button { library.favorite(wallpaper) } label: {
-                    Image(systemName: wallpaper.favorite ? "heart.fill" : "heart").font(.system(size: 12)).padding(8).fluaGlass(clear: true, in: Circle())
+                    Image(systemName: wallpaper.favorite ? "heart.fill" : "heart").font(.system(size: 12)).foregroundStyle(.white).padding(8)
+                        .fluaGlass(clear: true, in: Circle()).environment(\.colorScheme, .dark)
                 }
                 .buttonStyle(.plain)
                 .padding(8)
@@ -492,6 +661,7 @@ struct WallpaperCard: View {
             .clipped()
             .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(selected ? library.accent : Color.primary.opacity(0.12), lineWidth: selected ? 2 : 1))
+            .shadow(color: .black.opacity(0.12), radius: 8, y: 3)
             .contentShape(Rectangle())
     }
 }
@@ -532,6 +702,7 @@ struct InspectorView: View {
                     }
             }
         }
+        .background(.ultraThinMaterial)
     }
     private var content: some View {
         Group {
@@ -544,26 +715,19 @@ struct InspectorView: View {
                     }
                     VStack(alignment: .leading, spacing: 8) {
                         Text("Play on").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-                        Picker("Display Mode", selection: Binding(get: { library.playbackMode }, set: { library.setPlaybackMode($0) })) {
-                            Text("Mirrored").tag("mirrored")
-                            Text("Per Display").tag("perDisplay")
-                        }.pickerStyle(.segmented)
+                        FluaSegmentedPicker(title: "Display Mode", selection: Binding(get: { library.playbackMode }, set: { library.setPlaybackMode($0) }),
+                            choices: [("Mirrored", "mirrored"), ("Per Display", "perDisplay")])
                         if library.playbackMode == "perDisplay" {
                             Picker("Display", selection: $library.display) {
                                 ForEach(library.screens, id: \.self) { screen in Text(screen.localizedName).tag(displayID(screen)) }
-                            }.labelsHidden().frame(maxWidth: .infinity)
+                            }.labelsHidden().fluaMenuPicker().frame(maxWidth: .infinity)
                         }
-                        Picker("Surface", selection: $library.surface) {
-                            Text("Desktop").tag(WallpaperSurface.desktop)
-                            Text("Lock Screen").tag(WallpaperSurface.lockScreen)
-                        }.pickerStyle(.segmented)
+                        FluaSegmentedPicker(title: "Surface", selection: $library.surface,
+                            choices: [("Desktop", .desktop), ("Lock Screen", .lockScreen)])
                         Toggle("Link Desktop and Lock Screen", isOn: Binding(get: { library.surfacesLinked }, set: { library.setSurfacesLinked($0) }))
                             .font(.caption).tint(library.accentOverride)
-                        Picker("Rendering mode", selection: Binding<WallpaperMode?>(get: { library.surfaceMode }, set: { if let mode = $0 { library.setSurfaceMode(mode) } })) {
-                            if library.surfaceMode == nil { Text("Mixed").tag(nil as WallpaperMode?) }
-                            Text("Animated").tag(WallpaperMode?.some(.animated))
-                            Text("Still").tag(WallpaperMode?.some(.still))
-                        }.pickerStyle(.segmented)
+                        FluaSegmentedPicker(title: "Rendering mode", selection: Binding<WallpaperMode?>(get: { library.surfaceMode }, set: { if let mode = $0 { library.setSurfaceMode(mode) } }),
+                            choices: (library.surfaceMode == nil ? [("Mixed", nil)] : []) + [("Animated", .animated), ("Still", .still)])
                         LabeledContent("Desktop", value: library.surfaceSummary(.desktop)).font(.caption)
                         LabeledContent("Lock Screen", value: library.surfaceSummary(.lockScreen)).font(.caption)
                         if library.surface == .lockScreen {
@@ -574,7 +738,7 @@ struct InspectorView: View {
                         fluaGlassGroup {
                             VStack(alignment: .leading, spacing: 8) {
                                 if library.surface == .desktop {
-                                    Button { library.applySelected() } label: { Label("Play Wallpaper", systemImage: "play.fill").frame(maxWidth: .infinity).padding(.vertical, 8) }.fluaProminentButton().tint(library.accentOverride)
+                                    Button { library.applySelected() } label: { Label("Play Wallpaper", systemImage: "play.fill").frame(maxWidth: .infinity).padding(.vertical, 8) }.accessibilityLabel("Play Wallpaper").fluaProminentButton().tint(library.accentOverride)
                                 }
                                 if NativeWallpaper.available {
                                     Button(library.nativeSetupBusy ? "Working…" : "Apply Saved Wallpapers") {
@@ -619,11 +783,11 @@ struct InspectorView: View {
                             library.edit(value)
                         }
                         Picker("Color", selection: classificationBinding(\.color, w)) {
-                            ForEach(LibraryChoices.colors, id: \.self) { Text($0).tag($0) }
-                        }
+                            ForEach(LibraryChoices.colors, id: \.self) { color in LibraryColorOption(color: color).tag(color) }
+                        }.fluaMenuPicker()
                         Picker("Motion intensity", selection: classificationBinding(\.motion, w)) {
                             ForEach(LibraryChoices.motions, id: \.self) { Text($0).tag($0) }
-                        }
+                        }.fluaMenuPicker()
                         let tags = normalizedTags(w.tags)
                         // Eager rows keep offscreen tags in the keyboard focus order.
                         Grid(alignment: .leading) {
@@ -642,8 +806,8 @@ struct InspectorView: View {
                         Text("Press Return to save text edits.").font(.caption).foregroundStyle(.tertiary)
                         Menu {
                             ForEach(library.state.playlists) { p in Button((p.items.contains(w.id) ? "✓ " : "") + p.name) { library.toggleInPlaylist(w.id, p.id) } }
-                        } label: { Label("Add to playlist", systemImage: "text.badge.plus") }.frame(maxWidth: .infinity)
-                    }.textFieldStyle(.roundedBorder)
+                        } label: { Label("Add to playlist", systemImage: "text.badge.plus") }.fluaGlassMenu().frame(maxWidth: .infinity)
+                    }.textFieldStyle(FluaGlassTextFieldStyle())
                 }.padding(24)
                 .onAppear { ui.draftTitle = w.title; ui.draftTags = w.tags; ui.draftCategory = w.metadata?.category ?? "" }
                 .onChange(of: w.id) { _, _ in ui.draftTitle = w.title; ui.draftTags = w.tags; ui.draftCategory = w.metadata?.category ?? "" }
@@ -703,14 +867,14 @@ struct SettingsView: View {
                             Image(nsImage: choice.swatch).renderingMode(.original)
                         }.tag(choice)
                     }
-                }
+                }.fluaMenuPicker()
                 Text("System follows the accent color selected in macOS settings.").font(.caption).foregroundStyle(.secondary)
             }
             Section("Playback") {
                 Picker("Display mode", selection: Binding(get: { library.playbackMode }, set: { library.setPlaybackMode($0) })) {
                     Text("Mirrored").tag("mirrored")
                     Text("Per Display").tag("perDisplay")
-                }
+                }.fluaMenuPicker()
                 Toggle("Pause behind fullscreen apps", isOn: $library.state.pauseOnFullscreen).tint(library.accentOverride)
                 Toggle("Pause while running on battery", isOn: $library.state.pauseOnBattery).tint(library.accentOverride)
                 Toggle("Pause in Low Power Mode", isOn: Binding(get: { library.state.pauseOnLowPower ?? false }, set: { library.state.pauseOnLowPower = $0; library.settingChanged() })).tint(library.accentOverride)
@@ -719,12 +883,12 @@ struct SettingsView: View {
             Section("Playlists") {
                 Picker("Change scene every", selection: $library.state.interval) {
                     Text("30 seconds").tag(30.0); Text("1 minute").tag(60.0); Text("5 minutes").tag(300.0); Text("15 minutes").tag(900.0); Text("30 minutes").tag(1800.0); Text("1 hour").tag(3600.0)
-                }
+                }.fluaMenuPicker()
                 Toggle("Shuffle playlists", isOn: $library.state.shuffle).tint(library.accentOverride)
             }
             Section("Blocked tags") {
                 HStack {
-                    TextField("Tags, separated by commas", text: $ui.blockedTagDraft).accessibilityLabel("Blocked tags").onSubmit { addBlockedTags() }
+                    TextField("", text: $ui.blockedTagDraft, prompt: Text("Tags, separated by commas")).accessibilityLabel("Blocked tags").onSubmit { addBlockedTags() }
                     Button("Block") { addBlockedTags() }.disabled(normalizedTags(ui.blockedTagDraft).isEmpty)
                 }
                 if !library.state.blockedTags.isEmpty {
@@ -743,6 +907,11 @@ struct SettingsView: View {
                 Text("Matching tags hide wallpapers throughout the library. Files, playlists and playback assignments are preserved.").font(.caption).foregroundStyle(.secondary)
             }
             Section("General") {
+                Toggle("Show in menu bar", isOn: Binding(get: { library.state.showsMenuBar }, set: { library.setShowsMenuBar($0) })).tint(library.accentOverride)
+                Toggle("Hide from Dock", isOn: Binding(get: { library.state.hidesDockIcon }, set: { library.setHidesDockIcon($0) }))
+                    .disabled(!library.state.showsMenuBar)
+                    .tint(library.accentOverride)
+                Text("The Dock icon can be hidden while Flua remains in the menu bar.").font(.caption).foregroundStyle(.secondary)
                 Toggle("Open at login", isOn: Binding(get: { library.loginEnabled() }, set: { library.setLogin($0) })).tint(library.accentOverride)
                 Button("Show media folder in Finder") { NSWorkspace.shared.open(library.disk.assets) }
                 Text("Flua stores its own copies of imported media. Closing the window keeps desktop playback running. Quitting removes desktop overlays; a native Lock Screen choice keeps playing through macOS.").font(.caption).foregroundStyle(.secondary)
@@ -768,7 +937,11 @@ struct SettingsView: View {
                 Text("Flua 0.1.0 • Independent native wallpaper app").font(.callout)
                 Text("Discover, browse, create, edit, playlists and per-display playback are built in. Everything in your library remains local.").font(.caption).foregroundStyle(.secondary)
             }
-        }.formStyle(.grouped).padding(8)
+        }.formStyle(.grouped).scrollContentBackground(.hidden).padding(8)
+            .fluaBackdrop(accent: library.accent)
+            .toggleStyle(.switch)
+            .buttonStyle(FluaGlassButtonStyle())
+            .textFieldStyle(FluaGlassTextFieldStyle())
             .onChange(of: library.state.pauseOnFullscreen) { _, _ in library.settingChanged() }
             .onChange(of: library.state.pauseOnBattery) { _, _ in library.settingChanged() }
             .onChange(of: library.state.interval) { _, _ in library.save() }
@@ -780,18 +953,26 @@ struct FilterMenu: View {
     let title: String
     let choices: [String]
     @Binding var selection: Set<String>
+    var showsColorSwatches = false
 
     var body: some View {
         Menu {
             ForEach(choices, id: \.self) { value in
-                Toggle(value, isOn: Binding(get: { selection.contains(value) }, set: { included in
+                Toggle(isOn: Binding(get: { selection.contains(value) }, set: { included in
                     if included { selection.insert(value) } else { selection.remove(value) }
-                }))
+                })) {
+                    if showsColorSwatches {
+                        LibraryColorOption(color: value)
+                    } else {
+                        Text(value)
+                    }
+                }
             }
         } label: {
             Text(selection.isEmpty ? title : title + ": " + selection.sorted().joined(separator: ", "))
                 .lineLimit(1)
         }
+        .fluaGlassMenu()
         .fixedSize()
         .accessibilityLabel(title + " filter")
     }

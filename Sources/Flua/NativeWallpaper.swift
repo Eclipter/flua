@@ -28,13 +28,24 @@ enum NativeWallpaper {
         if !available { return "Lock Screen playback needs the wallpaper extension inside Flua.app." }
         return "Apply the saved Desktop and Lock Screen choices and modes for the targeted displays. Saved choices and mode changes sync to displays with active native playback. Native playback continues after Flua quits. Unassigned surfaces keep their system wallpaper. Applying briefly reloads the macOS wallpaper service."
     }
+    static func pluginPaths(in listing: String) -> [String] {
+        listing.split(separator: "\n").compactMap { line in
+            guard let path = line.split(separator: "\t").last, path.hasPrefix("/") else { return nil }
+            return URL(fileURLWithPath: String(path)).resolvingSymlinksInPath().path
+        }
+    }
     static func register() throws {
         guard available else { throw NativeWallpaperError(explanation) }
+        let current = extensionURL.resolvingSymlinksInPath().path
+        let listed = try run("/usr/bin/pluginkit", ["-m", "-A", "-D", "-v", "-i", identifier], allowedStatuses: [0, 1])
+        for path in pluginPaths(in: listed) where path != current {
+            try run("/usr/bin/pluginkit", ["-r", path], allowedStatuses: [0, 1])
+        }
         try run(registrationTool, ["-f", Bundle.main.bundlePath])
         try run("/usr/bin/pluginkit", ["-a", extensionURL.path])
         try run("/usr/bin/pluginkit", ["-e", "use", "-i", identifier])
-        let result = try run("/usr/bin/pluginkit", ["-m", "-A", "-D", "-v", "-i", identifier])
-        guard result.contains(extensionURL.path) || result.contains(extensionURL.resolvingSymlinksInPath().path) else {
+        let elected = try run("/usr/bin/pluginkit", ["-m", "-v", "-i", identifier])
+        guard pluginPaths(in: elected).contains(current) else {
             throw NativeWallpaperError("macOS did not register this copy of Flua. Keep the app in a permanent folder and retry setup.")
         }
     }
@@ -150,9 +161,11 @@ enum NativeWallpaper {
         if let baselineDisplays {
             let url = root.appendingPathComponent("NativeWallpaperBaseline.plist")
             let saved = FileManager.default.fileExists(atPath: url.path) ? try Data(contentsOf: url) : nil
-            let baseline = try NativeWallpaperStore.stopping(displays: baselineDisplays, provider: identifier, in: previous, baseline: saved, captureBaseline: true)
-            try baseline.write(to: url, options: .atomic)
-            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+            if try NativeWallpaperStore.shouldCaptureBaseline(saved, provider: identifier, in: previous) {
+                let baseline = try NativeWallpaperStore.stopping(displays: baselineDisplays, provider: identifier, in: previous, baseline: saved, captureBaseline: true)
+                try baseline.write(to: url, options: .atomic)
+                try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+            }
         }
         let updated = try transform(previous)
         guard updated != previous else { return }

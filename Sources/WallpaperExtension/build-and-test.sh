@@ -14,7 +14,7 @@ cp "$FS_BUILD_DIR/FluaMotion.mov" "$FS_BUILD_DIR/FluaStill.png" "$FS_BUNDLE/Cont
 xcrun clang -target "$FS_TARGET" -fobjc-arc -Wno-deprecated-declarations -c "$FS_SOURCE_DIR/MediaRenderer.m" -o "$FS_BUILD_DIR/MediaRenderer.o"
 xcrun clang -target "$FS_TARGET" -fobjc-arc -Wall -Wextra -Wno-unused-parameter -c "$FS_SOURCE_DIR/Provider.m" -o "$FS_BUILD_DIR/Provider.o"
 # ExtensionFoundation bootstraps the host environment before invoking Swift main.
-xcrun swiftc -target "$FS_TARGET" -parse-as-library -Xlinker -e -Xlinker _NSExtensionMain -import-objc-header "$FS_SOURCE_DIR/Provider.h" "$FS_SOURCE_DIR/EntryPoint.swift" "$FS_SOURCE_DIR/SceneBridge.swift" "$FS_SOURCE_DIR/../Flua/SceneDrawing.swift" "$FS_BUILD_DIR/Provider.o" "$FS_BUILD_DIR/MediaRenderer.o" -framework Foundation -framework QuartzCore -framework IOSurface -framework CoreGraphics -framework CoreMedia -framework AVFoundation -framework CoreImage -framework CoreVideo -framework ImageIO -o "$FS_BUNDLE/Contents/MacOS/FluaWallpaperExtension"
+xcrun swiftc -target "$FS_TARGET" -O -parse-as-library -Xlinker -e -Xlinker _NSExtensionMain -import-objc-header "$FS_SOURCE_DIR/Provider.h" "$FS_SOURCE_DIR/EntryPoint.swift" "$FS_SOURCE_DIR/SceneBridge.swift" "$FS_SOURCE_DIR/../Flua/SceneDrawing.swift" "$FS_BUILD_DIR/Provider.o" "$FS_BUILD_DIR/MediaRenderer.o" -framework Foundation -framework QuartzCore -framework IOSurface -framework CoreGraphics -framework CoreMedia -framework AVFoundation -framework CoreImage -framework CoreVideo -framework ImageIO -o "$FS_BUNDLE/Contents/MacOS/FluaWallpaperExtension"
 sh "$FS_SOURCE_DIR/verify-entrypoint.sh" "$FS_BUNDLE/Contents/MacOS/FluaWallpaperExtension"
 codesign --force --sign - "$FS_BUNDLE"
 codesign --verify --strict "$FS_BUNDLE"
@@ -27,6 +27,6 @@ xcrun clang -target "$FS_TARGET" -fobjc-arc -framework Foundation -framework Qua
 cat "$FS_BUILD_DIR/provider-self-test.json" "$FS_BUILD_DIR/wire-proof.json"
 
 xcrun clang -target "$FS_TARGET" -fobjc-arc -DFS_MEDIA_TEST -c "$FS_SOURCE_DIR/Provider.m" -o "$FS_BUILD_DIR/media-provider.o"
-xcrun swiftc -target "$FS_TARGET" -import-objc-header "$FS_SOURCE_DIR/Provider.h" "$FS_SOURCE_DIR/SceneBridge.swift" "$FS_SOURCE_DIR/../Flua/SceneDrawing.swift" "$FS_BUILD_DIR/media-provider.o" "$FS_BUILD_DIR/MediaRenderer.o" -framework Foundation -framework QuartzCore -framework IOSurface -framework CoreGraphics -framework CoreMedia -framework AVFoundation -framework CoreImage -framework CoreVideo -framework ImageIO -o "$FS_BUILD_DIR/media-self-test"
+xcrun swiftc -target "$FS_TARGET" -O -import-objc-header "$FS_SOURCE_DIR/Provider.h" "$FS_SOURCE_DIR/SceneBridge.swift" "$FS_SOURCE_DIR/../Flua/SceneDrawing.swift" "$FS_BUILD_DIR/media-provider.o" "$FS_BUILD_DIR/MediaRenderer.o" -framework Foundation -framework QuartzCore -framework IOSurface -framework CoreGraphics -framework CoreMedia -framework AVFoundation -framework CoreImage -framework CoreVideo -framework ImageIO -o "$FS_BUILD_DIR/media-self-test"
 "$FS_BUILD_DIR/media-self-test" "$FS_BUILD_DIR" > "$FS_BUILD_DIR/media-self-test.json"
 cat "$FS_BUILD_DIR/media-self-test.json"

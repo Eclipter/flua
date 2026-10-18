@@ -29,6 +29,9 @@ enum SmokeRunner {
         hosted.orderBack(nil)
         await pause(0.4)
         var missing = missingNames("Flua Library Audit", [
+            "Playback type: All", "Playback type: Animated", "Playback type: Still",
+            "Display Mode: Mirrored", "Display Mode: Per Display", "Surface: Desktop", "Surface: Lock Screen",
+            "Rendering mode: Animated", "Rendering mode: Still", "Link Desktop and Lock Screen",
             "Search", "Category filter", "Color filter", "Motion filter", "Resolution filter", "Aspect filter",
             "Filter by ambient", "Filter by green", "Filter by nature", "Add favorite", "Scene name", "Tags", "Category",
             "Speed", "Dim", "Previous in playlist", "Next in playlist", "Pause or resume", "Stop on selected displays", "Create playlist"
@@ -46,12 +49,55 @@ enum SmokeRunner {
         park(settings)
         settings.orderBack(nil)
         await pause(0.4)
-        missing += missingNames("Flua Settings Audit", ["Accent color", "Blocked tags", "Block", "Unblock test"])
+        missing += missingNames("Flua Settings Audit", ["Accent color", "Blocked tags", "Block", "Unblock test", "Show in menu bar", "Hide from Dock"])
+        let menuShown = checkboxValue("Flua Settings Audit", named: "Show in menu bar") == true
+        let dockHidden = checkboxValue("Flua Settings Audit", named: "Hide from Dock") == false
+        let dockEnabled = checkboxEnabled("Flua Settings Audit", named: "Hide from Dock") == true
+        if !menuShown || !dockHidden || !dockEnabled { missing.append("Hide from Dock while menu bar is shown") }
+        library.state.setShowsMenuBar(false)
+        await pause(0.3)
+        let dockStaysOff = checkboxValue("Flua Settings Audit", named: "Hide from Dock") == false
+        let dockDisabled = checkboxEnabled("Flua Settings Audit", named: "Hide from Dock") == false
+        if !dockStaysOff || !dockDisabled { missing.append("Hide from Dock while menu bar is hidden") }
+        library.state.setShowsMenuBar(true)
         let report: [String: Any] = ["passed": missing.isEmpty, "missing": missing]
         if let data = try? JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys]) {
             try? data.write(to: destination)
         }
         exit(missing.isEmpty ? 0 : 1)
+    }
+    private static func checkboxValue(_ title: String, named name: String) -> Bool? {
+        checkboxAttribute(title, named: name, kAXValueAttribute)
+    }
+    private static func checkboxEnabled(_ title: String, named name: String) -> Bool? {
+        checkboxAttribute(title, named: name, kAXEnabledAttribute)
+    }
+    private static func checkboxAttribute(_ title: String, named name: String, _ attribute: String) -> Bool? {
+        let app = AXUIElementCreateApplication(ProcessInfo.processInfo.processIdentifier)
+        var windowsRef: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString, &windowsRef) == .success,
+              let windows = windowsRef as? [AXUIElement],
+              let window = windows.first(where: { ax($0, kAXTitleAttribute) == title }),
+              let box = findCheckbox(window, name, 0) else { return nil }
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(box, attribute as CFString, &value) == .success else { return nil }
+        if let enabled = value as? Bool { return enabled }
+        if let number = value as? NSNumber { return number.boolValue }
+        return nil
+    }
+    private static func findCheckbox(_ element: AXUIElement, _ name: String, _ depth: Int) -> AXUIElement? {
+        if depth > 16 { return nil }
+        if ax(element, kAXRoleAttribute) == "AXCheckBox" {
+            let label = ax(element, kAXDescriptionAttribute) + " " + ax(element, kAXTitleAttribute) + " " + ax(element, kAXTitleUIElementAttribute)
+            if label.contains(name) { return element }
+        }
+        var childrenRef: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &childrenRef) == .success,
+              let children = childrenRef as? [AXUIElement] else { return nil }
+        for child in children {
+            if let found = findCheckbox(child, name, depth + 1) { return found }
+        }
+        return nil
     }
     private static func missingNames(_ title: String, _ required: [String]) -> [String] {
         let names = spokenNames(titled: title)
@@ -323,6 +369,7 @@ enum SmokeRunner {
                 try bitmap.representation(using: .png, properties: [:])?.write(to: destination)
                 capture(window, to: destination)
                 results["editorWindow"] = true
+                await captureAppearances(window, stem: "Flua-editor", directory: out)
                 window.close()
             }
             for kind in ["image", "aurora", "cosmos", "ocean", "ember"] {
@@ -458,6 +505,7 @@ enum SmokeRunner {
                 results["browseSystemScrollers"] = verifySystemScrollers()
                 if results["browseSystemScrollers"] as? Bool != true { failures.append("browseSystemScrollers") }
                 captureView(window, to: out.appendingPathComponent("Flua-filters.png"))
+                await captureAppearances(window, stem: "Flua-browse", directory: out)
             }
             library.filter.colors = ["Orange"]
             await pause(0.2)
@@ -477,10 +525,11 @@ enum SmokeRunner {
             let settings = NSWindow(contentRect: NSRect(x: 100, y: 100, width: 530, height: 760), styleMask: [.titled, .closable], backing: .buffered, defer: false)
             settings.isReleasedWhenClosed = false
             settings.title = "Flua Settings Verification"
-            settings.contentView = NSHostingView(rootView: SettingsView().environmentObject(library).preferredColorScheme(.dark))
+            settings.contentView = NSHostingView(rootView: SettingsView().environmentObject(library))
             settings.orderFront(nil)
             await pause(0.3)
             captureView(settings, to: out.appendingPathComponent("Flua-settings.png"))
+            await captureAppearances(settings, stem: "Flua-settings", directory: out)
             if let mainWindow = NSApp.windows.first(where: { $0.title == "Flua" }) {
                 captureView(mainWindow, to: out.appendingPathComponent("Flua-library-system.png"))
             }
@@ -508,6 +557,12 @@ enum SmokeRunner {
             await pause(0.5)
             if let window = NSApp.windows.first(where: { $0.title == "Flua" }) {
                 results["discoverWindow"] = true
+                await captureAppearances(window, stem: "Flua-discover", directory: out)
+                let originalFrame = window.frame
+                window.setContentSize(NSSize(width: 1050, height: 680))
+                await pause(0.3)
+                captureView(window, to: out.appendingPathComponent("Flua-minimum-size.png"))
+                window.setFrame(originalFrame, display: true)
                 if let view = window.contentView, let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) {
                     view.cacheDisplay(in: view.bounds, to: bitmap)
                     if let data = bitmap.representation(using: .png, properties: [:]) {
@@ -575,8 +630,8 @@ enum SmokeRunner {
             for child in view.subviews { collect(child) }
         }
         collect(root)
-        // The link checkbox precedes the desktop Play button.
-        guard let button = controls.compactMap({ $0 as? NSButton }).dropFirst().first,
+        // The link switch and SwiftUI segments do not create AppKit buttons; Play is first.
+        guard let button = controls.compactMap({ $0 as? NSButton }).first,
               let slider = controls.compactMap({ $0 as? NSSlider }).first else { return false }
         // Accessibility actions bypass the mouse routing that broke in the native inspector.
         for control in [button as NSControl, slider as NSControl] {
@@ -631,6 +686,18 @@ enum SmokeRunner {
         await pause(0.3)
         results["reopenKeepsSingleLibrary"] = libraryWindows().count == 1
         return results
+    }
+    @MainActor private static func captureAppearances(_ window: NSWindow, stem: String, directory: URL) async {
+        let original = window.appearance
+        let originalContentAppearance = window.contentView?.appearance
+        for (name, suffix) in [(NSAppearance.Name.aqua, "light"), (.darkAqua, "dark")] {
+            window.appearance = NSAppearance(named: name)
+            window.contentView?.appearance = NSAppearance(named: name)
+            await pause(0.3)
+            captureView(window, to: directory.appendingPathComponent(stem + "-" + suffix + ".png"))
+        }
+        window.appearance = original
+        window.contentView?.appearance = originalContentAppearance
     }
     @MainActor static func captureView(_ window: NSWindow, to url: URL) {
         if let view = window.contentView, let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) {
