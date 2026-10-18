@@ -313,6 +313,7 @@ struct VideoEditorView: View {
             }.frame(width: 352)
                 .background(.ultraThinMaterial)
         }.frame(minWidth: 980, minHeight: 650).fluaBackdrop(accent: library.accent)
+            .fluaClearInitialFocus()
             .toggleStyle(.switch)
             .buttonStyle(FluaGlassButtonStyle())
             .textFieldStyle(FluaGlassTextFieldStyle())
