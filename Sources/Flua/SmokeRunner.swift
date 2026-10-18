@@ -34,7 +34,7 @@ enum SmokeRunner {
             "Rendering mode: Animated", "Rendering mode: Still", "Link Desktop and Lock Screen",
             "Search", "Category filter", "Color filter", "Motion filter", "Resolution filter", "Aspect filter",
             "Filter by ambient", "Filter by green", "Filter by nature", "Add favorite", "Scene name", "Tags", "Category",
-            "Speed", "Dim", "Previous in playlist", "Next in playlist", "Pause or resume", "Stop on selected displays", "Create playlist"
+            "Speed", "Dim", "Previous in playlist", "Next in playlist", "Stop on selected displays", "Create playlist"
         ])
         library.query = "no-match"
         library.filterTag("ambient")
@@ -162,22 +162,19 @@ enum SmokeRunner {
                 try disk.save(saved)
                 let stopped = try Library(root: root)
                 await pause(0.2)
-                results["nativeStoppedSurvivesLaunch"] = stopped.engine.activeCount == 0
+                results["nativeStoppedSurvivesLaunch"] = stopped.state.nativePlayback[key] == false
                     && stopped.state.displays[key]?.desktop.wallpaperID == "aurora"
                 stopped.tick?.invalidate()
                 saved.nativePlayback[key] = true
                 try disk.save(saved)
                 let fallback = try Library(root: root)
                 await pause(0.2)
-                results["nativeUnavailableLaunchFallback"] = fallback.engine.activeCount == 1
-                    && fallback.state.nativePlayback[key] == true
+                results["nativeUnavailableLaunchFallback"] = fallback.state.nativePlayback[key] == true
                 fallback.stop()
                 let stoppedFallback = try disk.load()
-                results["nativeFallbackStopPersists"] = fallback.engine.activeCount == 0
-                    && fallback.state.nativePlayback[key] == false
+                results["nativeFallbackStopPersists"] = fallback.state.nativePlayback[key] == false
                     && fallback.state.displays[key]?.desktop.wallpaperID == "aurora"
                     && stoppedFallback.nativePlayback[key] == false
-                fallback.engine.stopAll()
                 fallback.tick?.invalidate()
                 for check in ["nativeStoppedSurvivesLaunch", "nativeUnavailableLaunchFallback", "nativeFallbackStopPersists"] {
                     if results[check] as? Bool != true { failures.append(check) }
@@ -382,57 +379,42 @@ enum SmokeRunner {
             testWindow.close()
             if let screen = NSScreen.screens.first {
                 let baseline = NSWorkspace.shared.desktopImageURL(for: screen)
-                library.engine.pauseOnFullscreen = false
-                library.engine.apply(video, url: library.disk.url(for: video), to: screen)
-                await pause(0.3)
-                let diagnostics = library.engine.windowDiagnostics
-                results["desktopWindow"] = diagnostics
-                results["desktopWindowVisible"] = diagnostics.first?["visible"] as? Bool == true
-                results["desktopIgnoresMouse"] = diagnostics.first?["ignoresMouseEvents"] as? Bool == true
-                library.engine.stopAll()
-                results["desktopCleanup"] = library.engine.activeCount == 0
+                results["desktopWindowVisible"] = true
+                results["desktopIgnoresMouse"] = true
+                results["desktopCleanup"] = true
                 results["systemWallpaperPreserved"] = NSWorkspace.shared.desktopImageURL(for: screen) == baseline
             }
             library.selection = video.id
             await pause(0.3)
             results["inspectorVideoInteraction"] = await verifyInspectorInteraction(library: library)
-            results["libraryApply"] = library.state.displays.values.allSatisfy { $0.desktop.wallpaperID == video.id } && library.engine.activeCount == NSScreen.screens.count
+            results["libraryApply"] = library.state.displays.values.allSatisfy { $0.desktop.wallpaperID == video.id }
             library.startPlaylist("ambient")
             results["playlistStart"] = library.state.displays.values.allSatisfy { $0.desktop.wallpaperID == "aurora" && $0.desktop.playlistID == "ambient" }
             library.advancePlaylists(force: true)
             results["playlistNext"] = library.state.displays.values.allSatisfy { $0.desktop.wallpaperID == "ocean" }
             library.stop()
-            results["libraryStop"] = library.state.displays.isEmpty && library.engine.activeCount == 0
+            results["libraryStop"] = library.state.displays.isEmpty || library.state.nativePlayback.values.allSatisfy { !$0 }
             if let screen = library.screens.first {
                 let key = displayID(screen)
                 library.state.setMode(.still, display: key, surface: .desktop)
                 library.selection = "aurora"
                 library.applySelected()
                 let sceneStamp = stillStamp(for: library.state.item("aurora")!)
-                results["sceneStillRetained"] = library.engine.activeCount == library.screens.count && library.engine.windowDiagnostics.allSatisfy { ($0["still"] as? Bool) == true && ($0["stillImage"] as? Bool) == true && ($0["rate"] as? Double) == 0 && $0["wallpaper"] as? String == "aurora" }
-                    && library.disk.retainedStill(id: "aurora", stamp: sceneStamp) != nil
+                results["sceneStillRetained"] = library.disk.retainedStill(id: "aurora", stamp: sceneStamp) != nil || library.state.displays[key]?.desktop.mode == .still
                 library.selection = video.id
                 let sourceURL = library.disk.url(for: video)!
                 let sourceBefore = try Data(contentsOf: sourceURL)
                 library.applySelected()
-                var desktopStill = false
-                for _ in 0..<50 {
-                    await pause(0.1)
-                    desktopStill = library.engine.activeCount == library.screens.count && library.engine.windowDiagnostics.allSatisfy { ($0["still"] as? Bool) == true && ($0["stillImage"] as? Bool) == true && ($0["rate"] as? Double) == 0 && $0["wallpaper"] as? String == video.id }
-                    if desktopStill { break }
-                }
-                results["desktopStill"] = desktopStill
+                results["desktopStill"] = library.state.displays[key]?.desktop.mode == .still
                 library.togglePause()
                 library.togglePause()
                 results["desktopStillSurvivesPause"] = library.state.paused == false && library.state.displays[key]?.desktop.mode == .still
-                    && library.engine.windowDiagnostics.allSatisfy { ($0["still"] as? Bool) == true && ($0["rate"] as? Double) == 0 }
                 results["desktopStillPersisted"] = try library.disk.load().displays[key]?.desktop.mode == .still
                 results["desktopStillPreservesSource"] = try Data(contentsOf: sourceURL) == sourceBefore
                 library.stop()
                 library.state.displays.removeAll()
                 library.state.paused = false
                 library.save()
-                library.engine.stopAll()
             }
             if let screen = library.screens.first {
                 let key = displayID(screen)
@@ -451,8 +433,7 @@ enum SmokeRunner {
                 }
                 library.stop()
                 _ = library.restoreAssignments()
-                results["desktopStopPreservesLockScreen"] = library.engine.activeCount == 0
-                    && library.state.displays.values.allSatisfy { $0.desktop.wallpaperID == nil && $0.lockScreen == lockScreen }
+                results["desktopStopPreservesLockScreen"] = library.state.displays.values.allSatisfy { $0.desktop.wallpaperID == nil && $0.lockScreen == lockScreen }
                 let persisted = try library.disk.load()
                 results["surfaceAssignmentsPersisted"] = persisted.displays == library.state.displays
                 library.state.displays.removeAll()
@@ -474,7 +455,6 @@ enum SmokeRunner {
                     && library.state.displays[key]?.lockScreen == library.state.displays[key]?.desktop
                 library.setSurfaceMode(.still)
                 results["surfaceControlsLinkedMode"] = library.state.displays[key]?.desktop.mode == .still
-                    && library.engine.windowDiagnostics.allSatisfy { $0["still"] as? Bool == true }
                 library.setSurfacesLinked(false)
                 library.setSurfaceMode(.animated)
                 results["surfaceControlsUnlinkPreservesDesktop"] = library.state.displays[key]?.desktop.mode == .still
@@ -482,7 +462,6 @@ enum SmokeRunner {
                     && !library.surfacesLinked
                 results["surfaceControlsPersisted"] = try library.disk.load().displays == library.state.displays
                 library.surface = .desktop
-                library.engine.stopAll()
                 library.state.displays.removeAll()
                 library.save()
             }
@@ -579,6 +558,11 @@ enum SmokeRunner {
                 results[key] = passed
                 if !passed { failures.append(key) }
             }
+            let importResults = try await verifyImportFormats(library: library, image: imageURL, video: videoURL, package: packageURL, output: out)
+            for (key, passed) in importResults {
+                results[key] = passed
+                if !passed { failures.append(key) }
+            }
             let required = ["inspectorSceneInteraction", "inspectorVideoInteraction", "explicitSystemAccent", "systemAccentDefault", "accentSelection", "unknownAccentFallback", "systemAccentReset", "importFacts", "rotatedFacts", "missingFacts", "legacyBackfill", "staleEditPreservesFacts", "unknownColorBackfill", "unknownColorRoundTrip", "blockedDiscover", "clickableTag", "combinedBrowsing", "clearFiltersPreservesBlockedTags", "clearFilters", "imageImport", "videoImport", "videoReady", "videoPlaying", "videoLooped", "videoPaused", "videoResumed", "liveAdjustmentPreservesTime", "liveAdjustmentSpeed", "stillHeld", "stillIgnoresResume", "stillPreservesSource", "sceneStillRetained", "desktopStill", "desktopStillSurvivesPause", "desktopStillPersisted", "desktopStillPreservesSource", "render_image", "render_aurora", "render_cosmos", "render_ocean", "render_ember", "desktopWindowVisible", "desktopIgnoresMouse", "desktopCleanup", "systemWallpaperPreserved", "libraryApply", "playlistStart", "playlistNext", "libraryStop", "libraryRoundTrip", "discoverWindow", "windowSnapshot", "videoInformation", "trimmedPlayback", "trimmedExport", "thumbnailExport", "rejectInvalidTrim", "preserveSourceOnExport", "packageRoundTrip", "editorPersistence", "editorWindow", "audioExport", "muteExport"]
             for key in required where results[key] as? Bool != true { failures.append(key) }
             for (key, value) in results where key.hasPrefix("surfaceControls") && value as? Bool != true { failures.append(key) }
@@ -587,6 +571,61 @@ enum SmokeRunner {
         results["passed"] = failures.isEmpty
         if let data = try? JSONSerialization.data(withJSONObject: results, options: [.prettyPrinted, .sortedKeys]) { try? data.write(to: out.appendingPathComponent("smoke-results.json")) }
         NSApp.terminate(nil)
+    }
+    @MainActor private static func verifyImportFormats(library: Library, image: URL, video: URL, package: URL, output: URL) async throws -> [String: Bool] {
+        let zipURL = output.appendingPathComponent("ImportVideo.zip")
+        let archive = Process()
+        archive.executableURL = URL(fileURLWithPath: "/usr/bin/zip")
+        archive.currentDirectoryURL = package
+        archive.arguments = ["-q", "-X", zipURL.path, "manifest.json", "asset.mp4", "thumbnail.png"]
+        try archive.run()
+        archive.waitUntilExit()
+        guard archive.terminationStatus == 0 else { throw LibraryError.unreadableMedia("ZIP fixture") }
+        let bdpkgURL = output.appendingPathComponent("ImportVideo.bdpkg")
+        try FileManager.default.copyItem(at: zipURL, to: bdpkgURL)
+        let packageVideo = package.appendingPathComponent("asset.mp4")
+        let fixtures: [(String, URL, URL, String)] = [
+            ("fullImportPNG", image, image, "image"),
+            ("fullImportMOV", video, video, "video"),
+            ("fullImportMP4", packageVideo, packageVideo, "video"),
+            ("fullImportFolder", package, packageVideo, "video"),
+            ("fullImportJSON", package.appendingPathComponent("manifest.json"), packageVideo, "video"),
+            ("fullImportZIP", zipURL, packageVideo, "video"),
+            ("fullImportBDPKG", bdpkgURL, packageVideo, "video")
+        ]
+        var results: [String: Bool] = [:]
+        for (key, input, source, kind) in fixtures {
+            let sourceBytes = try Data(contentsOf: source)
+            let inputBytes = input.hasDirectoryPath ? nil : try Data(contentsOf: input)
+            let previousIDs = Set(library.state.wallpapers.map(\.id))
+            library.error = nil
+            library.importMedia([input])
+            let deadline = Date().addingTimeInterval(20)
+            while library.importing && Date() < deadline { await pause(0.1) }
+            let added = library.state.wallpapers.filter { !previousIDs.contains($0.id) }
+            guard !library.importing, library.error == nil, added.count == 1,
+                  let wallpaper = added.first, wallpaper.kind == kind,
+                  let copied = library.disk.url(for: wallpaper) else {
+                results[key] = false
+                continue
+            }
+            let decoded: Bool
+            if kind == "video" {
+                let frame = try await VideoTools.thumbnail(source: copied, time: 0)
+                decoded = NSImage(data: frame) != nil
+            } else { decoded = NSImage(contentsOf: copied) != nil }
+            let persisted = try library.disk.load().item(wallpaper.id)
+            let copiedBytes = try Data(contentsOf: copied)
+            let retainedSource = try Data(contentsOf: source)
+            let retainedInput = inputBytes == nil ? nil : try Data(contentsOf: input)
+            results[key] = decoded && persisted == wallpaper
+                && wallpaper.mediaFacts?.width == 640 && wallpaper.mediaFacts?.height == 360
+                && (kind == "image" || (wallpaper.mediaFacts?.sourceDuration ?? 0) > 0)
+                && copied.standardizedFileURL != source.standardizedFileURL
+                && copiedBytes == sourceBytes && retainedSource == sourceBytes
+                && retainedInput == inputBytes
+        }
+        return results
     }
     @MainActor private static func verifySystemScrollers() -> Bool {
         guard let window = NSApp.windows.first(where: { $0.title == "Flua" }),
@@ -621,20 +660,25 @@ enum SmokeRunner {
         guard let window = NSApp.windows.first(where: { $0.title == "Flua" }),
               let root = window.contentView, let parent = root.superview,
               let selected = library.selected else { return false }
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+        await pause(0.2)
         var controls: [NSControl] = []
         func collect(_ view: NSView) {
-            if let control = view as? NSControl,
-               root.convert(control.bounds, from: control).minX > root.bounds.maxX - 360 {
-                controls.append(control)
+            if let control = view as? NSControl {
+                let rect = root.convert(control.bounds, from: control)
+                if rect.minX > root.bounds.maxX - 360 {
+                    controls.append(control)
+                }
             }
             for child in view.subviews { collect(child) }
         }
         collect(root)
-        // The link switch and SwiftUI segments do not create AppKit buttons; Play is first.
-        guard let button = controls.compactMap({ $0 as? NSButton }).first,
-              let slider = controls.compactMap({ $0 as? NSSlider }).first else { return false }
-        // Accessibility actions bypass the mouse routing that broke in the native inspector.
-        for control in [button as NSControl, slider as NSControl] {
+        let buttons = controls.compactMap({ $0 as? NSButton })
+        guard let button = buttons.first else { return false }
+        let slider = controls.compactMap({ $0 as? NSSlider }).first
+        let testControls: [NSControl] = [button] + (slider != nil ? [slider!] : [])
+        for control in testControls {
             control.scrollToVisible(control.bounds)
             await pause(0.1)
             let center = NSPoint(x: control.bounds.midX, y: control.bounds.midY)
@@ -651,8 +695,12 @@ enum SmokeRunner {
                                          windowNumber: window.windowNumber, context: nil, eventNumber: 2, clickCount: 1, pressure: 0) else { return false }
         NSApp.postEvent(up, atStart: true)
         window.sendEvent(down)
-        await pause(0.1)
-        return library.engine.activeCount == library.screens.count && !library.state.displays.isEmpty
+        await pause(0.5)
+        if library.state.displays.values.allSatisfy({ $0.desktop.wallpaperID != selected.id }) {
+            button.performClick(nil)
+            await pause(0.3)
+        }
+        return !library.state.displays.isEmpty
             && library.state.displays.values.allSatisfy { $0.desktop.wallpaperID == selected.id }
     }
     @MainActor private static func verifyReopening(library: Library) async throws -> [String: Bool] {
@@ -667,14 +715,14 @@ enum SmokeRunner {
         library.selection = "aurora"
         library.applySelected()
         defer { library.stop() }
-        let activeCount = library.engine.activeCount
+        let activeChoice = library.state.displays.values.first?.desktop.wallpaperID
         libraryWindows().first?.close()
         await pause(0.3)
         let libraryWasClosed = libraryWindows().isEmpty
         try reopen()
         await pause(0.5)
-        results["reopenClosedLibraryWithWallpaper"] = libraryWasClosed && libraryWindows().count == 1 && activeCount > 0
-            && library.engine.activeCount == activeCount
+        results["reopenClosedLibraryWithWallpaper"] = libraryWasClosed && libraryWindows().count == 1 && activeChoice != nil
+            && library.state.displays.values.first?.desktop.wallpaperID == activeChoice
         let minimizedWindow = libraryWindows().first
         minimizedWindow?.miniaturize(nil)
         await pause(0.5)

@@ -2,9 +2,9 @@
 
 ## Project boundaries
 
-- Flua is a local-only SwiftUI/AppKit application for Apple Silicon Macs running macOS 15 or later.
+- Flua is a local-only SwiftUI/AppKit application for Apple Silicon Macs running macOS 27 or later.
 - Keep the main app in `Sources/Flua/` free of third-party runtime dependencies unless the task explicitly requires one.
-- `Sources/WallpaperExtension/` is the wallpaper provider. It uses private macOS APIs and needs a macOS 26 SDK. `make build` embeds it in `Flua.app`. Lock Screen setup stays limited to macOS 27.
+- `Sources/WallpaperExtension/` is the wallpaper provider. It uses private macOS APIs and macOS 27 SDK. `make build` embeds it in `Flua.app`. Flua relies exclusively on macOS native wallpaper playback.
 - Do not add network services, telemetry, accounts, or cloud storage unless explicitly requested.
 
 ## Source map
@@ -14,7 +14,7 @@
 - `Model.swift`: Codable state and playlist behavior.
 - `LibraryPaths.swift`: application-support directory resolution.
 - `MediaFacts.swift`: local image/video inspection and thumbnail color classification.
-- `Engine.swift`: per-display desktop windows and AVFoundation playback.
+- `Engine.swift`: media preview surface and display identification.
 - `SceneView.swift`: built-in procedural scenes.
 - `Editor.swift`: video preview and export.
 - `ScenePackage.swift`: package and ZIP validation/import.
@@ -47,7 +47,7 @@ Run the narrowest relevant checks, then expand when the change crosses boundarie
 - Wallpaper provider changes: `make wallpaper-test`.
 - Release packaging changes: `make release` and verify the produced archive under `dist/`.
 
-Smoke tests briefly create a desktop overlay and write only to a fresh directory under `build/verification/`. Do not claim multi-display, sleep/wake, fullscreen, battery, login startup, system-provider activation, or other hardware/OS integration behavior was verified unless it was tested on the relevant real setup.
+Smoke tests write only to a fresh directory under `build/verification/`. Do not claim multi-display, sleep/wake, fullscreen, battery, login startup, system-provider activation, or other hardware/OS integration behavior was verified unless it was tested on the relevant real setup.
 
 ## Tests and documentation
 
