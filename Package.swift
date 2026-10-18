@@ -3,7 +3,7 @@ import PackageDescription
 
 let package = Package(
     name: "Flua",
-    platforms: [.macOS("15.0")],
+    platforms: [.macOS("27.0")],
     products: [.executable(name: "Flua", targets: ["Flua"])],
     targets: [
         .executableTarget(name: "Flua", resources: [.process("Resources")], linkerSettings: [

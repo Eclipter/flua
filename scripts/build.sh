@@ -1,8 +1,8 @@
 #!/bin/zsh
 set -euo pipefail
 cd "${0:A:h:h}"
-swift build -c release --triple arm64-apple-macosx15.0
-bin_dir=$(swift build -c release --triple arm64-apple-macosx15.0 --show-bin-path)
+swift build -c release --triple arm64-apple-macosx27.0
+bin_dir=$(swift build -c release --triple arm64-apple-macosx27.0 --show-bin-path)
 app="$PWD/build/Flua.app"
 extension_build="$PWD/build/wallpaper"
 extension="$app/Contents/Extensions/FluaWallpaperExtension.appex"
@@ -12,7 +12,7 @@ cp Resources/Info.plist "$app/Contents/Info.plist"
 cp Resources/AppIcon.icns "$app/Contents/Resources/"
 cp -R "$bin_dir/Flua_Flua.bundle" "$app/Contents/Resources/"
 sh Sources/WallpaperExtension/build-and-test.sh "$extension_build" --build-only
-xcrun clang -target arm64-apple-macosx15.0 -Wall -Wextra -Werror \
+xcrun clang -target arm64-apple-macosx27.0 -Wall -Wextra -Werror \
     Sources/WallpaperExtension/AgentGuard.c -o "$app/Contents/Helpers/FluaWallpaperGuard"
 codesign --force --sign - "$app/Contents/Helpers/FluaWallpaperGuard"
 ditto "$extension_build/FluaWallpaperExtension.appex" "$extension"

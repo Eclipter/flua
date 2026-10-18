@@ -250,7 +250,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         DispatchQueue.main.async { self.openLibrary?() }
         Task { await SmokeRunner.runIfRequested(library: AppContext.library) }
     }
-    func applicationWillTerminate(_ notification: Notification) { AppContext.library.engine.stopAll() }
     func application(_ sender: NSApplication, openFiles filenames: [String]) { AppContext.library.importMedia(filenames.map { URL(fileURLWithPath: $0) }) }
 }
 
@@ -341,7 +340,6 @@ struct LibraryView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .fluaBackdrop(accent: library.accent)
         .toggleStyle(.switch)
-        .buttonStyle(FluaGlassButtonStyle())
         .textFieldStyle(FluaGlassTextFieldStyle())
         .overlay {
             if ui.dragOver {
@@ -487,7 +485,7 @@ struct LibraryView: View {
                 HStack {
                     Text("\(library.filter.activeCount) selected · \(library.eligible.count) matches").font(.caption).foregroundStyle(.secondary)
                     Spacer()
-                    Button("Clear filters") { library.clearFilters() }
+                    Button("Clear filters") { library.clearFilters() }.fluaGlassButton()
                 }
                 if !library.filter.tags.isEmpty {
                     ScrollView(.horizontal) {
@@ -608,8 +606,6 @@ struct LibraryView: View {
                         .accessibilityLabel("Previous in playlist").help("Previous in playlist").fluaGlassButton()
                     Button { library.advancePlaylists(force: true) } label: { Image(systemName: "forward.end.fill") }
                         .accessibilityLabel("Next in playlist").help("Next in playlist").fluaGlassButton()
-                    Button { library.togglePause() } label: { Image(systemName: library.state.paused ? "play.fill" : "pause.fill") }
-                        .accessibilityLabel("Pause or resume").help("Pause or resume").fluaGlassButton()
                     Button { library.stop() } label: { Image(systemName: "stop.fill") }
                         .accessibilityLabel("Stop on selected displays").help("Stop on selected displays").fluaGlassButton()
                 }
@@ -643,7 +639,20 @@ struct WallpaperCard: View {
                         Text(wallpaper.kind == "image" ? "Still" : "Animated").font(.caption).foregroundStyle(.white.opacity(0.72))
                     }
                     Spacer(minLength: 0)
-                    Image(systemName: wallpaper.kind == "image" ? "photo" : "play.fill").font(.caption).foregroundStyle(.white.opacity(0.8))
+                    Button {
+                        library.selection = wallpaper.id
+                        library.applySelected()
+                    } label: {
+                        Image(systemName: "play.fill")
+                            .font(.system(size: 10, weight: .bold))
+                            .foregroundStyle(.white)
+                            .padding(7)
+                            .fluaGlass(clear: true, in: Circle())
+                            .environment(\.colorScheme, .dark)
+                    }
+                    .buttonStyle(.plain)
+                    .contentShape(Circle())
+                    .accessibilityLabel("Play Wallpaper")
                 }.padding(12)
                     .fluaGlass(clear: true, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
                     .environment(\.colorScheme, .dark)
@@ -731,27 +740,23 @@ struct InspectorView: View {
                             choices: (library.surfaceMode == nil ? [("Mixed", nil)] : []) + [("Animated", .animated), ("Still", .still)])
                         LabeledContent("Desktop", value: library.surfaceSummary(.desktop)).font(.caption)
                         LabeledContent("Lock Screen", value: library.surfaceSummary(.lockScreen)).font(.caption)
-                        if library.surface == .lockScreen {
-                            Button("Save Lock Screen Choice") { library.saveSelectedSurface() }.fluaGlassButton()
-                            Text("Apply Saved Wallpapers starts native playback. Later saved choices and mode changes sync to displays with active native playback.")
-                                .font(.caption).foregroundStyle(.secondary)
-                        }
                         fluaGlassGroup {
                             VStack(alignment: .leading, spacing: 8) {
-                                if library.surface == .desktop {
-                                    Button { library.applySelected() } label: { Label("Play Wallpaper", systemImage: "play.fill").frame(maxWidth: .infinity).padding(.vertical, 8) }.accessibilityLabel("Play Wallpaper").fluaProminentButton().tint(library.accentOverride)
+                                Button {
+                                    library.applySelected()
+                                } label: {
+                                    Label(library.nativeSetupBusy ? "Working…" : "Play Wallpaper", systemImage: "play.fill")
+                                        .frame(maxWidth: .infinity)
+                                        .padding(.vertical, 8)
                                 }
-                                if NativeWallpaper.available {
-                                    Button(library.nativeSetupBusy ? "Working…" : "Apply Saved Wallpapers") {
-                                        library.applySavedNativeAssignments()
-                                    }.disabled(library.nativeSetupBusy || library.targetAssignments.allSatisfy { $0.desktop.wallpaperID == nil && $0.lockScreen?.wallpaperID == nil }).fluaGlassButton()
-                                }
+                                .disabled(library.nativeSetupBusy)
+                                .accessibilityLabel("Play Wallpaper")
+                                .fluaProminentButton()
+                                .tint(library.accentOverride)
                             }
                         }
-                        if NativeWallpaper.available {
-                            Text("Uses saved choices, modes and target displays")
-                                .font(.caption).foregroundStyle(.secondary)
-                        }
+                        Text("Applies directly to macOS. Continues playing when Flua quits.")
+                            .font(.caption).foregroundStyle(.secondary)
                     }
                     mediaFacts(w)
                     Divider().opacity(0.3)
@@ -814,6 +819,7 @@ struct InspectorView: View {
                 .onChange(of: w.id) { _, _ in ui.draftTitle = w.title; ui.draftTags = w.tags; ui.draftCategory = w.metadata?.category ?? "" }
             } else { ContentUnavailableView("Select a scene", systemImage: "sparkles").padding(.top, 100) }
         }
+        .buttonStyle(FluaGlassButtonStyle())
     }
     private func mediaFacts(_ w: Wallpaper) -> some View {
         VStack(alignment: .leading, spacing: 7) {
@@ -915,14 +921,11 @@ struct SettingsView: View {
                 Text("The Dock icon can be hidden while Flua remains in the menu bar.").font(.caption).foregroundStyle(.secondary)
                 Toggle("Open at login", isOn: Binding(get: { library.loginEnabled() }, set: { library.setLogin($0) })).tint(library.accentOverride)
                 Button("Show media folder in Finder") { NSWorkspace.shared.open(library.disk.assets) }
-                Text("Flua stores its own copies of imported media. Closing the window keeps desktop playback running. Quitting removes desktop overlays; a native Lock Screen choice keeps playing through macOS.").font(.caption).foregroundStyle(.secondary)
+                Text("Flua stores its own copies of imported media. Wallpapers play natively through macOS and continue playing after quitting Flua.").font(.caption).foregroundStyle(.secondary)
             }
             Section("Lock Screen") {
                 Text(NativeWallpaper.explanation).font(.caption).foregroundStyle(.secondary)
                 if NativeWallpaper.available {
-                    Button(library.nativeSetupBusy ? "Working…" : "Apply Saved Wallpapers") { library.applySavedNativeAssignments() }
-                        .disabled(library.nativeSetupBusy || library.targetAssignments.allSatisfy { $0.desktop.wallpaperID == nil && $0.lockScreen?.wallpaperID == nil })
-                        .fluaProminentButton().tint(library.accentOverride)
                     Button("Remove native provider…", role: .destructive) { ui.confirmingNativeRemoval = true }
                         .disabled(library.nativeSetupBusy)
                         .confirmationDialog("Remove native wallpaper provider?", isPresented: $ui.confirmingNativeRemoval) {

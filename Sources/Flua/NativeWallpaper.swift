@@ -11,7 +11,7 @@ enum NativeWallpaper {
         Bundle.main.bundleURL.appendingPathComponent("Contents/Extensions/FluaWallpaperExtension.appex")
     }
     static var available: Bool {
-        ProcessInfo.processInfo.operatingSystemVersion.majorVersion == 27 &&
+        ProcessInfo.processInfo.operatingSystemVersion.majorVersion >= 27 &&
             FileManager.default.fileExists(atPath: extensionURL.path) &&
             FileManager.default.isExecutableFile(atPath: guardURL.path)
     }
@@ -22,10 +22,7 @@ enum NativeWallpaper {
         return FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/Flua/catalog.json")
     }
     static var explanation: String {
-        if ProcessInfo.processInfo.operatingSystemVersion.majorVersion != 27 {
-            return "Native Lock Screen playback has been verified on macOS 27. Other macOS versions are unavailable."
-        }
-        if !available { return "Lock Screen playback needs the wallpaper extension inside Flua.app." }
+        if !available { return "Wallpaper playback needs the wallpaper extension inside Flua.app on macOS 27." }
         return "Apply the saved Desktop and Lock Screen choices and modes for the targeted displays. Saved choices and mode changes sync to displays with active native playback. Native playback continues after Flua quits. Unassigned surfaces keep their system wallpaper. Applying briefly reloads the macOS wallpaper service."
     }
     static func pluginPaths(in listing: String) -> [String] {
