@@ -109,11 +109,11 @@ import Foundation
         precondition(state.advance(display: "display-A", now: Date(timeIntervalSince1970: 299)) == nil)
         precondition(state.advance(display: "display-A", now: Date(timeIntervalSince1970: 300))?.id == "ocean")
         precondition(state.advance(display: "display-A", now: Date(timeIntervalSince1970: 301)) == nil)
-        state.playlists[0].interval = 600
+        state.playlists[0].interval = 86_400
         state.playlists[0].shuffle = false
-        state.displays["display-A"] = DisplayAssignment(desktop: SurfaceAssignment(wallpaperID: "aurora", playlistID: "ambient", changedAt: Date(timeIntervalSince1970: 1_000)))
-        precondition(state.advance(display: "display-A", now: Date(timeIntervalSince1970: 1_599)) == nil)
-        precondition(state.advance(display: "display-A", now: Date(timeIntervalSince1970: 1_600))?.id == "ocean")
+        state.displays["display-A"] = DisplayAssignment(desktop: SurfaceAssignment(wallpaperID: "aurora", playlistID: "ambient", changedAt: Date(timeIntervalSince1970: 10_000)))
+        precondition(state.advance(display: "display-A", now: Date(timeIntervalSince1970: 10_000 + 86_399)) == nil)
+        precondition(state.advance(display: "display-A", now: Date(timeIntervalSince1970: 10_000 + 86_400))?.id == "ocean")
         state.playlists[0].interval = nil
         state.playlists[0].shuffle = nil
         state.displays["display-A"] = DisplayAssignment(desktop: SurfaceAssignment(wallpaperID: "aurora", playlistID: "ambient"))
