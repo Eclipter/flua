@@ -8,10 +8,11 @@ final class MediaSurface: NSView {
     private var videoLayer: AVPlayerLayer?
     private var sceneView: AmbientSceneView?
     private var imageLayer: CALayer?
-    private var shade = CALayer()
     private var desiredRate: Float = 1
     private var readyObservation: NSKeyValueObservation?
     private var isPaused = false
+    private var playbackSuspended = true
+    private var visibilityObservers: [NSObjectProtocol] = []
     private(set) var holdsStill = false
     private(set) var showsStillImage = false
     private var currentWallpaper: Wallpaper?
@@ -26,6 +27,32 @@ final class MediaSurface: NSView {
         layer?.backgroundColor = NSColor.black.cgColor
     }
     required init?(coder: NSCoder) { fatalError() }
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        visibilityObservers.forEach { NotificationCenter.default.removeObserver($0) }
+        visibilityObservers.removeAll()
+        if let window {
+            visibilityObservers.append(NotificationCenter.default.addObserver(forName: NSWindow.didChangeOcclusionStateNotification,
+                object: window, queue: .main) { [weak self] _ in self?.updatePlaybackState() })
+            if let clip = enclosingScrollView?.contentView {
+                clip.postsBoundsChangedNotifications = true
+                visibilityObservers.append(NotificationCenter.default.addObserver(forName: NSView.boundsDidChangeNotification,
+                    object: clip, queue: .main) { [weak self] _ in self?.updatePlaybackState() })
+            }
+        }
+        updatePlaybackState()
+    }
+    override func viewDidHide() { super.viewDidHide(); updatePlaybackState() }
+    override func viewDidUnhide() { super.viewDidUnhide(); updatePlaybackState() }
+    private func updatePlaybackState(force: Bool = false) {
+        let suspended = isPaused || holdsStill || isHiddenOrHasHiddenAncestor || visibleRect.isEmpty
+            || window?.occlusionState.contains(.visible) != true
+        guard force || suspended != playbackSuspended else { return }
+        playbackSuspended = suspended
+        if suspended { queue?.pause() }
+        else if queue?.currentItem?.status == .readyToPlay { queue?.playImmediately(atRate: desiredRate) }
+        sceneView?.isPaused = suspended
+    }
     func configure(_ wallpaper: Wallpaper, url: URL?, autoplay: Bool = true, mode: WallpaperMode = .animated, stillImage: NSImage? = nil) {
         cleanup()
         currentWallpaper = wallpaper
@@ -57,12 +84,11 @@ final class MediaSurface: NSView {
                     guard let self, self.queue === p else { return }
                     if p.currentItem?.status == .failed {
                         self.onError?(p.currentItem?.error?.localizedDescription ?? "Video playback failed.")
-                    } else if p.currentItem?.status == .readyToPlay && !self.isPaused {
+                    } else if p.currentItem?.status == .readyToPlay && !self.playbackSuspended {
                         p.playImmediately(atRate: self.desiredRate)
                     }
                 }
             }
-            if autoplay { player.playImmediately(atRate: desiredRate) }
         } else if wallpaper.kind == "image", let url, let image = NSImage(contentsOf: url) {
             addImage(image, fit: wallpaper.fit)
         } else if ["aurora", "cosmos", "ocean", "ember"].contains(wallpaper.kind) {
@@ -70,9 +96,10 @@ final class MediaSurface: NSView {
             scene.autoresizingMask = [.width, .height]
             scene.speed = wallpaper.speed
             scene.dimming = 0
-            scene.isPaused = !autoplay
+            scene.isPaused = true
             addSubview(scene)
             sceneView = scene
+            if let error = scene.previewError { onError?(error) }
         } else {
             onError?("The wallpaper's media file is missing or unsupported.")
         }
@@ -84,12 +111,12 @@ final class MediaSurface: NSView {
         overlay.layer?.backgroundColor = NSColor.black.withAlphaComponent(wallpaper.dimming).cgColor
         addSubview(overlay)
         needsLayout = true
+        updatePlaybackState(force: true)
     }
     func setPaused(_ paused: Bool) {
         guard !holdsStill, paused != isPaused else { return }
         isPaused = paused
-        if paused { queue?.pause() } else { queue?.playImmediately(atRate: desiredRate) }
-        sceneView?.isPaused = paused
+        updatePlaybackState()
     }
     func useStill(_ image: NSImage) {
         guard holdsStill, let wallpaper = currentWallpaper else { return }
@@ -112,7 +139,7 @@ final class MediaSurface: NSView {
         desiredRate = Float(w.speed)
         queue?.isMuted = w.volume == 0 || w.videoEdit?.includeAudio == false
         queue?.volume = Float(w.volume)
-        if !isPaused, queue?.currentItem?.status == .readyToPlay { queue?.rate = desiredRate }
+        if !playbackSuspended, queue?.currentItem?.status == .readyToPlay { queue?.rate = desiredRate }
         videoLayer?.videoGravity = w.fit ? .resizeAspect : .resizeAspectFill
         imageLayer?.contentsGravity = w.fit ? .resizeAspect : .resizeAspectFill
         sceneView?.speed = w.speed
@@ -125,6 +152,7 @@ final class MediaSurface: NSView {
         videoLayer?.frame = bounds
         imageLayer?.frame = bounds
         CATransaction.commit()
+        updatePlaybackState()
     }
     func cleanup() {
         readyObservation = nil
@@ -152,7 +180,11 @@ final class MediaSurface: NSView {
         imageLayer = il
         if holdsStill { showsStillImage = il.contents != nil }
     }
-    deinit { queue?.pause(); looper?.disableLooping() }
+    deinit {
+        visibilityObservers.forEach { NotificationCenter.default.removeObserver($0) }
+        queue?.pause()
+        looper?.disableLooping()
+    }
 }
 
 func displayID(_ screen: NSScreen) -> String {

@@ -14,3 +14,5 @@ swiftc -parse-as-library -target arm64-apple-macosx27.0 Tests/FluaTests/FocusTes
 build/tests/focus-tests
 swiftc -parse-as-library -target arm64-apple-macosx27.0 Tests/FluaTests/InstallerTests.swift -o build/tests/installer-tests
 build/tests/installer-tests
+swiftc -O -target arm64-apple-macosx27.0 Sources/Flua/SceneDrawing.swift Tests/FluaTests/ScenePreviewTests.swift -o build/tests/scene-preview-tests
+build/tests/scene-preview-tests

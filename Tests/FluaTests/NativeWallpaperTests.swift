@@ -65,6 +65,10 @@ import Foundation
         let reappliedWithoutBaseline = try NativeWallpaperStore.replacing(assignments, displays: ["display"], provider: "local.flua.desktop.wallpaper",
             mirrored: true, in: updated, baseline: nil)
         precondition(NativeWallpaperStore.matches(assignments, mirrored: true, in: reappliedWithoutBaseline))
+        let unchangedRestore = try NativeWallpaperStore.replacing(assignments, displays: ["display"], provider: "local.flua.desktop.wallpaper",
+            mirrored: true, in: updated, baseline: original)
+        precondition(NativeWallpaperStore.stopMatches(unchangedRestore, in: updated), "Restoration must ignore refreshed surface timestamps")
+        precondition(!NativeWallpaperStore.stopMatches(unchangedRestore, in: original), "A different system wallpaper still needs application")
         let captureFresh = try NativeWallpaperStore.shouldCaptureBaseline(nil, provider: "local.flua.desktop.wallpaper", in: original)
         let skipExisting = try NativeWallpaperStore.shouldCaptureBaseline(nil, provider: "local.flua.desktop.wallpaper", in: updated)
         let refreshSaved = try NativeWallpaperStore.shouldCaptureBaseline(original, provider: "local.flua.desktop.wallpaper", in: updated)

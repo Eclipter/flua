@@ -1,5 +1,4 @@
 import AppKit
-import QuartzCore
 
 /// A small, self-contained renderer for Flua's original procedural scenes.
 final class AmbientSceneView: NSView {
@@ -11,13 +10,14 @@ final class AmbientSceneView: NSView {
     ]
 
     let scene: String
-    var isPaused = false { didSet { updateTimer() } }
-    var speed: Double = 1
-    var dimming: Double = 0.12 { didSet { needsDisplay = true } }
-    private var timer: Timer?
-    private var lastTick: CFTimeInterval = CACurrentMediaTime()
-    private var elapsed: Double = 0
-    private var renderContext: CGContext?
+    var isPaused = false { didSet { updatePlayback() } }
+    var speed: Double = 1 { didSet { renderer?.updateSpeed(speed) } }
+    var dimming: Double = 0.12 {
+        didSet { renderer?.updateDimming(dimming) }
+    }
+    var frameCount: Int { renderer?.frameCount ?? 0 }
+    private(set) var previewError: String?
+    private var renderer: ScenePreviewRenderer?
 
     override var isOpaque: Bool { true }
     override var acceptsFirstResponder: Bool { false }
@@ -25,65 +25,69 @@ final class AmbientSceneView: NSView {
     init(frame: NSRect, scene: String) {
         self.scene = scene
         super.init(frame: frame)
-        wantsLayer = true
-        layerContentsRedrawPolicy = .onSetNeedsDisplay
+        do {
+            let renderer = try ScenePreviewRenderer(view: self, scene: scene)
+            renderer.updateDimming(dimming)
+            self.renderer = renderer
+            updateDrawableSize()
+        } catch {
+            previewError = "Scene preview could not start: " + error.localizedDescription
+            wantsLayer = true
+            let image = Self.thumbnail(scene: scene, size: NSSize(width: 480, height: 300))
+            layer?.contents = image.cgImage(forProposedRect: nil, context: nil, hints: nil)
+        }
     }
 
-    required init?(coder: NSCoder) {
-        scene = "aurora"
-        super.init(coder: coder)
+    required init?(coder: NSCoder) { fatalError() }
+    deinit {
+        if let occlusionObserver {
+            NotificationCenter.default.removeObserver(occlusionObserver)
+        }
+        renderer?.setPaused(true)
     }
 
-    deinit { timer?.invalidate() }
+    override func setFrameSize(_ newSize: NSSize) {
+        let changed = frame.size != newSize
+        super.setFrameSize(newSize)
+        if changed { updateDrawableSize() }
+    }
+    private func updateDrawableSize() {
+        // Keep animated scene shaders near the previous 480 x 300 pixel budget.
+        let scale = min(1, min(1280 / max(max(bounds.width, bounds.height), 1), sqrt(144_000 / max(bounds.width * bounds.height, 1))))
+        let size = CGSize(width: max(1, ceil(bounds.width * scale)), height: max(1, ceil(bounds.height * scale)))
+        renderer?.resize(frame: bounds, drawableSize: size)
+    }
+
+    private var occlusionObserver: Any?
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
-        updateTimer()
-    }
-
-    private func updateTimer() {
-        timer?.invalidate()
-        timer = nil
-        lastTick = CACurrentMediaTime()
-        guard !isPaused, window != nil else { return }
-        let newTimer = Timer(timeInterval: 1.0 / 24.0, repeats: true) { [weak self] _ in
-            guard let self else { return }
-            let now = CACurrentMediaTime()
-            // Cap long gaps after sleep or a busy run loop; do not jump through a scene.
-            let delta = min(max(now - self.lastTick, 0), 0.1)
-            self.lastTick = now
-            let rate = self.speed.isFinite ? min(max(self.speed, 0), 4) : 1
-            self.elapsed += delta * rate
-            self.needsDisplay = true
+        if let occlusionObserver {
+            NotificationCenter.default.removeObserver(occlusionObserver)
+            self.occlusionObserver = nil
         }
-        newTimer.tolerance = 0.006
-        timer = newTimer
-        RunLoop.main.add(newTimer, forMode: .common)
-    }
-
-    override func draw(_ dirtyRect: NSRect) {
-        guard let context = NSGraphicsContext.current?.cgContext else { return }
-        // Gradients remain smooth when scaled. Bound the animation surface to 1280
-        // pixels so a Retina or external 5K display does not multiply drawing work.
-        let scale = min(1, 1280 / max(max(bounds.width, bounds.height), 1))
-        let width = max(1, Int(ceil(bounds.width * scale)))
-        let height = max(1, Int(ceil(bounds.height * scale)))
-        if renderContext?.width != width || renderContext?.height != height {
-            renderContext = CGContext(data: nil, width: width, height: height,
-                bitsPerComponent: 8, bytesPerRow: 0,
-                space: CGColorSpaceCreateDeviceRGB(),
-                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
-        }
-        if let canvas = renderContext {
-            SceneDrawing.render(scene: scene, time: elapsed, dimming: dimming, in: canvas,
-                bounds: CGRect(x: 0, y: 0, width: width, height: height))
-            if let frame = canvas.makeImage() {
-                context.interpolationQuality = .high
-                context.draw(frame, in: bounds)
+        if let window {
+            occlusionObserver = NotificationCenter.default.addObserver(
+                forName: NSWindow.didChangeOcclusionStateNotification,
+                object: window,
+                queue: .main
+            ) { [weak self] _ in
+                self?.updatePlayback()
             }
-        } else {
-            SceneDrawing.render(scene: scene, time: elapsed, dimming: dimming, in: context, bounds: bounds)
         }
+        updatePlayback()
+    }
+    override func viewDidHide() {
+        super.viewDidHide()
+        updatePlayback()
+    }
+    override func viewDidUnhide() {
+        super.viewDidUnhide()
+        updatePlayback()
+    }
+    private func updatePlayback() {
+        let paused = isPaused || isHiddenOrHasHiddenAncestor || window?.occlusionState.contains(.visible) != true
+        renderer?.setPaused(paused)
     }
 
     static func thumbnail(scene: String, size: NSSize) -> NSImage {

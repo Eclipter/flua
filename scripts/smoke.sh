@@ -1,13 +1,21 @@
 #!/bin/zsh
 set -euo pipefail
 cd "${0:A:h:h}"
+require_no_flua() {
+    if /usr/bin/pgrep -x Flua; then
+        print -u2 "Quit the running Flua before verification. Smoke tests never launch alongside another instance."
+        exit 1
+    fi
+}
+require_no_flua
 mkdir -p build/verification
 run_dir=$(mktemp -d "$PWD/build/verification/run.XXXXXX")
 # Offscreen accessibility names. Launching the binary directly does not activate the app.
 "$PWD/build/Flua.app/Contents/MacOS/Flua" \
     --data-dir "$run_dir/accessibility-library" \
     --accessibility-audit "$run_dir/results/accessibility.json"
-open -g -n -W "$PWD/build/Flua.app" \
+require_no_flua
+open -W "$PWD/build/Flua.app" \
     --args \
     --data-dir "$run_dir/library" \
     --smoke-test "$run_dir/results"

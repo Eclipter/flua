@@ -11,7 +11,18 @@ make release        # dist/Flua.zip
 make wallpaper-test # isolated wallpaper extension tests, no OS activation
 ```
 
-`Package.swift` supports SwiftPM and opening the source package in Xcode. Use `make build` for a runnable `.app`; `swift build` alone only produces an executable. Model/package tests are standalone executables run by `make test`, not XCTest targets. Smoke tests launch a separate app instance through Launch Services, wait for it to exit, and write only to a fresh directory under `build/verification/`.
+`Package.swift` supports SwiftPM and opening the source package in Xcode. Use `make build` for a runnable `.app`; `swift build` alone only produces an executable. Model/package tests are standalone executables run by `make test`, not XCTest targets. Quit any running Flua before smoke verification. The script refuses to start alongside another Flua process, runs its accessibility audit and application check sequentially, and writes only to a fresh directory under `build/verification/`. GPU scene tests in `make test` render offscreen without launching Flua.
+
+Playback smoke checks temporarily show a small window above other applications and wait for macOS to report it visible. They record submitted scene frames and process CPU time, then check pause, hiding, window occlusion, resume and release. For a quick scene-only frame-rate check, use a fresh disposable directory:
+
+```sh
+preview_dir=$(mktemp -d "$PWD/build/verification/preview.XXXXXX")
+open -W build/Flua.app --args \
+  --data-dir "$preview_dir/library" \
+  --preview-smoke "$preview_dir/results.json"
+```
+
+The preview check opens one visible window per scene in sequence and writes frame rate and CPU samples to `results.json`. On the built-in 60 Hz display under macOS 27.0.1, it measured 59.4–60.9 fps and 8.1–10.5% of one CPU core over 0.6-second samples. These short preview measurements do not represent long-run system-freeze or wallpaper-provider behavior.
 
 The build script updates the app bundle's modification time after signing so Launch Services can detect changed metadata and icon resources on subsequent launches.
 
