@@ -32,15 +32,18 @@ private struct FrostedSurface<S: Shape>: ViewModifier {
     let shape: S
     let clear: Bool
 
+    @ViewBuilder
     func body(content: Content) -> some View {
-        content
+        let base = content
             .background {
                 if reduceTransparency {
                     shape.fill(Color(nsColor: .windowBackgroundColor))
+                } else if clear {
+                    shape.fill(scheme == .dark ? Color.white.opacity(0.14) : Color.white.opacity(0.35))
                 } else {
                     shape.fill(.ultraThinMaterial)
                         .overlay {
-                            shape.fill(scheme == .dark ? Color.black.opacity(clear ? 0.12 : 0.2) : Color.white.opacity(clear ? 0.12 : 0.3))
+                            shape.fill(scheme == .dark ? Color.black.opacity(0.2) : Color.white.opacity(0.3))
                         }
                 }
             }
@@ -48,7 +51,11 @@ private struct FrostedSurface<S: Shape>: ViewModifier {
                 shape.stroke(LinearGradient(colors: [.white.opacity(scheme == .dark ? 0.24 : 0.7), .white.opacity(0.06)], startPoint: .topLeading, endPoint: .bottomTrailing), lineWidth: 0.75)
                     .allowsHitTesting(false)
             }
-            .shadow(color: .black.opacity(scheme == .dark ? 0.16 : 0.06), radius: 12, y: 4)
+        if clear {
+            base
+        } else {
+            base.shadow(color: .black.opacity(scheme == .dark ? 0.16 : 0.06), radius: 12, y: 4)
+        }
     }
 }
 
@@ -326,8 +333,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
     func applicationWillFinishLaunching(_ notification: Notification) {
-        if ProcessInfo.processInfo.arguments.contains("--accessibility-audit") {
-            NSApp.setActivationPolicy(.accessory)
+        let arguments = ProcessInfo.processInfo.arguments
+        if arguments.contains("--accessibility-audit") || arguments.contains("--preview-smoke") {
+            if arguments.contains("--accessibility-audit") { NSApp.setActivationPolicy(.accessory) }
             return
         }
         AppContext.library.applyPresence()
@@ -336,6 +344,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if ProcessInfo.processInfo.arguments.contains("--accessibility-audit") {
             for window in NSApp.windows { SmokeRunner.park(window) }
             Task { await SmokeRunner.runAuditIfRequested(library: AppContext.library) }
+            return
+        }
+        if ProcessInfo.processInfo.arguments.contains("--preview-smoke") {
+            Task { await SmokeRunner.runPreviewSmokeIfRequested() }
             return
         }
         DispatchQueue.main.async { self.openLibrary?() }
@@ -359,7 +371,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         .defaultSize(width: 1320, height: 840)
         // Smoke tests start without an automatic window to exercise explicit launch handling.
-        .defaultLaunchBehavior(ProcessInfo.processInfo.arguments.contains("--smoke-test") ? .suppressed : .presented)
+        .defaultLaunchBehavior(ProcessInfo.processInfo.arguments.contains("--smoke-test") || ProcessInfo.processInfo.arguments.contains("--preview-smoke") ? .suppressed : .presented)
         .windowToolbarStyle(.unified)
         .commands {
             CommandGroup(after: .newItem) {
@@ -432,7 +444,9 @@ struct LibraryView: View {
                     transport(compact: geometry.size.width < 650)
                         .fluaGlass(in: RoundedRectangle(cornerRadius: 16, style: .continuous))
                         .padding(12)
-                        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { ui.transportHeight = $0 }
+                        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: {
+                            if abs(ui.transportHeight - $0) > 0.5 { ui.transportHeight = $0 }
+                        }
                         .padding(.trailing, NSScroller.scrollerWidth(for: .regular, scrollerStyle: NSScroller.preferredScrollerStyle))
                 }
             }
@@ -774,10 +788,13 @@ struct WallpaperCard: View {
                 .contentShape(Circle())
                 .accessibilityLabel(wallpaper.favorite ? "Remove favorite" : "Add favorite")
             }
-            .clipped()
             .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(selected ? library.accent : Color.primary.opacity(0.12), lineWidth: selected ? 2 : 1))
-            .shadow(color: .black.opacity(0.12), radius: 8, y: 3)
+            .background {
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(Color(nsColor: .windowBackgroundColor))
+                    .shadow(color: .black.opacity(0.12), radius: 8, y: 3)
+            }
             .contentShape(Rectangle())
     }
 }

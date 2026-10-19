@@ -2,8 +2,10 @@ import AppKit
 import ApplicationServices
 import AVFoundation
 import SwiftUI
+import Darwin
+import Combine
 
-/// Invoked only with --smoke-test <directory>; writes all test state to --data-dir.
+/// Runs opt-in isolated runtime checks and writes outputs only to their supplied directories.
 enum SmokeRunner {
     private static var running = false
     /// Keeps an audit window off the active space and out of the window cycle.
@@ -65,6 +67,47 @@ enum SmokeRunner {
             try? data.write(to: destination)
         }
         exit(missing.isEmpty ? 0 : 1)
+    }
+    @MainActor static func runPreviewSmokeIfRequested() async {
+        let args = ProcessInfo.processInfo.arguments
+        guard let i = args.firstIndex(of: "--preview-smoke"), args.indices.contains(i + 1) else { return }
+        let destination = URL(fileURLWithPath: args[i + 1])
+        try? FileManager.default.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
+        var frameRates: [String: Double] = [:]
+        var cpuUsage: [String: Double] = [:]
+        var visibility: [String: String] = [:]
+        for kind in AmbientSceneView.scenes.map(\.id) {
+            let window = NSWindow(contentRect: NSRect(x: 120, y: 120, width: 640, height: 392), styleMask: [.titled], backing: .buffered, defer: false)
+            window.title = "Flua Scene Preview Benchmark — " + kind
+            window.isReleasedWhenClosed = false
+            let preview = AmbientSceneView(frame: NSRect(origin: .zero, size: NSSize(width: 640, height: 392)), scene: kind)
+            window.contentView = preview
+            window.orderFrontRegardless()
+            await waitUntilVisible(window)
+            visibility[kind] = "occlusion=\(window.occlusionState.rawValue) hidden=\(preview.isHiddenOrHasHiddenAncestor) rect=\(preview.visibleRect)"
+            await pause(0.2)
+            let initialFrames = preview.frameCount
+            let cpuStart = processCPUTime()
+            let start = CACurrentMediaTime()
+            await pause(0.6)
+            let duration = CACurrentMediaTime() - start
+            frameRates[kind] = Double(preview.frameCount - initialFrames) / duration
+            cpuUsage[kind] = (processCPUTime() - cpuStart) / duration * 100
+            preview.isPaused = true
+            window.close()
+            await pause(0.1)
+        }
+        let report: [String: Any] = [
+            "passed": frameRates.values.allSatisfy { $0 > 0 },
+            "framesPerSecond": frameRates,
+            "cpuPercentOfOneCore": cpuUsage,
+            "visibility": visibility
+        ]
+        if let data = try? JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys]) {
+            try? data.write(to: destination)
+            print(String(decoding: data, as: UTF8.self))
+        }
+        exit(frameRates.values.allSatisfy { $0 > 0 } ? 0 : 1)
     }
     private static func checkboxValue(_ title: String, named name: String) -> Bool? {
         checkboxAttribute(title, named: name, kAXValueAttribute)
@@ -153,6 +196,24 @@ enum SmokeRunner {
             await pause(1)
             if let screen = library.screens.first {
                 let key = displayID(screen)
+                let original = library.state
+                for mode in ["mirrored", "perDisplay"] {
+                    var idle = original
+                    idle.displayMode = mode
+                    idle.interval = 300
+                    if let playlist = idle.playlists.first {
+                        idle.playlists[0].interval = 300
+                        idle.assign("aurora", display: key, playlistID: playlist.id)
+                    }
+                    library.state = idle
+                    var publications = 0
+                    let observation = library.$state.dropFirst().sink { _ in publications += 1 }
+                    library.advancePlaylists(force: false)
+                    observation.cancel()
+                    results["idlePlaylistDoesNotPublish_" + mode] = publications == 0
+                    if publications != 0 { failures.append("idlePlaylistDoesNotPublish_" + mode) }
+                }
+                library.state = original
                 let root = out.appendingPathComponent("LaunchRestoration", isDirectory: true)
                 let disk = try LibraryDisk(root: root)
                 var saved = LibraryState.initial
@@ -209,9 +270,12 @@ enum SmokeRunner {
             let testWindow = NSWindow(contentRect: NSRect(x: 100, y: 100, width: 640, height: 360), styleMask: [.titled], backing: .buffered, defer: false)
             testWindow.isReleasedWhenClosed = false
             testWindow.title = "Flua playback verification"
+            testWindow.collectionBehavior = [.stationary, .canJoinAllApplications]
+            testWindow.level = .statusBar
             let surface = MediaSurface(frame: NSRect(x: 0, y: 0, width: 640, height: 360))
             testWindow.contentView = surface
-            testWindow.orderFront(nil)
+            // Preview tests require a genuinely visible window now that occluded playback pauses.
+            testWindow.orderFrontRegardless()
             surface.onError = { failures.append($0) }
             let video = videos[0]
             let copiedBytes = (try FileManager.default.attributesOfItem(atPath: library.disk.url(for: video)!.path)[.size] as? NSNumber)?.int64Value
@@ -259,11 +323,23 @@ enum SmokeRunner {
                 && legacyLibrary.state.item(unknownColor.id)?.color == "Unknown"
             legacyLibrary.tick?.invalidate()
             surface.configure(video, url: library.disk.url(for: video))
+            testWindow.orderFrontRegardless()
+            await waitUntilVisible(testWindow)
             await pause(0.8)
             results["videoReady"] = surface.mediaReady
+            results["previewWindowOcclusion"] = testWindow.occlusionState.rawValue
+            results["previewWindowOnActiveSpace"] = testWindow.isOnActiveSpace
+            results["previewAppActive"] = NSApp.isActive
+            results["previewVisibleRect"] = NSStringFromRect(surface.visibleRect)
             results["videoPlaying"] = surface.playbackRate > 0
             var times: [Double] = []
-            for _ in 0..<16 { await pause(0.15); times.append(surface.playbackTime) }
+            var visibility: [String] = []
+            for _ in 0..<16 {
+                await pause(0.15)
+                times.append(surface.playbackTime)
+                visibility.append("\(testWindow.occlusionState.rawValue) hidden=\(surface.isHiddenOrHasHiddenAncestor) rect=\(surface.visibleRect)")
+            }
+            results["videoVisibility"] = visibility
             results["videoTimes"] = times
             results["videoLooped"] = zip(times, times.dropFirst()).contains { $1 < $0 - 0.2 }
             surface.setPaused(true)
@@ -273,6 +349,17 @@ enum SmokeRunner {
             surface.setPaused(false)
             await pause(0.3)
             results["videoResumed"] = surface.playbackRate > 0
+            surface.isHidden = true
+            await pause(0.2)
+            let hiddenVideoTime = surface.playbackTime
+            await pause(0.2)
+            results["hiddenVideoPreviewPaused"] = surface.playbackRate == 0 && abs(surface.playbackTime - hiddenVideoTime) < 0.08
+            surface.isHidden = false
+            await pause(0.3)
+            results["hiddenVideoPreviewResumed"] = surface.playbackRate > 0
+            for check in ["hiddenVideoPreviewPaused", "hiddenVideoPreviewResumed"] {
+                if results[check] as? Bool != true { failures.append(check) }
+            }
             surface.setPaused(true)
             let beforeAdjustment = surface.playbackTime
             var adjusted = video
@@ -369,13 +456,54 @@ enum SmokeRunner {
                 await captureAppearances(window, stem: "Flua-editor", directory: out)
                 window.close()
             }
+            testWindow.orderFrontRegardless()
+            await waitUntilVisible(testWindow)
             for kind in ["image", "aurora", "cosmos", "ocean", "ember"] {
                 let w = kind == "image" ? images[0] : library.state.wallpapers.first { $0.kind == kind }!
                 surface.configure(w, url: library.disk.url(for: w))
                 await pause(0.15)
                 results["render_" + kind] = surface.subviews.count > 0 || (surface.layer?.sublayers?.count ?? 0) > 0
             }
+            weak var releasedScene = surface.subviews.compactMap { $0 as? AmbientSceneView }.first
+            if let scene = releasedScene {
+                let frames = scene.frameCount
+                let start = CACurrentMediaTime()
+                let cpuStart = processCPUTime()
+                await pause(0.6)
+                results["scenePreviewFPS"] = Double(scene.frameCount - frames) / (CACurrentMediaTime() - start)
+                results["scenePreviewCPUPercent"] = (processCPUTime() - cpuStart) / (CACurrentMediaTime() - start) * 100
+                results["scenePreviewVisibility"] = "\(testWindow.occlusionState.rawValue) hidden=\(scene.isHiddenOrHasHiddenAncestor) rect=\(surface.visibleRect)"
+                results["scenePreviewAnimated"] = scene.frameCount > frames + 2
+                scene.isPaused = true
+                await pause(0.1)
+                let paused = scene.frameCount
+                await pause(0.2)
+                results["scenePreviewPaused"] = scene.frameCount == paused
+                scene.isPaused = false
+                scene.isHidden = true
+                await pause(0.1)
+                let hidden = scene.frameCount
+                await pause(0.2)
+                results["scenePreviewHidden"] = scene.frameCount == hidden
+                scene.isHidden = false
+                await pause(0.2)
+                results["scenePreviewResumed"] = scene.frameCount > hidden
+                testWindow.orderOut(nil)
+                await pause(0.2)
+                let occluded = scene.frameCount
+                await pause(0.2)
+                results["scenePreviewWindowHidden"] = scene.frameCount == occluded
+                testWindow.orderFrontRegardless()
+                await waitUntilVisible(testWindow)
+                await pause(0.3)
+                results["scenePreviewWindowResumed"] = scene.frameCount > occluded
+            }
             surface.cleanup()
+            await pause(0.1)
+            results["scenePreviewReleased"] = releasedScene == nil
+            for check in ["scenePreviewAnimated", "scenePreviewPaused", "scenePreviewHidden", "scenePreviewResumed", "scenePreviewReleased", "scenePreviewWindowHidden", "scenePreviewWindowResumed"] {
+                if results[check] as? Bool != true { failures.append(check) }
+            }
             testWindow.close()
             if let screen = NSScreen.screens.first {
                 let baseline = NSWorkspace.shared.desktopImageURL(for: screen)
@@ -657,6 +785,8 @@ enum SmokeRunner {
         }
     }
     @MainActor private static func verifyInspectorInteraction(library: Library) async -> Bool {
+        // The isolated catalog rejects native Apply; dismiss that expected alert before later preview checks.
+        defer { library.error = nil }
         guard let window = NSApp.windows.first(where: { $0.title == "Flua" }),
               let root = window.contentView, let parent = root.superview,
               let selected = library.selected else { return false }
@@ -766,6 +896,18 @@ enum SmokeRunner {
         task.arguments = ["-x", "-o", "-l", String(window.windowNumber), url.path]
         try? task.run()
         task.waitUntilExit()
+    }
+    private static func processCPUTime() -> Double {
+        var usage = rusage()
+        getrusage(RUSAGE_SELF, &usage)
+        return Double(usage.ru_utime.tv_sec + usage.ru_stime.tv_sec)
+            + Double(usage.ru_utime.tv_usec + usage.ru_stime.tv_usec) / 1_000_000
+    }
+    @MainActor private static func waitUntilVisible(_ window: NSWindow) async {
+        NSApp.activate(ignoringOtherApps: true)
+        window.makeKeyAndOrderFront(nil)
+        let deadline = Date().addingTimeInterval(5)
+        while !window.occlusionState.contains(.visible) && Date() < deadline { await pause(0.05) }
     }
     static func pause(_ seconds: Double) async { try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000)) }
     static func makeAudioVideo(video: URL, directory: URL) async throws -> URL {

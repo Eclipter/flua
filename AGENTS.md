@@ -15,7 +15,7 @@
 - `LibraryPaths.swift`: application-support directory resolution.
 - `MediaFacts.swift`: local image/video inspection and thumbnail color classification.
 - `Engine.swift`: media preview surface and display identification.
-- `SceneView.swift`: built-in procedural scenes.
+- `SceneView.swift`: built-in procedural preview host. `ScenePreviewRenderer.swift` and `ScenePreview.metal` render previews on the GPU; `SceneDrawing.swift` remains the thumbnail/still/provider reference.
 - `Editor.swift`: video preview and export.
 - `ScenePackage.swift`: package and ZIP validation/import.
 - `SmokeRunner.swift`: opt-in isolated runtime verification.
@@ -28,6 +28,7 @@
 - Preserve backward compatibility for persisted Codable data. Existing libraries must continue to load without migration-related data loss.
 - Treat file paths, manifests, and ZIP contents as untrusted input. Keep path-containment and archive validation at import boundaries.
 - Never use a developer's real `~/Library/Application Support/Flua/` data for tests. Use a new disposable directory with `--data-dir`.
+- When testing native wallpaper application or provider setup with a disposable `--data-dir`, rebuild the app bundle with `FLUA_CATALOG_PATH` set to that directory's `catalog.json` (and `FLUA_WALLPAPER_IDENTIFIER` if testing provider registration). Otherwise, applying native wallpapers in the app will be blocked with *"This build uses a different library"*.
 - Preserve source media during import, editing and export. Replacing an existing export destination is allowed with explicit user consent, such as confirmation in the save dialog. Never replace files silently.
 - Keep UI and user-facing documentation in English, matching the existing application.
 - Follow `.editorconfig`: four spaces in Swift, tabs in `Makefile`, LF endings, and a final newline.
@@ -38,6 +39,8 @@
 ## Validation
 
 Run the narrowest relevant checks, then expand when the change crosses boundaries:
+
+- Run GUI verification and profiling serially. Never launch a test copy while any Flua process is running; close the owned test process before another run. Do not terminate a user’s normal library session merely to bypass this rule.
 
 - After every UI change, visually inspect the current build in a real app window with a disposable `--data-dir`. Check the affected layout and interactions before reporting completion; builds and smoke tests alone do not count as visual verification.
 

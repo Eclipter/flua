@@ -46,13 +46,29 @@ enum NativeWallpaper {
             throw NativeWallpaperError("macOS did not register this copy of Flua. Keep the app in a permanent folder and retry setup.")
         }
     }
-    static func apply(_ assignments: [String: NativeWallpaperStore.Assignment], targeting displays: [String], mirrored: Bool, root: URL) throws {
+    static func apply(_ assignments: [String: NativeWallpaperStore.Assignment], targeting displays: [String], mirrored: Bool, root: URL, reloadUnchanged: Bool = true) throws {
         guard !assignments.isEmpty else {
             _ = try stop(displays: displays, mirrored: mirrored, root: root)
             return
         }
-        try register()
         let baselineURL = root.appendingPathComponent("NativeWallpaperBaseline.plist")
+        if !reloadUnchanged {
+            let store = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/com.apple.wallpaper/Store/Index.plist")
+            let attributes = try FileManager.default.attributesOfItem(atPath: store.path)
+            guard attributes[.type] as? FileAttributeType == .typeRegular,
+                  ((attributes[.size] as? NSNumber)?.intValue ?? Int.max) <= NativeWallpaperStore.maximumSize else {
+                throw NativeWallpaperError("The macOS wallpaper store could not be read safely.")
+            }
+            let current = try Data(contentsOf: store)
+            let baseline = FileManager.default.fileExists(atPath: baselineURL.path) ? try Data(contentsOf: baselineURL) : nil
+            let expected = try NativeWallpaperStore.replacing(assignments, displays: displays, provider: identifier,
+                mirrored: mirrored, in: current, baseline: baseline)
+            if NativeWallpaperStore.stopMatches(expected, in: current) {
+                let elected = try run("/usr/bin/pluginkit", ["-m", "-v", "-i", identifier], allowedStatuses: [0, 1])
+                if pluginPaths(in: elected).contains(extensionURL.resolvingSymlinksInPath().path) { return }
+            }
+        }
+        try register()
         try updateStore(root: root, baselineDisplays: displays, transform: { current in
             let baseline = FileManager.default.fileExists(atPath: baselineURL.path) ? try Data(contentsOf: baselineURL) : nil
             return try NativeWallpaperStore.replacing(assignments, displays: displays, provider: identifier,

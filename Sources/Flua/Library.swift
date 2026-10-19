@@ -154,21 +154,19 @@ final class Library: ObservableObject {
     }
     func settingChanged() { save() }
     @MainActor func applySelected() {
-        guard let w = selected else { return }
+        guard !nativeSetupBusy, let w = selected else { return }
         let ids = targets.map(displayID)
-        let previousAssignments = state.displays
         let now = Date()
         for id in ids { state.assign(w.id, display: id, surface: surface, now: now) }
         if playbackMode == "mirrored" { _ = state.synchronizeMirrored(displayIDs: ids) }
         save()
-        let changed = state.nativeAssignmentChanges(from: previousAssignments, displays: ids)
-        scheduleNativeAssignmentRefresh(for: changed)
         let displayCount = ids.count == screens.count ? "all displays" : targets.first?.localizedName ?? "display"
         let surfaceName = surface == .desktop ? "desktop" : "lock screen"
         activity = "Applied \(w.title) to \(surfaceName) on \(displayCount)."
         applySavedNativeAssignments(displays: ids)
     }
     @MainActor func startPlaylist(_ id: String) {
+        guard !nativeSetupBusy else { return }
         guard let p = state.playlist(id), let w = p.items.compactMap({ state.item($0) }).first else { error = "Add at least one scene to this playlist first."; return }
         let now = Date()
         let ids = targets.map(displayID)
@@ -188,9 +186,11 @@ final class Library: ObservableObject {
     @MainActor func advancePlaylists(force: Bool, backwards: Bool = false, allDisplays: Bool = false) {
         guard !nativeSetupBusy, !state.paused || force else { return }
         if !force && screens.allSatisfy({ stoppedNativeDisplays.contains(displayID($0)) }) { return }
+        // Mutating a @Published value notifies the whole window even when advancement returns nil.
+        var next = state
         var didChange = false
         if playbackMode == "mirrored" {
-            if let _ = state.advanceMirrored(displayIDs: screens.map(displayID), force: force, backwards: backwards) {
+            if next.advanceMirrored(displayIDs: screens.map(displayID), force: force, backwards: backwards) != nil {
                 didChange = true
             }
         } else {
@@ -198,12 +198,13 @@ final class Library: ObservableObject {
                 let key = displayID(screen)
                 if !force && stoppedNativeDisplays.contains(key) { continue }
                 if force && !allDisplays && display != key { continue }
-                if let _ = state.advance(display: key, force: force, backwards: backwards) {
+                if next.advance(display: key, force: force, backwards: backwards) != nil {
                     didChange = true
                 }
             }
         }
         if didChange {
+            state = next
             save()
             applySavedNativeAssignments()
         }
@@ -270,14 +271,14 @@ final class Library: ObservableObject {
             }
             return
         }
-        applySavedNativeAssignments(displays: ids)
+        applySavedNativeAssignments(displays: ids, reloadUnchanged: false)
     }
     @MainActor func applySavedNativeAssignments() {
         let connected = screens.map(displayID)
         let displays = state.nativeApplicationDisplays(targeted: targets.map(displayID), connected: connected)
         applySavedNativeAssignments(displays: displays)
     }
-    @MainActor private func applySavedNativeAssignments(displays: [String]) {
+    @MainActor private func applySavedNativeAssignments(displays: [String], reloadUnchanged: Bool = true) {
         guard !nativeSetupBusy else { return }
         guard NativeWallpaper.available else { error = NativeWallpaper.explanation; return }
         guard !saveBlocked else { error = LibraryError.invalidLibrary.localizedDescription; return }
@@ -300,7 +301,7 @@ final class Library: ObservableObject {
         Task {
             defer { nativeSetupBusy = false }
             do {
-                try await Task.detached { try NativeWallpaper.apply(assignments, targeting: displays, mirrored: mirrored, root: root) }.value
+                try await Task.detached { try NativeWallpaper.apply(assignments, targeting: displays, mirrored: mirrored, root: root, reloadUnchanged: reloadUnchanged) }.value
                 rememberNativeAssignments(assignments, displays: displays)
                 activity = assignments.isEmpty
                     ? "Previous system wallpapers restored; no saved native choices remain for the targeted displays."
