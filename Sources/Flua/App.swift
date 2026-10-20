@@ -3,6 +3,10 @@ import AppKit
 import Combine
 
 final class ViewState: ObservableObject {
+    @Published var showingPreview = false
+    @Published var playlistPicker: String?
+    @Published var pickerSelected = Set<String>()
+    @Published var pickerQuery = ""
     @Published var columnVisibility: NavigationSplitViewVisibility = .all
     @Published var transportHeight: CGFloat = 0
     @Published var creatingPlaylist = false
@@ -367,7 +371,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         Window("Flua", id: "library") {
             LibraryView().environmentObject(library)
-                .frame(minWidth: 1050, minHeight: 680)
+                .frame(minWidth: 700, minHeight: 440)
         }
         .defaultSize(width: 1320, height: 840)
         // Smoke tests start without an automatic window to exercise explicit launch handling.
@@ -375,8 +379,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         .windowToolbarStyle(.unified)
         .commands {
             CommandGroup(after: .newItem) {
-                Button("Create New Flua…") { library.createWallpaper() }.keyboardShortcut("n")
-                Button("Import media or scene package…") { library.chooseMedia() }.keyboardShortcut("i")
+                Button("Add Wallpaper…") { library.chooseMedia() }.keyboardShortcut("n")
             }
             CommandMenu("Playback") {
                 Button(library.state.paused ? "Resume" : "Pause") { library.togglePause() }.keyboardShortcut("p", modifiers: [.command, .shift])
@@ -413,48 +416,67 @@ struct LibraryView: View {
     @StateObject private var ui = ViewState()
     @EnvironmentObject var library: Library
     var body: some View {
-        NavigationSplitView(columnVisibility: $ui.columnVisibility) {
-            sidebar
-                .toolbar(removing: .sidebarToggle)
-                .toolbar {
-                    ToolbarItem(placement: ui.columnVisibility == .detailOnly ? .navigation : .automatic) {
-                        Button {
-                            withAnimation { ui.columnVisibility = ui.columnVisibility == .detailOnly ? .all : .detailOnly }
-                        } label: {
-                            Image(systemName: "sidebar.left")
+        GeometryReader { windowGeometry in
+            NavigationSplitView(columnVisibility: $ui.columnVisibility) {
+                sidebar
+                    .toolbar(removing: .sidebarToggle)
+            } detail: {
+                GeometryReader { geometry in
+                    let isCompact = geometry.size.width < 650
+                    ScrollViewReader { proxy in
+                    ScrollView {
+                        Group {
+                            libraryContent(width: geometry.size.width)
                         }
-                        .fluaGlassButton()
-                        .help(ui.columnVisibility == .detailOnly ? "Show Sidebar" : "Hide Sidebar")
-                        .accessibilityLabel(ui.columnVisibility == .detailOnly ? "Show Sidebar" : "Hide Sidebar")
+                        .padding(.top, geometry.safeAreaInsets.top)
+                        .padding(.bottom, ui.transportHeight)
                     }
-                    .sharedBackgroundVisibility(.hidden)
-                }
-        } detail: {
-            GeometryReader { geometry in
-                ScrollView {
-                    Group {
-                        if library.section == "discover" { discoverContent }
-                        else { libraryContent }
+                    .ignoresSafeArea(.container, edges: .top)
+                    .overlay(alignment: .bottom) {
+                        transport(compact: isCompact, stackedControls: geometry.size.width < 380)
+                            .fluaGlass(in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                            .padding(12)
+                            .padding(.trailing, NSScroller.scrollerWidth(for: .regular, scrollerStyle: NSScroller.preferredScrollerStyle))
+                            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: {
+                                if abs(ui.transportHeight - $0) > 0.5 { ui.transportHeight = $0 }
+                            }
                     }
-                    .padding(.top, geometry.safeAreaInsets.top)
-                    .padding(.bottom, ui.transportHeight)
-                }
-                .ignoresSafeArea(.container, edges: .top)
-                .overlay(alignment: .bottom) {
-                    transport(compact: geometry.size.width < 650)
-                        .fluaGlass(in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-                        .padding(12)
-                        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: {
-                            if abs(ui.transportHeight - $0) > 0.5 { ui.transportHeight = $0 }
+                    .onChange(of: library.lastImportIDs) { _, ids in
+                        if !ids.isEmpty {
+                            DispatchQueue.main.async { if let id = library.selection { proxy.scrollTo(id, anchor: .top) } }
                         }
-                        .padding(.trailing, NSScroller.scrollerWidth(for: .regular, scrollerStyle: NSScroller.preferredScrollerStyle))
+                    }
+                    }
                 }
+                .navigationSplitViewColumnWidth(min: 280, ideal: 800)
+            }
+            .inspector(isPresented: .constant(windowGeometry.size.width >= 1000)) {
+                InspectorView().inspectorColumnWidth(min: 220, ideal: 280, max: 360)
             }
         }
-        .inspector(isPresented: .constant(true)) {
-            InspectorView().inspectorColumnWidth(min: 280, ideal: 304, max: 360)
+        .sheet(isPresented: $ui.showingPreview) {
+            VStack {
+                HStack { Text("Wallpaper Preview").font(.headline); Spacer(); Button("Done") { ui.showingPreview = false } }.padding()
+                InspectorView()
+            }.frame(width: 420, height: 680).environmentObject(library)
+        }
+        .sheet(isPresented: Binding(get: { ui.playlistPicker != nil }, set: { if !$0 { ui.playlistPicker = nil } })) {
+            if let id = ui.playlistPicker { PlaylistWallpaperPicker(playlistID: id).environmentObject(library) }
         }
         .toolbar(removing: .title)
+        .toolbar {
+            ToolbarItem(placement: .navigation) {
+                Button {
+                    withAnimation { ui.columnVisibility = ui.columnVisibility == .detailOnly ? .all : .detailOnly }
+                } label: {
+                    Image(systemName: "sidebar.left")
+                }
+                .fluaGlassButton()
+                .help(ui.columnVisibility == .detailOnly ? "Show Sidebar" : "Hide Sidebar")
+                .accessibilityLabel(ui.columnVisibility == .detailOnly ? "Show Sidebar" : "Hide Sidebar")
+            }
+            .sharedBackgroundVisibility(.hidden)
+        }
         .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .fluaBackdrop(accent: library.accent)
@@ -464,11 +486,11 @@ struct LibraryView: View {
         .overlay {
             if ui.dragOver {
                 RoundedRectangle(cornerRadius: 16).strokeBorder(library.accent, lineWidth: 2).padding(16)
-                    .overlay(Text("Drop videos or images to import").font(.title3).padding(16).fluaGlass(in: RoundedRectangle(cornerRadius: 12, style: .continuous)))
+                    .overlay(Text("Drop wallpapers to add").font(.title3).padding(16).fluaGlass(in: RoundedRectangle(cornerRadius: 12, style: .continuous)))
             }
         }
         .onDrop(of: [.fileURL], isTargeted: $ui.dragOver) { providers in
-            for p in providers { _ = p.loadObject(ofClass: URL.self) { url, _ in if let url { DispatchQueue.main.async { library.importMedia([url]) } } } }
+            Task { @MainActor in await library.importDroppedFiles(providers) }
             return !providers.isEmpty
         }
         .alert("Flua", isPresented: Binding(get: { library.error != nil }, set: { if !$0 { library.error = nil } })) {
@@ -479,10 +501,10 @@ struct LibraryView: View {
             Button("Create") { library.createPlaylist(ui.playlistName); ui.playlistName = "" }
             Button("Cancel", role: .cancel) {}
         }
-        .alert("Remove scene?", isPresented: Binding(get: { ui.deleting != nil }, set: { if !$0 { ui.deleting = nil } })) {
+        .alert("Remove wallpaper?", isPresented: Binding(get: { ui.deleting != nil }, set: { if !$0 { ui.deleting = nil } })) {
             Button("Remove", role: .destructive) { if let w = ui.deleting { library.remove(w) }; ui.deleting = nil }
             Button("Cancel", role: .cancel) { ui.deleting = nil }
-        } message: { Text("The scene will be removed from playlists and stopped on any display. Imported files are kept in Flua’s media folder.") }
+        } message: { Text("The wallpaper will be removed from playlists and stopped on any display. Imported files are kept in Flua’s media folder.") }
     }
     private var displayed: [Wallpaper] { library.visible }
     private var sectionSelection: Binding<String?> {
@@ -492,38 +514,43 @@ struct LibraryView: View {
             if value == "discover" { library.query = "" }
         })
     }
-    private var libraryContent: some View {
+    private func libraryContent(width: CGFloat) -> some View {
         VStack(alignment: .leading, spacing: 24) {
-            pageHeader
-            browseToolbar
+            pageHeader(compact: width < 650)
+            browseToolbar(compact: width < 650)
             if displayed.isEmpty {
-                ContentUnavailableView("No Wallpapers Available", systemImage: "photo.on.rectangle.angled", description: Text("Import media or clear your search and filters. Hidden tags can be adjusted in Settings → Blocked tags."))
+                ContentUnavailableView {
+                    Label("No Wallpapers", systemImage: "photo.on.rectangle.angled")
+                } description: {
+                    Text("Add wallpapers or reset filters to see your collection. Blocked tags can be adjusted in Settings.")
+                } actions: {
+                    if library.section.hasPrefix("playlist:") {
+                        Button("Add Wallpapers…") { ui.playlistPicker = String(library.section.dropFirst(9)) }
+                    } else {
+                        Button("Add Wallpaper…") { library.chooseMedia() }
+                    }
+                    Button("Reset Filters") { library.clearFilters() }
+                }
                     .frame(maxWidth: .infinity, minHeight: 320)
             } else {
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 240), spacing: 16)], spacing: 16) {
-                    ForEach(displayed) { wallpaperCard($0) }
+                    ForEach(displayed) { wallpaperCard($0).id($0.id) }
                 }
             }
         }.padding(24)
     }
-    private var discoverContent: some View {
-        VStack(alignment: .leading, spacing: 32) {
-            pageHeader
-            browseToolbar
-            if library.eligible.isEmpty {
-                ContentUnavailableView("No Wallpapers Available", systemImage: "photo.on.rectangle.angled", description: Text("Clear filters or adjust Settings → Blocked tags to show hidden content."))
-            }
-            discoverShelf("Featured", wallpapers: Array(library.eligible.prefix(3)), large: true)
-            discoverShelf("Animated", wallpapers: library.eligible.filter { $0.kind != "image" })
-            if library.eligible.contains(where: { $0.file != nil }) {
-                discoverShelf("Your Wallpapers", wallpapers: library.eligible.filter { $0.file != nil })
-            }
-        }.padding(24)
+    private func pageHeader(compact: Bool) -> some View {
+        let layout = compact || library.section.hasPrefix("playlist:") ? AnyLayout(VStackLayout(alignment: .leading, spacing: 12)) : AnyLayout(HStackLayout(alignment: .firstTextBaseline, spacing: 8))
+        return layout {
+            Text(library.sectionTitle).font(.system(size: compact ? 26 : 32, weight: .bold, design: .serif))
+                .lineLimit(1)
+            if !compact { Spacer(minLength: 8) }
+            pageHeaderActions(compact: compact)
+        }
     }
-    private var pageHeader: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Text(library.sectionTitle).font(.system(size: 32, weight: .bold, design: .serif))
-            Spacer()
+    private func pageHeaderActions(compact: Bool) -> some View {
+        let layout = AnyLayout(VStackLayout(alignment: .leading, spacing: 8))
+        return layout {
             if library.section.hasPrefix("playlist:") {
                 let id = String(library.section.dropFirst(9))
                 Menu {
@@ -542,54 +569,36 @@ struct LibraryView: View {
                     Button("Duplicate Playlist") { library.duplicatePlaylist(id) }
                 } label: { Label("Playlist Options", systemImage: "ellipsis.circle") }.fluaGlassMenu()
             }
-            fluaGlassRow {
+            let buttonLayout = compact ? AnyLayout(VStackLayout(alignment: .leading, spacing: 8)) : AnyLayout(HStackLayout(spacing: 8))
+            buttonLayout {
                 if library.section.hasPrefix("playlist:") {
                     let id = String(library.section.dropFirst(9))
-                    Button { library.startPlaylist(id) } label: { Label("Play", systemImage: "play.fill") }
+                    Button { library.startPlaylist(id) } label: { Label("Set Playlist", systemImage: "desktopcomputer") }
                         .fluaProminentButton().tint(library.accentOverride)
                 }
-                Button { library.chooseMedia() } label: { Label(library.importing ? "Importing…" : "Import", systemImage: "square.and.arrow.down") }
-                    .disabled(library.importing).fluaGlassButton()
-                Button { library.createWallpaper() } label: { Label("Create", systemImage: "plus") }
+                if library.section.hasPrefix("playlist:") {
+                    Button("Add Wallpapers…") { ui.playlistPicker = String(library.section.dropFirst(9)) }.fluaGlassButton()
+                }
+                Button { library.chooseMedia() } label: { Label(library.importing ? "Adding…" : "Add Wallpaper…", systemImage: "plus") }
+                    .disabled(library.importing)
                     .fluaProminentButton().tint(library.accentOverride)
             }
         }
     }
-    @ViewBuilder private func discoverShelf(_ title: String, wallpapers: [Wallpaper], large: Bool = false) -> some View {
-        if !wallpapers.isEmpty {
-            VStack(alignment: .leading, spacing: 16) {
-                HStack {
-                    Text(title).font(.system(size: 20, weight: .semibold))
-                    Spacer()
-                    Button("Show All") { library.section = "browse" }.buttonStyle(.plain).foregroundStyle(.secondary)
-                }
-                if large, let lead = wallpapers.first {
-                    wallpaperCard(lead).frame(maxWidth: 560, alignment: .leading)
-                    if wallpapers.count > 1 { shelfRow(Array(wallpapers.dropFirst())) }
-                } else {
-                    shelfRow(wallpapers)
-                }
-            }
-        }
-    }
-    private func shelfRow(_ wallpapers: [Wallpaper]) -> some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            LazyHStack(spacing: 16) {
-                ForEach(wallpapers) { wallpaperCard($0).frame(width: 240, height: 150) }
-            }
-        }
-    }
-    private var browseToolbar: some View {
+    private func browseToolbar(compact: Bool) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack {
+            let layout = compact ? AnyLayout(VStackLayout(alignment: .leading, spacing: 8)) : AnyLayout(HStackLayout(spacing: 8))
+            FluaSegmentedPicker(title: "Source", selection: $library.filter.source,
+                choices: [("All", "all"), ("Built-in", "builtin"), ("Imported", "imported")])
+            layout {
                 FluaSegmentedPicker(title: "Playback type", selection: $library.filter.kind,
                     choices: [("All", "all"), ("Animated", "animated"), ("Still", "still")])
-                    .frame(width: 260)
-                Spacer()
-                if library.section == "browse" {
+                    .frame(maxWidth: 260)
+                if !compact { Spacer(minLength: 8) }
+                if !library.section.hasPrefix("playlist:") {
                     Picker("Sort By", selection: $library.browseSort) {
-                        Text("Name").tag("name"); Text("Favorites First").tag("favorites")
-                    }.fluaMenuPicker().frame(width: 176)
+                        Text("Name").tag("name"); Text("Favorites First").tag("favorites"); Text("Recently Added").tag("recent")
+                    }.fluaMenuPicker().frame(width: 230)
                 }
             }
             ScrollView(.horizontal) {
@@ -603,7 +612,7 @@ struct LibraryView: View {
             }
             if library.filter.activeCount > 0 || !library.query.isEmpty {
                 HStack {
-                    Text("\(library.filter.activeCount) selected · \(library.eligible.count) matches").font(.caption).foregroundStyle(.secondary)
+                    Text("\(library.filter.activeCount) selected · \(library.visible.count) matches").font(.caption).foregroundStyle(.secondary)
                     Spacer()
                     Button("Clear filters") { library.clearFilters() }.fluaGlassButton()
                 }
@@ -624,15 +633,15 @@ struct LibraryView: View {
         .fluaGlass(in: RoundedRectangle(cornerRadius: 16, style: .continuous))
     }
     private func wallpaperCard(_ w: Wallpaper) -> some View {
-        WallpaperCard(wallpaper: w, selected: library.selection == w.id)
-            .onTapGesture { library.selection = w.id }
-            .onTapGesture(count: 2) { library.selection = w.id; library.applySelected() }
+        WallpaperCard(wallpaper: w, selected: library.selection == w.id || (library.importNotice != nil && library.lastImportIDs.contains(w.id)))
+            .onTapGesture { library.selection = w.id; ui.showingPreview = true }
             .contextMenu {
-                Button("Play Wallpaper") { library.selection = w.id; library.applySelected() }
+                Button("Set Wallpaper") { library.selection = w.id; library.applySelected() }
                 Button(w.favorite ? "Remove from Favorites" : "Add to Favorites") { library.favorite(w) }
                 if w.kind == "video", let source = library.disk.url(for: w) {
-                    Button("Edit…") { VideoEditorWindow.open(wallpaper: w, source: source, library: library) }
+                    Button("Edit Video…") { VideoEditorWindow.open(wallpaper: w, source: source, library: library) }
                 }
+                if w.file != nil { Button("Export Wallpaper…") { library.choosePackageExport(w) } }
                 Menu("Add to Playlist") {
                     ForEach(library.state.playlists) { p in
                         Button((p.items.contains(w.id) ? "✓ " : "") + p.name) { library.toggleInPlaylist(w.id, p.id) }
@@ -649,14 +658,9 @@ struct LibraryView: View {
     }
     private var sidebar: some View {
         List(selection: sectionSelection) {
-            Section {
-                Label("Discover", systemImage: "sparkles").tag("discover")
-                Label("Browse", systemImage: "rectangle.grid.2x2").tag("browse")
-            }
             Section("Library") {
-                Label("All Wallpapers", systemImage: "books.vertical").tag("all")
+                Label("Wallpapers", systemImage: "rectangle.grid.2x2").tag("all")
                 Label("Favorites", systemImage: "heart").tag("favorites")
-                Label("Your media", systemImage: "film").tag("imports")
             }
             Section("Playlists") {
                 Button { ui.creatingPlaylist = true } label: { Label("Create playlist", systemImage: "plus") }
@@ -673,7 +677,7 @@ struct LibraryView: View {
         .tint(library.accent)
         .safeAreaInset(edge: .top, spacing: 0) { sidebarHeader }
         .safeAreaInset(edge: .bottom, spacing: 0) { sidebarFooter }
-        .navigationSplitViewColumnWidth(min: 208, ideal: 224, max: 256)
+        .navigationSplitViewColumnWidth(min: 180, ideal: 224, max: 256)
     }
     private var sidebarHeader: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -700,8 +704,6 @@ struct LibraryView: View {
     }
     private var sidebarFooter: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Button { library.chooseMedia() } label: { Label("Import Scene…", systemImage: "square.and.arrow.down") }
-                .buttonStyle(.plain)
             SettingsLink { Label("Settings", systemImage: "gearshape") }.buttonStyle(.plain)
         }
         .font(.callout)
@@ -709,18 +711,23 @@ struct LibraryView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(16)
     }
-    private func transport(compact: Bool) -> some View {
-        let layout = compact ? AnyLayout(VStackLayout(alignment: .leading, spacing: 12)) : AnyLayout(HStackLayout(spacing: 16))
+    private func transport(compact: Bool, stackedControls: Bool) -> some View {
+        let layout = compact ? AnyLayout(VStackLayout(alignment: .leading, spacing: 10)) : AnyLayout(HStackLayout(spacing: 16))
         return layout {
             HStack(spacing: 8) {
                 Circle().fill(library.state.paused ? Color.orange : library.accent).frame(width: 8, height: 8)
-                Text(library.activity).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                Text(library.importNotice ?? library.activity).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                if library.importNotice != nil {
+                    Button("Undo") { library.undoImport() }.fluaGlassButton().fixedSize()
+                    Button { library.importNotice = nil } label: { Image(systemName: "xmark") }.accessibilityLabel("Dismiss confirmation").fluaGlassButton()
+                }
                 Spacer(minLength: 0)
             }
-            HStack(spacing: 12) {
+            let controlsLayout = stackedControls ? AnyLayout(VStackLayout(alignment: .leading, spacing: 8)) : AnyLayout(HStackLayout(spacing: 12))
+            controlsLayout {
                 FluaSegmentedPicker(title: "Display Mode", selection: Binding(get: { library.playbackMode }, set: { library.setPlaybackMode($0) }),
                     choices: [("Mirrored", "mirrored"), ("Per Display", "perDisplay")], showsLabel: false)
-                    .frame(width: 190)
+                    .frame(maxWidth: 190)
                 fluaGlassRow {
                     Button { library.advancePlaylists(force: true, backwards: true) } label: { Image(systemName: "backward.end.fill") }
                         .accessibilityLabel("Previous in playlist").help("Previous in playlist").fluaGlassButton()
@@ -759,20 +766,6 @@ struct WallpaperCard: View {
                         Text(wallpaper.kind == "image" ? "Still" : "Animated").font(.caption).foregroundStyle(.white.opacity(0.72))
                     }
                     Spacer(minLength: 0)
-                    Button {
-                        library.selection = wallpaper.id
-                        library.applySelected()
-                    } label: {
-                        Image(systemName: "play.fill")
-                            .font(.system(size: 10, weight: .bold))
-                            .foregroundStyle(.white)
-                            .padding(7)
-                            .fluaGlass(clear: true, in: Circle())
-                            .environment(\.colorScheme, .dark)
-                    }
-                    .buttonStyle(.plain)
-                    .contentShape(Circle())
-                    .accessibilityLabel("Play Wallpaper")
                 }.padding(12)
                     .fluaGlass(clear: true, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
                     .environment(\.colorScheme, .dark)
@@ -844,10 +837,10 @@ struct InspectorView: View {
                     SurfacePreview(wallpaper: w, url: library.disk.url(for: w)).id(w.id).aspectRatio(16/10, contentMode: .fit).clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                     VStack(alignment: .leading, spacing: 8) {
                         Text(w.title).font(.system(size: 24, weight: .semibold, design: .serif))
-                        Text(w.file == nil ? "An original animated scene, rendered on your Mac." : "Imported \(w.kind), stored in this library.").font(.caption).foregroundStyle(.secondary)
+                        Text(w.file == nil ? "A built-in animated wallpaper, rendered on your Mac." : "Imported \(w.kind), stored in this library.").font(.caption).foregroundStyle(.secondary)
                     }
                     VStack(alignment: .leading, spacing: 8) {
-                        Text("Play on").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                        Text("Set on").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
                         FluaSegmentedPicker(title: "Display Mode", selection: Binding(get: { library.playbackMode }, set: { library.setPlaybackMode($0) }),
                             choices: [("Mirrored", "mirrored"), ("Per Display", "perDisplay")])
                         if library.playbackMode == "perDisplay" {
@@ -863,17 +856,18 @@ struct InspectorView: View {
                             choices: (library.surfaceMode == nil ? [("Mixed", nil)] : []) + [("Animated", .animated), ("Still", .still)])
                         LabeledContent("Desktop", value: library.surfaceSummary(.desktop)).font(.caption)
                         LabeledContent("Lock Screen", value: library.surfaceSummary(.lockScreen)).font(.caption)
+                        Text((library.playbackMode == "mirrored" ? "All displays" : library.targets.first?.localizedName ?? "No display") + " · " + (library.surfacesLinked ? "Desktop + Lock Screen" : library.surface == .desktop ? "Desktop" : "Lock Screen")).font(.caption)
                         fluaGlassGroup {
                             VStack(alignment: .leading, spacing: 8) {
                                 Button {
                                     library.applySelected()
                                 } label: {
-                                    Label(library.nativeSetupBusy ? "Working…" : "Play Wallpaper", systemImage: "play.fill")
+                                    Label(library.nativeSetupBusy ? "Working…" : "Set Wallpaper", systemImage: "desktopcomputer")
                                         .frame(maxWidth: .infinity)
                                         .padding(.vertical, 8)
                                 }
                                 .disabled(library.nativeSetupBusy)
-                                .accessibilityLabel("Play Wallpaper")
+                                .accessibilityLabel("Set Wallpaper")
                                 .fluaProminentButton()
                                 .tint(library.accentOverride)
                             }
@@ -887,9 +881,8 @@ struct InspectorView: View {
                         fluaGlassGroup {
                             VStack(alignment: .leading, spacing: 8) {
                                 Button { VideoEditorWindow.open(wallpaper: w, source: source, library: library) } label: {
-                                    Label("Edit and export video…", systemImage: "slider.horizontal.3").frame(maxWidth: .infinity)
+                                    Label("Edit Video…", systemImage: "slider.horizontal.3").frame(maxWidth: .infinity)
                                 }.fluaGlassButton()
-                                Button("Export scene package…") { library.choosePackageExport(w) }.fluaGlassButton()
                             }
                         }
                     }
@@ -903,7 +896,7 @@ struct InspectorView: View {
                     Divider().opacity(0.3)
                     VStack(alignment: .leading, spacing: 8) {
                         Text("Details").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-                        TextField("Scene name", text: $ui.draftTitle).accessibilityLabel("Scene name").onSubmit { var v = library.selected ?? w; if !ui.draftTitle.trimmingCharacters(in: .whitespaces).isEmpty { v.title = ui.draftTitle; library.edit(v) } }
+                        TextField("Wallpaper name", text: $ui.draftTitle).accessibilityLabel("Wallpaper name").onSubmit { var v = library.selected ?? w; if !ui.draftTitle.trimmingCharacters(in: .whitespaces).isEmpty { v.title = ui.draftTitle; library.edit(v) } }
                         TextField("Tags, separated by commas", text: $ui.draftTags).accessibilityLabel("Tags").onSubmit { var v = library.selected ?? w; v.tags = ui.draftTags; library.edit(v) }
                         TextField("Category", text: $ui.draftCategory).accessibilityLabel("Category").onSubmit {
                             var value = library.selected ?? w
@@ -940,7 +933,7 @@ struct InspectorView: View {
                 }.padding(24)
                 .onAppear { ui.draftTitle = w.title; ui.draftTags = w.tags; ui.draftCategory = w.metadata?.category ?? "" }
                 .onChange(of: w.id) { _, _ in ui.draftTitle = w.title; ui.draftTags = w.tags; ui.draftCategory = w.metadata?.category ?? "" }
-            } else { ContentUnavailableView("Select a scene", systemImage: "sparkles").padding(.top, 100) }
+            } else { ContentUnavailableView("Select a wallpaper", systemImage: "sparkles").padding(.top, 100) }
         }
         .buttonStyle(FluaGlassButtonStyle())
     }
@@ -1008,6 +1001,14 @@ struct SettingsView: View {
                 Toggle("Pause behind fullscreen apps", isOn: $library.state.pauseOnFullscreen).tint(library.accentOverride)
                 Toggle("Pause while running on battery", isOn: $library.state.pauseOnBattery).tint(library.accentOverride)
                 Toggle("Pause in Low Power Mode", isOn: Binding(get: { library.state.pauseOnLowPower ?? false }, set: { library.state.pauseOnLowPower = $0; library.settingChanged() })).tint(library.accentOverride)
+                if library.state.pauseOnLowPower == true {
+                    Picker("Battery pause threshold", selection: Binding(get: { library.state.lowPowerThreshold }, set: { library.state.lowPowerThreshold = $0; library.settingChanged() })) {
+                        Text("10%").tag(10)
+                        Text("20%").tag(20)
+                        Text("30%").tag(30)
+                        Text("50%").tag(50)
+                    }.fluaMenuPicker()
+                }
                 Text("Wallpaper playback also pauses when the display sleeps or the session locks.").font(.caption).foregroundStyle(.secondary)
             }
             Section("Playlists") {
@@ -1040,8 +1041,8 @@ struct SettingsView: View {
                     .tint(library.accentOverride)
                 Text("The Dock icon can be hidden while Flua remains in the menu bar.").font(.caption).foregroundStyle(.secondary)
                 Toggle("Open at login", isOn: Binding(get: { library.loginEnabled() }, set: { library.setLogin($0) })).tint(library.accentOverride)
-                Button("Show media folder in Finder") { NSWorkspace.shared.open(library.disk.assets) }
-                Text("Flua stores its own copies of imported media. Wallpapers play natively through macOS and continue playing after quitting Flua.").font(.caption).foregroundStyle(.secondary)
+                Button("Show wallpaper folder in Finder") { NSWorkspace.shared.open(library.disk.assets) }
+                Text("Flua stores its own copies of imported wallpapers. Wallpapers play natively through macOS and continue playing after quitting Flua.").font(.caption).foregroundStyle(.secondary)
             }
             Section("Lock Screen") {
                 Text(NativeWallpaper.explanation).font(.caption).foregroundStyle(.secondary)
@@ -1051,7 +1052,7 @@ struct SettingsView: View {
                         .confirmationDialog("Remove native wallpaper provider?", isPresented: $ui.confirmingNativeRemoval) {
                             Button("Restore wallpapers and remove provider", role: .destructive) { library.removeNativeProvider() }
                         } message: {
-                            Text("Restores the saved system wallpapers wherever Flua is still selected, then unregisters this copy of the provider. Your library and media are kept. Apply again to set it up later.")
+                            Text("Restores the saved system wallpapers wherever Flua is still selected, then unregisters this copy of the provider. Your library and wallpapers are kept. Set Wallpaper again to set it up later.")
                         }
                     Text("Removal restores saved system wallpapers and stops native playback. Keep this app and your library in place while Flua is selected.")
                         .font(.caption).foregroundStyle(.secondary)
@@ -1059,7 +1060,7 @@ struct SettingsView: View {
             }
             Section("About") {
                 Text("Flua 0.1.0 • Independent native wallpaper app").font(.callout)
-                Text("Discover, browse, create, edit, playlists and per-display playback are built in. Everything in your library remains local.").font(.caption).foregroundStyle(.secondary)
+                Text("Add, preview, edit and set wallpapers, with playlists and per-display playback. Everything in your library remains local.").font(.caption).foregroundStyle(.secondary)
             }
         }.formStyle(.grouped).scrollContentBackground(.hidden).padding(8)
             .fluaBackdrop(accent: library.accent)
@@ -1099,5 +1100,29 @@ struct FilterMenu: View {
         .fluaGlassMenu()
         .fixedSize()
         .accessibilityLabel(title + " filter")
+    }
+}
+
+struct PlaylistWallpaperPicker: View {
+    @EnvironmentObject var library: Library
+    @Environment(\.dismiss) private var dismiss
+    @StateObject private var ui = ViewState()
+    let playlistID: String
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Add Wallpapers").font(.title2)
+            TextField("Search wallpapers", text: $ui.pickerQuery)
+            List(library.state.browsing(section: "all", query: ui.pickerQuery)) { wallpaper in
+                Toggle(wallpaper.title, isOn: Binding(get: { ui.pickerSelected.contains(wallpaper.id) || library.state.playlist(playlistID)?.items.contains(wallpaper.id) == true }, set: { enabled in
+                    if enabled { ui.pickerSelected.insert(wallpaper.id) } else { ui.pickerSelected.remove(wallpaper.id) }
+                })).disabled(library.state.playlist(playlistID)?.items.contains(wallpaper.id) == true)
+            }
+            HStack {
+                Button("Add Files…") { library.chooseMedia(playlistID: playlistID); dismiss() }
+                Spacer()
+                Button("Cancel") { dismiss() }
+                Button("Add Selected") { library.addToPlaylist(ui.pickerSelected, playlistID: playlistID); dismiss() }.disabled(ui.pickerSelected.isEmpty)
+            }
+        }.padding(24).frame(width: 440, height: 500)
     }
 }

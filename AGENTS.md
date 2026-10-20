@@ -33,7 +33,7 @@
 - Keep UI and user-facing documentation in English, matching the existing application.
 - Follow `.editorconfig`: four spaces in Swift, tabs in `Makefile`, LF endings, and a final newline.
 - Do not edit generated `.build/`, `build/`, `dist/`, or `Sources/WallpaperExtension/Built/` artifacts.
-- Do not commit, push, notarize, or register login items unless explicitly requested.
+- Do not push, notarize, or register login items unless explicitly requested.
 - Reversible OS integration checks are authorized when needed to implement or verify the requested task, including temporary registration, selection and activation of the wallpaper provider. No separate confirmation is needed for these checks. Use disposable fixtures, record the affected system settings and establish a rollback procedure before changing them, then restore the previous settings and registration state on completion or failure. Ask before irreversible changes or when reliable restoration cannot be established.
 
 ## Validation

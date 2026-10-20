@@ -7,7 +7,7 @@ import UniformTypeIdentifiers
 final class Library: ObservableObject {
     @Published var state: LibraryState
     @Published var selection: String? = "aurora"
-    @Published var section: String = "discover"
+    @Published var section: String = "all"
     @Published var query = ""
     @Published var filter = LibraryFilter()
     @Published var browseSort = "name"
@@ -16,8 +16,10 @@ final class Library: ObservableObject {
     @Published var screens = NSScreen.screens
     @Published var error: String?
     @Published var importing = false
+    @Published var importNotice: String?
+    private(set) var lastImportIDs: [String] = []
     @Published var nativeSetupBusy = false
-    @Published var activity = "Choose a scene, then apply it to your desktop."
+    @Published var activity = "Choose a wallpaper to preview and set on your desktop."
     @Published var thumbnails: [String: NSImage] = [:]
     let disk: LibraryDisk
     var tick: Timer?
@@ -63,14 +65,23 @@ final class Library: ObservableObject {
         }
     }
     var selected: Wallpaper? { state.item(selection) }
-    var visible: [Wallpaper] { state.browsing(section: section, query: query, filter: filter, sort: browseSort) }
+    var visible: [Wallpaper] {
+        var collection = state
+        if importNotice != nil, section == "all" {
+            collection.wallpapers = state.wallpapers.filter { !state.isBlocked($0) || lastImportIDs.contains($0.id) }
+            collection.blockedTags = []
+        }
+        return collection.browsing(section: section, query: query, filter: filter, sort: browseSort)
+    }
     var eligible: [Wallpaper] { state.browsing(section: "all", query: query, filter: filter) }
     func filterTag(_ tag: String) {
+        importNotice = nil
         filter.tags.formUnion(normalizedTags(tag))
-        section = "browse"
+        section = "all"
     }
     func clearFilters() { filter = LibraryFilter(); query = "" }
     func blockTags(_ text: String) {
+        importNotice = nil
         state.blockedTags = normalizedTags((state.blockedTags + normalizedTags(text)).joined(separator: ","))
         clearBlockedSelection()
         save()
@@ -84,11 +95,11 @@ final class Library: ObservableObject {
     }
     var sectionTitle: String {
         switch section {
-        case "discover": return "Discover"
-        case "browse": return "Browse"
+        case "discover": return "Wallpapers"
+        case "browse": return "Wallpapers"
         case "favorites": return "Favorites"
-        case "imports": return "Your media"
-        case "all": return "All Wallpapers"
+        case "imports": return "Wallpapers"
+        case "all": return "Wallpapers"
         default:
             if section.hasPrefix("playlist:") { return state.playlist(String(section.dropFirst(9)))?.name ?? "Playlist" }
             return "Library"
@@ -167,7 +178,7 @@ final class Library: ObservableObject {
     }
     @MainActor func startPlaylist(_ id: String) {
         guard !nativeSetupBusy else { return }
-        guard let p = state.playlist(id), let w = p.items.compactMap({ state.item($0) }).first else { error = "Add at least one scene to this playlist first."; return }
+        guard let p = state.playlist(id), let w = p.items.compactMap({ state.item($0) }).first else { error = "Add at least one wallpaper to this playlist first."; return }
         let now = Date()
         let ids = targets.map(displayID)
         for id in ids { state.assign(w.id, display: id, playlistID: p.id, now: now) }
@@ -463,25 +474,38 @@ final class Library: ObservableObject {
         thumbnails.removeValue(forKey: w.id)
         selection = state.wallpapers.first(where: { !state.isBlocked($0) })?.id
     }
-    func chooseMedia() {
+    private weak var activeOpenPanel: NSOpenPanel?
+
+    func chooseMedia(playlistID: String? = nil) {
+        if let existing = activeOpenPanel, existing.isVisible {
+            existing.orderFront(nil)
+            return
+        }
         let panel = NSOpenPanel()
+        activeOpenPanel = panel
         panel.allowedContentTypes = [.movie, .image, .json, .folder, .zip] + (UTType(filenameExtension: "bdpkg").map { [$0] } ?? [])
         panel.allowsMultipleSelection = true
         panel.canChooseDirectories = true
         panel.treatsFilePackagesAsDirectories = true
-        panel.message = "Import videos, images, video manifest folders, .zip, or .bdpkg packages. Flua stores its own copies."
-        panel.begin { [weak self] response in if response == .OK { self?.importMedia(panel.urls) } }
-    }
-    func createWallpaper() {
-        let panel = NSOpenPanel()
-        panel.allowedContentTypes = [.movie]
-        panel.allowsMultipleSelection = false
-        panel.message = "Choose a video to create a Flua wallpaper. The source file will not be changed."
+        panel.title = "Add Wallpaper"
+        panel.prompt = "Add"
+        panel.message = "Choose images, videos or supported wallpaper packages. Source files are preserved."
         panel.begin { [weak self] response in
-            if response == .OK { self?.importMedia(panel.urls, openEditor: true) }
+            if self?.activeOpenPanel === panel { self?.activeOpenPanel = nil }
+            if response == .OK { self?.importMedia(panel.urls, playlistID: playlistID) }
         }
     }
-    func importMedia(_ urls: [URL], openEditor: Bool = false) {
+    @MainActor func importDroppedFiles(_ providers: [NSItemProvider]) async {
+        var urls: [URL] = []
+        for provider in providers {
+            let url: URL? = await withCheckedContinuation { continuation in
+                _ = provider.loadObject(ofClass: URL.self) { url, _ in continuation.resume(returning: url) }
+            }
+            if let url { urls.append(url) }
+        }
+        if !urls.isEmpty { importMedia(urls) }
+    }
+    func importMedia(_ urls: [URL], playlistID: String? = nil) {
         guard !saveBlocked else { error = LibraryError.invalidLibrary.localizedDescription; return }
         let taskID = UUID()
         importTasks.insert(taskID)
@@ -489,8 +513,7 @@ final class Library: ObservableObject {
         Task { @MainActor [weak self] in
             guard let self else { return }
             var failures: [String] = []
-            var added = 0
-            var firstAdded: Wallpaper?
+            var addedIDs: [String] = []
             for url in urls {
                 do {
                     let isDirectory = (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true
@@ -537,22 +560,39 @@ final class Library: ObservableObject {
                     if w.metadata == nil { w.metadata = SceneMetadata() }
                     if w.metadata?.color == nil { w.metadata?.color = inspection.color }
                     self.state.wallpapers.append(w)
-                    if firstAdded == nil { firstAdded = w }
-                    self.selection = self.state.isBlocked(w) ? nil : id
-                    if self.section.hasPrefix("playlist:"), let i = self.state.playlists.firstIndex(where: { $0.id == String(self.section.dropFirst(9)) }) { self.state.playlists[i].items.append(id) }
+                    if let playlistID, let i = self.state.playlists.firstIndex(where: { $0.id == playlistID }) { self.state.playlists[i].items.append(id) }
                     self.generateThumbnail(w)
-                    added += 1
+                    addedIDs.append(id)
                 } catch { failures.append("\(url.lastPathComponent): \(error.localizedDescription)") }
             }
             self.importTasks.remove(taskID)
             self.importing = !self.importTasks.isEmpty
-            self.activity = "Imported \(added) file(s)."
-            self.save()
-            if openEditor, let w = firstAdded, w.kind == "video", let source = self.disk.url(for: w) {
-                VideoEditorWindow.open(wallpaper: w, source: source, library: self)
+            if !addedIDs.isEmpty {
+                self.lastImportIDs = addedIDs
+                self.clearFilters()
+                self.section = "all"
+                self.browseSort = "recent"
+                self.selection = addedIDs.last
+                self.importNotice = "Added \(addedIDs.count) wallpaper(s)."
             }
+            self.activity = "Added \(addedIDs.count) wallpaper(s)."
+            self.save()
             if !failures.isEmpty { self.error = failures.joined(separator: "\n") }
         }
+    }
+    func undoImport() {
+        for id in lastImportIDs {
+            if let wallpaper = state.item(id) { remove(wallpaper) }
+        }
+        lastImportIDs = []
+        importNotice = nil
+    }
+    func addToPlaylist(_ ids: Set<String>, playlistID: String) {
+        guard let index = state.playlists.firstIndex(where: { $0.id == playlistID }) else { return }
+        for wallpaper in state.wallpapers where ids.contains(wallpaper.id) && !state.playlists[index].items.contains(wallpaper.id) {
+            state.playlists[index].items.append(wallpaper.id)
+        }
+        save()
     }
     func backfillMetadata() {
         Task { @MainActor [weak self] in
@@ -622,10 +662,42 @@ final class Library: ObservableObject {
         let policy: NSApplication.ActivationPolicy = state.hidesDockIcon ? .accessory : .regular
         guard NSApp.activationPolicy() != policy else { return }
         // Accessory removes the Dock icon; the menu bar icon is what keeps Flua reachable.
+        let wasActive = NSRunningApplication.current.isActive
+        let keyWindow = NSApp.keyWindow
+        let mainWindow = NSApp.mainWindow
         let windows = NSApp.windows.filter { $0.isVisible && $0.level == .normal && !$0.ignoresMouseEvents }
+        var resignObserver: NSObjectProtocol?
+        if wasActive {
+            // Changing activation policy causes macOS to asynchronously deactivate the application.
+            // Reactivate on didResignActive so the active window remains in front.
+            resignObserver = NotificationCenter.default.addObserver(
+                forName: NSApplication.didResignActiveNotification,
+                object: nil,
+                queue: .main
+            ) { _ in
+                if let obs = resignObserver {
+                    NotificationCenter.default.removeObserver(obs)
+                    resignObserver = nil
+                }
+                DispatchQueue.main.async {
+                    NSApp.activate(ignoringOtherApps: true)
+                    for window in windows { window.orderFrontRegardless() }
+                    (keyWindow ?? mainWindow)?.makeKeyAndOrderFront(nil)
+                }
+            }
+        }
         NSApp.setActivationPolicy(policy)
-        if !windows.isEmpty { NSApp.activate(ignoringOtherApps: true) }
-        for window in windows { window.orderFront(nil) }
+        if wasActive {
+            NSApp.activate(ignoringOtherApps: true)
+            for window in windows { window.orderFrontRegardless() }
+            (keyWindow ?? mainWindow)?.makeKeyAndOrderFront(nil)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                if let obs = resignObserver {
+                    NotificationCenter.default.removeObserver(obs)
+                    resignObserver = nil
+                }
+            }
+        }
     }
     func loginEnabled() -> Bool { SMAppService.mainApp.status == .enabled }
     func setLogin(_ enabled: Bool) {
