@@ -26,7 +26,7 @@ enum ScenePackageError: LocalizedError {
         switch self {
         case .invalid(let detail): return "This package could not be imported: \(detail)"
         case .unsupportedScene(let kind):
-            return "This is a \(kind) scene. Flua does not yet include its runtime. Import a video or a video manifest folder instead."
+            return "This \(kind) wallpaper needs an unsupported runtime. Add an image, video or supported video wallpaper package instead."
         }
     }
 }

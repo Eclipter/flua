@@ -98,6 +98,16 @@ import Foundation
         let legacyPresence = try JSONDecoder().decode(LibraryState.self, from: JSONSerialization.data(withJSONObject: inconsistent))
         precondition(legacyPresence.showsMenuBar && legacyPresence.hidesDockIcon == false)
         print("PASS: dock hiding requires the menu bar icon and legacy libraries keep both defaults")
+        precondition(legacyPresence.lowPowerThreshold == 20)
+        precondition(LibraryState.initial.pauseOnLowPower == true)
+        precondition(LibraryState.initial.lowPowerThreshold == 20)
+        precondition(LibraryState.initial.interval == 3600)
+        precondition(LibraryState.initial.shuffle == true)
+        var lowPowerTestState = presence
+        lowPowerTestState.lowPowerThreshold = 30
+        let encodedLP = try JSONEncoder().encode(lowPowerTestState)
+        let decodedLP = try JSONDecoder().decode(LibraryState.self, from: encodedLP)
+        precondition(decodedLP.lowPowerThreshold == 30)
         precondition(resolvedDisplayMode(nil) == "perDisplay")
         precondition(initialDisplaySelection(mode: "perDisplay", displayIDs: ["display-A"]) == "display-A")
         precondition(initialDisplaySelection(mode: nil, displayIDs: ["display-A"]) == "display-A")
@@ -106,9 +116,11 @@ import Foundation
         let restoredLegacyState = try JSONDecoder().decode(LibraryState.self, from: JSONEncoder().encode(legacyState))
         precondition(restoredLegacyState.displayMode == nil && resolvedDisplayMode(restoredLegacyState.displayMode) == "perDisplay")
         state.displays["display-A"] = DisplayAssignment(desktop: SurfaceAssignment(wallpaperID: "aurora", playlistID: "ambient", changedAt: Date(timeIntervalSince1970: 0)))
-        precondition(state.advance(display: "display-A", now: Date(timeIntervalSince1970: 299)) == nil)
-        precondition(state.advance(display: "display-A", now: Date(timeIntervalSince1970: 300))?.id == "ocean")
-        precondition(state.advance(display: "display-A", now: Date(timeIntervalSince1970: 301)) == nil)
+        state.shuffle = false
+        precondition(state.advance(display: "display-A", now: Date(timeIntervalSince1970: 3599)) == nil)
+        precondition(state.advance(display: "display-A", now: Date(timeIntervalSince1970: 3600))?.id == "ocean")
+        precondition(state.advance(display: "display-A", now: Date(timeIntervalSince1970: 3601)) == nil)
+        state.shuffle = true
         state.playlists[0].interval = 86_400
         state.playlists[0].shuffle = false
         state.displays["display-A"] = DisplayAssignment(desktop: SurfaceAssignment(wallpaperID: "aurora", playlistID: "ambient", changedAt: Date(timeIntervalSince1970: 10_000)))
@@ -116,6 +128,7 @@ import Foundation
         precondition(state.advance(display: "display-A", now: Date(timeIntervalSince1970: 10_000 + 86_400))?.id == "ocean")
         state.playlists[0].interval = nil
         state.playlists[0].shuffle = nil
+        state.shuffle = false
         state.displays["display-A"] = DisplayAssignment(desktop: SurfaceAssignment(wallpaperID: "aurora", playlistID: "ambient"))
         let mirroredAssignment = DisplayAssignment(desktop: SurfaceAssignment(wallpaperID: "ocean", playlistID: "ambient", index: 1,
                                                    changedAt: Date(timeIntervalSince1970: 2_000), history: ["aurora"]))
@@ -289,13 +302,15 @@ import Foundation
         precondition(state.displays["A"]?.lockScreen?.mode == .still)
         precondition(state.advance(display: "A", surface: .lockScreen, now: start.addingTimeInterval(61), force: true, backwards: true)?.id == "ember")
         let lockScreen = state.displays["A"]!.lockScreen
-        precondition(state.advance(display: "A", now: start.addingTimeInterval(299)) == nil)
-        precondition(state.advance(display: "A", now: start.addingTimeInterval(300))?.id == "ocean")
+        state.shuffle = false
+        precondition(state.advance(display: "A", now: start.addingTimeInterval(3599)) == nil)
+        precondition(state.advance(display: "A", now: start.addingTimeInterval(3600))?.id == "ocean")
         precondition(state.displays["A"]?.lockScreen == lockScreen)
         state.setSurfacesLinked(true, display: "A")
         precondition(state.advance(display: "A", surface: .lockScreen, now: start.addingTimeInterval(301), force: true)?.id == "cosmos")
         precondition(state.displays["A"]?.desktop == state.displays["A"]?.lockScreen)
         precondition(state.displays["A"]?.desktop.history == ["aurora", "ocean"])
+        state.shuffle = true
 
         state.displays["disconnected-UUID"] = DisplayAssignment(
             desktop: SurfaceAssignment(wallpaperID: "ember", changedAt: start, mode: .still),
@@ -305,9 +320,11 @@ import Foundation
         precondition(state.synchronizeMirrored(displayIDs: ["B", "A", "C"], preferredSource: "A")?.id == "cosmos")
         precondition(state.displays["A"] == state.displays["B"] && state.displays["B"] == state.displays["C"])
         precondition(state.displays["B"]?.surfacesLinked == true && state.displays["disconnected-UUID"] == disconnected)
+        state.shuffle = false
         precondition(state.advanceMirrored(displayIDs: ["A", "B", "C"], surface: .lockScreen,
                                           now: start.addingTimeInterval(302), force: true)?.id == "ember")
         precondition(state.displays["A"] == state.displays["C"] && state.displays["A"]?.desktop == state.displays["A"]?.lockScreen)
+        state.shuffle = true
         state.setSurfacesLinked(false, display: "A")
         state.assign("aurora", display: "A", surface: .lockScreen, now: start)
         state.setMode(.still, display: "A", surface: .lockScreen)
@@ -395,6 +412,18 @@ import Foundation
         state.playlists = [Playlist(id: "ordered", name: "Order", items: ["unknown", "image", "video"])]
         state.displays = ["display": DisplayAssignment(desktop: SurfaceAssignment(wallpaperID: "video", playlistID: "ordered", index: 2, history: ["image"]))]
         var filter = LibraryFilter()
+        precondition(state.browsing(section: "all", sort: "recent").first?.id == "video")
+        filter.source = "builtin"
+        precondition(filter.activeCount == 1)
+        precondition(state.browsing(section: "all", filter: filter).map(\.id) == ["unknown"])
+        filter.source = "imported"
+        precondition(state.browsing(section: "all", filter: filter).map(\.id) == ["video", "image"])
+        precondition(state.browsing(section: "all", query: "image", filter: filter).map(\.id) == ["image"])
+        state.wallpapers.reverse()
+        precondition(state.browsing(section: "all").map(\.id) == ["video", "image", "unknown"])
+        precondition(state.browsing(section: "favorites", filter: filter).map(\.id) == ["video"])
+        state.wallpapers.reverse()
+        filter = LibraryFilter()
         filter.tags = ["nature"]
         precondition(state.browsing(section: "all", filter: filter).map(\.id) == ["video", "unknown"])
         filter.colors = ["Blue", "Unknown"]

@@ -35,7 +35,7 @@ enum SmokeRunner {
             "Display Mode: Mirrored", "Display Mode: Per Display", "Surface: Desktop", "Surface: Lock Screen",
             "Rendering mode: Animated", "Rendering mode: Still", "Link Desktop and Lock Screen",
             "Search", "Category filter", "Color filter", "Motion filter", "Resolution filter", "Aspect filter",
-            "Filter by ambient", "Filter by green", "Filter by nature", "Add favorite", "Scene name", "Tags", "Category",
+            "Filter by ambient", "Filter by green", "Filter by nature", "Add favorite", "Wallpaper name", "Tags", "Category",
             "Speed", "Dim", "Previous in playlist", "Next in playlist", "Stop on selected displays", "Create playlist"
         ])
         library.query = "no-match"
@@ -194,6 +194,8 @@ enum SmokeRunner {
         do {
             try FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
             await pause(1)
+            NSApp.windows.first(where: { $0.title == "Flua" })?.setContentSize(NSSize(width: 1320, height: 840))
+            await pause(0.3)
             if let screen = library.screens.first {
                 let key = displayID(screen)
                 let original = library.state
@@ -259,18 +261,30 @@ enum SmokeRunner {
             try png(image).write(to: imageURL)
             let videoURL = out.appendingPathComponent("sample.mov")
             try await Task.detached { try makeVideo(videoURL) }.value
+            let importPlaylist = library.state.playlists[0]
+            library.section = "playlist:" + importPlaylist.id
+            library.query = "no match"
+            library.filter.source = "builtin"
             library.importMedia([imageURL, videoURL])
             let deadline = Date().addingTimeInterval(20)
             while library.importing && Date() < deadline { await pause(0.1) }
+            results["importRevealsAdded"] = library.section == "all" && library.query.isEmpty && library.filter.activeCount == 0
+                && library.selected?.file != nil && library.visible.contains { $0.id == library.selection }
+                && library.state.playlist(importPlaylist.id)?.items == importPlaylist.items && library.importNotice != nil
+            await pause(0.3)
+            if let window = NSApp.windows.first(where: { $0.title == "Flua" }) {
+                captureView(window, to: out.appendingPathComponent("Flua-added.png"))
+            }
             let videos = library.state.wallpapers.filter { $0.kind == "video" }
             let images = library.state.wallpapers.filter { $0.kind == "image" }
             results["imageImport"] = images.count == 1
             results["videoImport"] = videos.count == 1
             if videos.count != 1 || images.count != 1 { throw LibraryError.unreadableMedia("smoke fixtures") }
-            let testWindow = NSWindow(contentRect: NSRect(x: 100, y: 100, width: 640, height: 360), styleMask: [.titled], backing: .buffered, defer: false)
+            let testWindow = NSPanel(contentRect: NSRect(x: 100, y: 100, width: 640, height: 360), styleMask: [.titled, .nonactivatingPanel], backing: .buffered, defer: false)
             testWindow.isReleasedWhenClosed = false
             testWindow.title = "Flua playback verification"
-            testWindow.collectionBehavior = [.stationary, .canJoinAllApplications]
+            // Let the playback fixture join a fullscreen Space without moving the user to another desktop.
+            testWindow.collectionBehavior = [.stationary, .canJoinAllApplications, .canJoinAllSpaces, .fullScreenAuxiliary]
             testWindow.level = .statusBar
             let surface = MediaSurface(frame: NSRect(x: 0, y: 0, width: 640, height: 360))
             testWindow.contentView = surface
@@ -347,7 +361,8 @@ enum SmokeRunner {
             await pause(0.5)
             results["videoPaused"] = abs(surface.playbackTime - pausedTime) < 0.08 && surface.playbackRate == 0
             surface.setPaused(false)
-            await pause(0.3)
+            let resumeDeadline = Date().addingTimeInterval(2)
+            while surface.playbackRate == 0 && Date() < resumeDeadline { await pause(0.05) }
             results["videoResumed"] = surface.playbackRate > 0
             surface.isHidden = true
             await pause(0.2)
@@ -443,6 +458,19 @@ enum SmokeRunner {
             results["unknownColorRoundTrip"] = library.state.wallpapers.contains {
                 $0.tags == unclassified.tags && $0.color == "Unknown" && $0.metadata == unclassified.metadata
             }
+            let beforeCancel = library.state.item(edited.id)!
+            let cancelModel = VideoEditorModel(wallpaper: beforeCancel, source: library.disk.url(for: edited)!, library: library)
+            while cancelModel.info == nil && cancelModel.error == nil { await pause(0.1) }
+            cancelModel.draft.videoEdit?.start = 0.3
+            cancelModel.close()
+            results["editorCancel"] = library.state.item(edited.id)?.videoEdit == beforeCancel.videoEdit
+            let saveModel = VideoEditorModel(wallpaper: edited, source: library.disk.url(for: edited)!, library: library)
+            while saveModel.info == nil && saveModel.error == nil { await pause(0.1) }
+            saveModel.draft.videoEdit?.start = 0.4
+            saveModel.save()
+            let editorSourcePreserved = try Data(contentsOf: videoURL) == Data(contentsOf: library.disk.url(for: edited)!)
+            results["editorSave"] = library.state.item(edited.id)?.videoEdit?.start == 0.4 && editorSourcePreserved
+            saveModel.close()
             library.edit(edited)
             results["editorPersistence"] = try library.disk.load().item(edited.id)?.videoEdit == edited.videoEdit
             VideoEditorWindow.open(wallpaper: edited, source: library.disk.url(for: edited)!, library: library)
@@ -516,6 +544,7 @@ enum SmokeRunner {
             await pause(0.3)
             results["inspectorVideoInteraction"] = await verifyInspectorInteraction(library: library)
             results["libraryApply"] = library.state.displays.values.allSatisfy { $0.desktop.wallpaperID == video.id }
+            library.updatePlaylist("ambient", shuffle: false)
             library.startPlaylist("ambient")
             results["playlistStart"] = library.state.displays.values.allSatisfy { $0.desktop.wallpaperID == "aurora" && $0.desktop.playlistID == "ambient" }
             library.advancePlaylists(force: true)
@@ -554,6 +583,7 @@ enum SmokeRunner {
                 results["desktopApplyPreservesLockScreen"] = library.state.displays.values.allSatisfy {
                     $0.desktop.wallpaperID == video.id && $0.lockScreen == lockScreen
                 }
+                library.updatePlaylist("ambient", shuffle: false)
                 library.startPlaylist("ambient")
                 library.advancePlaylists(force: true)
                 results["desktopPlaylistPreservesLockScreen"] = library.state.displays.values.allSatisfy {
@@ -603,7 +633,7 @@ enum SmokeRunner {
                 && persistedBlockedTags == ["test"]
             library.unblockTag("test")
             library.filterTag("PORTABLE")
-            results["clickableTag"] = library.section == "browse" && library.visible.contains { $0.id == edited.id } && library.filter.tags == ["portable"]
+            results["clickableTag"] = library.section == "all" && library.visible.contains { $0.id == edited.id } && library.filter.tags == ["portable"]
             library.filter.colors = ["Purple"]
             results["combinedBrowsing"] = library.visible.count == 2
             library.selection = edited.id
@@ -666,10 +696,23 @@ enum SmokeRunner {
                 results["discoverWindow"] = true
                 await captureAppearances(window, stem: "Flua-discover", directory: out)
                 let originalFrame = window.frame
-                window.setContentSize(NSSize(width: 1050, height: 680))
+                window.setFrame(NSRect(x: originalFrame.origin.x, y: originalFrame.origin.y, width: 720, height: 440), display: true, animate: false)
                 await pause(0.3)
+                await pause(1)
+                results["compactWindow"] = window.minSize.width <= 720 && window.frame.width <= 720
+                results["compactWindowWidth"] = window.frame.width
+                results["minimumWindowWidth"] = window.minSize.width
+                if let screen = window.screen {
+                    results["screenWidth"] = screen.frame.width
+                    results["windowNarrowerThanHalfScreen"] = window.frame.width < screen.frame.width / 2
+                }
                 captureView(window, to: out.appendingPathComponent("Flua-minimum-size.png"))
+                library.section = "browse"
+                await pause(0.3)
+                captureView(window, to: out.appendingPathComponent("Flua-minimum-browse.png"))
+                library.section = "discover"
                 window.setFrame(originalFrame, display: true)
+                await pause(1)
                 if let view = window.contentView, let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) {
                     view.cacheDisplay(in: view.bounds, to: bitmap)
                     if let data = bitmap.representation(using: .png, properties: [:]) {
@@ -691,8 +734,36 @@ enum SmokeRunner {
                 results[key] = passed
                 if !passed { failures.append(key) }
             }
-            let required = ["inspectorSceneInteraction", "inspectorVideoInteraction", "explicitSystemAccent", "systemAccentDefault", "accentSelection", "unknownAccentFallback", "systemAccentReset", "importFacts", "rotatedFacts", "missingFacts", "legacyBackfill", "staleEditPreservesFacts", "unknownColorBackfill", "unknownColorRoundTrip", "blockedDiscover", "clickableTag", "combinedBrowsing", "clearFiltersPreservesBlockedTags", "clearFilters", "imageImport", "videoImport", "videoReady", "videoPlaying", "videoLooped", "videoPaused", "videoResumed", "liveAdjustmentPreservesTime", "liveAdjustmentSpeed", "stillHeld", "stillIgnoresResume", "stillPreservesSource", "sceneStillRetained", "desktopStill", "desktopStillSurvivesPause", "desktopStillPersisted", "desktopStillPreservesSource", "render_image", "render_aurora", "render_cosmos", "render_ocean", "render_ember", "desktopWindowVisible", "desktopIgnoresMouse", "desktopCleanup", "systemWallpaperPreserved", "libraryApply", "playlistStart", "playlistNext", "libraryStop", "libraryRoundTrip", "discoverWindow", "windowSnapshot", "videoInformation", "trimmedPlayback", "trimmedExport", "thumbnailExport", "rejectInvalidTrim", "preserveSourceOnExport", "packageRoundTrip", "editorPersistence", "editorWindow", "audioExport", "muteExport"]
-            for key in required where results[key] as? Bool != true { failures.append(key) }
+            library.blockTags("unknown-color")
+            library.importMedia([unknownPackageURL])
+            let blockedImportDeadline = Date().addingTimeInterval(20)
+            while library.importing && Date() < blockedImportDeadline { await pause(0.1) }
+            results["blockedImportRevealed"] = library.selected.map { library.state.isBlocked($0) && library.visible.contains($0) } == true
+                && library.state.blockedTags == ["unknown-color"]
+            library.undoImport()
+            library.unblockTag("unknown-color")
+            let beforeDrop = Set(library.state.wallpapers.map(\.id))
+            await library.importDroppedFiles([NSItemProvider(object: imageURL as NSURL), NSItemProvider(object: videoURL as NSURL)])
+            let dropDeadline = Date().addingTimeInterval(20)
+            while library.importing && Date() < dropDeadline { await pause(0.1) }
+            results["fileDrop"] = library.lastImportIDs.count == 2 && library.section == "all"
+                && library.lastImportIDs.allSatisfy { id in library.visible.contains { $0.id == id } }
+            library.undoImport()
+            results["fileDropUndo"] = Set(library.state.wallpapers.map(\.id)) == beforeDrop
+            let beforeUndo = Set(library.state.wallpapers.map(\.id))
+            library.importMedia([imageURL], playlistID: importPlaylist.id)
+            let undoDeadline = Date().addingTimeInterval(20)
+            while library.importing && Date() < undoDeadline { await pause(0.1) }
+            let undoItem = library.selected
+            results["playlistFileImport"] = undoItem.map { library.state.playlist(importPlaylist.id)?.items.contains($0.id) == true } ?? false
+            library.undoImport()
+            results["importUndo"] = Set(library.state.wallpapers.map(\.id)) == beforeUndo && library.importNotice == nil
+                && FileManager.default.fileExists(atPath: imageURL.path)
+            library.addToPlaylist([edited.id], playlistID: importPlaylist.id)
+            library.addToPlaylist([edited.id], playlistID: importPlaylist.id)
+            results["playlistExistingAdd"] = library.state.playlist(importPlaylist.id)?.items.filter { $0 == edited.id }.count == 1
+            let required = ["fileDrop", "fileDropUndo", "blockedImportRevealed", "importRevealsAdded", "editorCancel", "editorSave", "playlistFileImport", "importUndo", "playlistExistingAdd", "inspectorSceneInteraction", "inspectorVideoInteraction", "explicitSystemAccent", "systemAccentDefault", "accentSelection", "unknownAccentFallback", "systemAccentReset", "importFacts", "rotatedFacts", "missingFacts", "legacyBackfill", "staleEditPreservesFacts", "unknownColorBackfill", "unknownColorRoundTrip", "blockedDiscover", "clickableTag", "combinedBrowsing", "clearFiltersPreservesBlockedTags", "clearFilters", "imageImport", "videoImport", "videoReady", "videoPlaying", "videoLooped", "videoPaused", "videoResumed", "liveAdjustmentPreservesTime", "liveAdjustmentSpeed", "stillHeld", "stillIgnoresResume", "stillPreservesSource", "sceneStillRetained", "desktopStill", "desktopStillSurvivesPause", "desktopStillPersisted", "desktopStillPreservesSource", "render_image", "render_aurora", "render_cosmos", "render_ocean", "render_ember", "desktopWindowVisible", "desktopIgnoresMouse", "desktopCleanup", "systemWallpaperPreserved", "libraryApply", "playlistStart", "playlistNext", "libraryStop", "libraryRoundTrip", "discoverWindow", "windowSnapshot", "videoInformation", "trimmedPlayback", "trimmedExport", "thumbnailExport", "rejectInvalidTrim", "preserveSourceOnExport", "packageRoundTrip", "editorPersistence", "editorWindow", "audioExport", "muteExport"]
+            for key in required + ["compactWindow"] where results[key] as? Bool != true { failures.append(key) }
             for (key, value) in results where key.hasPrefix("surfaceControls") && value as? Bool != true { failures.append(key) }
         } catch { failures.append(String(reflecting: error)) }
         results["failures"] = failures
@@ -792,18 +863,24 @@ enum SmokeRunner {
               let selected = library.selected else { return false }
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
-        await pause(0.2)
+        library.error = nil
+        await pause(0.3)
+        var inspector: NSScrollView?
+        func findInspector(_ view: NSView) {
+            if let scroll = view as? NSScrollView, scroll.hasVerticalScroller {
+                let frame = root.convert(scroll.bounds, from: scroll)
+                if frame.minX > root.bounds.midX, frame.width < root.bounds.width / 2 { inspector = scroll }
+            }
+            for child in view.subviews { findInspector(child) }
+        }
+        findInspector(root)
+        guard let inspector else { return false }
         var controls: [NSControl] = []
         func collect(_ view: NSView) {
-            if let control = view as? NSControl {
-                let rect = root.convert(control.bounds, from: control)
-                if rect.minX > root.bounds.maxX - 360 {
-                    controls.append(control)
-                }
-            }
+            if let control = view as? NSControl { controls.append(control) }
             for child in view.subviews { collect(child) }
         }
-        collect(root)
+        collect(inspector)
         let buttons = controls.compactMap({ $0 as? NSButton })
         guard let button = buttons.first else { return false }
         let slider = controls.compactMap({ $0 as? NSSlider }).first

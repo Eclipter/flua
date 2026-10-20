@@ -155,10 +155,11 @@ struct LibraryState: Codable {
     var wallpapers: [Wallpaper] = []
     var playlists: [Playlist] = []
     var displays: [String: DisplayAssignment] = [:]
-    var interval: Double = 300
-    var shuffle: Bool = false
+    var interval: Double = 3600
+    var shuffle: Bool = true
     var pauseOnBattery: Bool = false
     var pauseOnLowPower: Bool?
+    var lowPowerThreshold: Int = 20
     var pauseOnFullscreen: Bool = true
     var paused: Bool = false
     var displayMode: String?
@@ -213,7 +214,7 @@ struct LibraryState: Codable {
 
     private enum CodingKeys: String, CodingKey {
         case wallpapers, playlists, displays, interval, shuffle, pauseOnBattery, pauseOnLowPower
-        case pauseOnFullscreen, paused, displayMode, blockedTags, accentColor, nativePlayback
+        case lowPowerThreshold, pauseOnFullscreen, paused, displayMode, blockedTags, accentColor, nativePlayback
         case showInMenuBar, hideFromDock
     }
 
@@ -226,6 +227,7 @@ struct LibraryState: Codable {
         shuffle = try c.decode(Bool.self, forKey: .shuffle)
         pauseOnBattery = try c.decode(Bool.self, forKey: .pauseOnBattery)
         pauseOnLowPower = try c.decodeIfPresent(Bool.self, forKey: .pauseOnLowPower)
+        lowPowerThreshold = try c.decodeIfPresent(Int.self, forKey: .lowPowerThreshold) ?? 20
         pauseOnFullscreen = try c.decode(Bool.self, forKey: .pauseOnFullscreen)
         paused = try c.decode(Bool.self, forKey: .paused)
         displayMode = try c.decodeIfPresent(String.self, forKey: .displayMode)
@@ -246,6 +248,9 @@ struct LibraryState: Codable {
         ]
         s.playlists = [Playlist(id: "ambient", name: "Slow mornings", items: ["aurora", "ocean", "cosmos", "ember"])]
         s.displayMode = "mirrored"
+        s.interval = 3600
+        s.shuffle = true
+        s.pauseOnLowPower = true
         return s
     }
     func item(_ id: String?) -> Wallpaper? { wallpapers.first { $0.id == id } }
@@ -539,6 +544,7 @@ extension Wallpaper {
 
 struct LibraryFilter: Equatable {
     var kind = "all"
+    var source = "all"
     var categories = Set<String>()
     var colors = Set<String>()
     var motions = Set<String>()
@@ -547,13 +553,14 @@ struct LibraryFilter: Equatable {
     var tags = Set<String>()
 
     var activeCount: Int {
-        (kind == "all" ? 0 : 1) + categories.count + colors.count + motions.count + resolutions.count + aspects.count + tags.count
+        (source == "all" ? 0 : 1) + (kind == "all" ? 0 : 1) + categories.count + colors.count + motions.count + resolutions.count + aspects.count + tags.count
     }
     func matches(_ w: Wallpaper) -> Bool {
         func accepts(_ choices: Set<String>, _ value: String) -> Bool {
             choices.isEmpty || choices.contains { $0.caseInsensitiveCompare(value) == .orderedSame }
         }
-        return (kind == "all" || (kind == "still" ? w.kind == "image" : w.kind != "image"))
+        return (source == "all" || (source == "builtin" ? w.file == nil : w.file != nil))
+            && (kind == "all" || (kind == "still" ? w.kind == "image" : w.kind != "image"))
             && accepts(categories, w.category) && accepts(colors, w.color) && accepts(motions, w.motion)
             && accepts(resolutions, w.mediaFacts?.resolution ?? "Unknown")
             && accepts(aspects, w.mediaFacts?.aspect ?? "Unknown")
@@ -575,8 +582,9 @@ extension LibraryState {
             return query.isEmpty || (w.title + " " + w.tags + " " + w.kind).localizedCaseInsensitiveContains(query)
         }
         if let playlist { return playlist.items.compactMap { id in values.first { $0.id == id } } }
-        if section == "browse" {
+        if playlist == nil {
             values = values.sorted {
+                if sort == "recent", $0.dateAdded != $1.dateAdded { return ($0.dateAdded ?? .distantPast) > ($1.dateAdded ?? .distantPast) }
                 if sort == "favorites", $0.favorite != $1.favorite { return $0.favorite }
                 return $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending
             }

@@ -97,18 +97,15 @@ enum VideoTools {
     @Published var draft: Wallpaper
     @Published var info: VideoInformation?
     @Published var error: String?
-    @Published var busy = false
     @Published var status = ""
     @Published var playhead: Double = 0
-    @Published var exportProgress: Float = 0
     let original: Wallpaper
     let source: URL
     let player: AVPlayer
     weak var library: Library?
     var window: NSWindow?
-    private var session: AVAssetExportSession?
-    private var progressTimer: Timer?
     private var observer: Any?
+    private var closed = false
     init(wallpaper: Wallpaper, source: URL, library: Library) {
         draft = wallpaper; original = wallpaper; self.source = source; self.library = library
         player = AVPlayer(url: source)
@@ -125,12 +122,13 @@ enum VideoTools {
         Task {
             do {
                 let value = try await VideoInformation.load(source)
+                guard !closed else { return }
                 info = value
                 if draft.videoEdit == nil { draft.videoEdit = VideoEdit(end: value.duration) }
                 if draft.metadata == nil { draft.metadata = SceneMetadata() }
                 let start = CMTime(seconds: draft.videoEdit?.start ?? 0, preferredTimescale: 600)
                 let positioned = await player.seek(to: start, toleranceBefore: .zero, toleranceAfter: .zero)
-                if positioned { player.play() }
+                if positioned && !closed { player.play() }
             } catch { self.error = error.localizedDescription }
         }
     }
@@ -140,44 +138,14 @@ enum VideoTools {
         do {
             _ = try VideoTools.range(edit, duration: info.duration)
             draft.videoEdit?.end = min(edit.end ?? info.duration, info.duration)
-            guard !draft.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { error = "Enter a scene title."; return }
+            guard !draft.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { error = "Enter a wallpaper name."; return }
+            error = nil
             library?.edit(draft)
             library?.generateThumbnail(draft)
             status = "Saved to your library. The original video is preserved."
         } catch { self.error = error.localizedDescription }
     }
-    func revert() { draft = original; if draft.videoEdit == nil, let info { draft.videoEdit = VideoEdit(end: info.duration) }; if draft.metadata == nil { draft.metadata = SceneMetadata() }; seek(draft.videoEdit?.start ?? 0) }
-    func cancelExport() { session?.cancelExport() }
-    func chooseExport(_ kind: String) {
-        let panel = NSSavePanel()
-        panel.allowedContentTypes = kind == "thumbnail" ? [.png] : [.mpeg4Movie]
-        panel.nameFieldStringValue = draft.title + (kind == "preview" ? "-preview" : kind == "thumbnail" ? "-thumbnail" : "") + (kind == "thumbnail" ? ".png" : ".mp4")
-        panel.beginSheetModal(for: window ?? NSApp.keyWindow!) { [weak self] result in
-            guard result == .OK, let url = panel.url else { return }
-            Task { @MainActor in await self?.export(kind, to: url) }
-        }
-    }
-    func export(_ kind: String, to url: URL) async {
-        guard !busy, let edit = draft.videoEdit else { return }
-        busy = true; error = nil; status = "Exporting…"; player.pause()
-        defer { progressTimer?.invalidate(); progressTimer = nil; session = nil; busy = false }
-        do {
-            if kind == "thumbnail" {
-                guard source.resolvingSymlinksInPath() != url.resolvingSymlinksInPath() else { throw EditorFailure.sourceDestination }
-                try await VideoTools.thumbnail(source: source, time: edit.thumbnail).write(to: url, options: .atomic)
-            } else {
-                let exporter = try await VideoTools.exporter(source: source, edit: edit, preview: kind == "preview")
-                session = exporter
-                exportProgress = 0
-                progressTimer = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { [weak self] _ in
-                    Task { @MainActor in self?.exportProgress = self?.session?.progress ?? 0 }
-                }
-                try await VideoTools.export(exporter, source: source, destination: url)
-            }
-            status = "Exported \(url.lastPathComponent)."
-        } catch { self.error = error.localizedDescription; status = "Export did not complete." }
-    }
-    func close() { player.pause(); cancelExport(); if let observer { player.removeTimeObserver(observer); self.observer = nil }; window = nil }
+    func close() { closed = true; player.pause(); if let observer { player.removeTimeObserver(observer); self.observer = nil }; window = nil }
 }
 
 struct EditorPlayer: NSViewRepresentable {
@@ -229,16 +197,6 @@ struct VideoEditorView: View {
     private func editBinding<T>(_ key: WritableKeyPath<VideoEdit,T>, fallback: T) -> Binding<T> {
         Binding(get: { model.draft.videoEdit?[keyPath: key] ?? fallback }, set: { value in var e = model.draft.videoEdit ?? VideoEdit(end: model.info?.duration); e[keyPath: key] = value; model.draft.videoEdit = e })
     }
-    private func metadataBinding(_ key: WritableKeyPath<SceneMetadata,String>) -> Binding<String> {
-        Binding(get: { model.draft.metadata?[keyPath: key] ?? "" }, set: { value in var m = model.draft.metadata ?? SceneMetadata(); m[keyPath: key] = value; model.draft.metadata = m })
-    }
-    private func classificationBinding(_ key: WritableKeyPath<SceneMetadata, String?>) -> Binding<String> {
-        Binding(get: { key == \.color ? model.draft.color : model.draft.motion }, set: { value in
-            var metadata = model.draft.metadata ?? SceneMetadata()
-            metadata[keyPath: key] = value
-            model.draft.metadata = metadata
-        })
-    }
     var body: some View {
         HStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 16) {
@@ -258,60 +216,27 @@ struct VideoEditorView: View {
                     HStack {
                         Button("Set trim start here") { var e = model.draft.videoEdit ?? VideoEdit(end: info.duration); e.start = min(model.playhead, (e.end ?? info.duration) - 0.1); model.draft.videoEdit = e }
                         Button("Set trim end here") { var e = model.draft.videoEdit ?? VideoEdit(end: info.duration); e.end = max(model.playhead, e.start + 0.1); model.draft.videoEdit = e }
-                        Button("Use as thumbnail") { model.draft.videoEdit?.thumbnail = model.playhead }
+                        Button("Use as cover") { model.draft.videoEdit?.thumbnail = model.playhead }
                     }.font(.caption)
                     HStack {
                         Text("Start"); TextField("Start", value: editBinding(\.start, fallback: 0), format: .number.precision(.fractionLength(2))).frame(width: 75)
                         Text("End"); TextField("End", value: Binding(get: { model.draft.videoEdit?.end ?? info.duration }, set: { model.draft.videoEdit?.end = $0 }), format: .number.precision(.fractionLength(2))).frame(width: 75)
-                        Spacer(); Text("Thumbnail \(String(format: "%.2f", model.draft.videoEdit?.thumbnail ?? 0)) s").foregroundStyle(.secondary)
+                        Spacer(); Text("Cover \(String(format: "%.2f", model.draft.videoEdit?.thumbnail ?? 0)) s").foregroundStyle(.secondary)
                     }.font(.caption).textFieldStyle(FluaGlassTextFieldStyle())
                 } else { ProgressView("Reading video…") }
                 Spacer(minLength: 0)
                 if let error = model.error { Text(error).font(.caption).foregroundStyle(.red).textSelection(.enabled) }
                 if !model.status.isEmpty { Text(model.status).font(.caption).foregroundStyle(.secondary) }
-                if model.busy { HStack { ProgressView(value: model.exportProgress).tint(library.accentOverride); Button("Cancel export") { model.cancelExport() } } }
             }.padding(24).frame(minWidth: 580, maxWidth: .infinity)
             Divider()
-            ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
-                    Text("Details").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-                    TextField("Title", text: $model.draft.title)
-                    TextField("Description", text: metadataBinding(\.details), axis: .vertical).lineLimit(3...5)
-                    TextField("Category", text: metadataBinding(\.category))
-                    Picker("Color", selection: classificationBinding(\.color)) {
-                        ForEach(LibraryChoices.colors, id: \.self) { color in
-                            LibraryColorOption(color: color).tag(color)
-                        }
-                    }.fluaMenuPicker()
-                    Picker("Motion intensity", selection: classificationBinding(\.motion)) {
-                        ForEach(LibraryChoices.motions, id: \.self) { Text($0).tag($0) }
-                    }.fluaMenuPicker()
-                    TextField("Tags, separated by commas", text: $model.draft.tags)
-                    TextField("Credit title", text: metadataBinding(\.creditTitle))
-                    TextField("Credit URL", text: metadataBinding(\.creditURL))
-                    Divider()
-                    Text("Export").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-                    Picker("Quality", selection: editBinding(\.quality, fallback: "high")) { Text("Original resolution").tag("high"); Text("1080p").tag("1080"); Text("720p").tag("medium"); Text("Small, 480p").tag("small") }.fluaMenuPicker()
-                    Toggle("Include audio", isOn: editBinding(\.includeAudio, fallback: true)).tint(library.accentOverride).disabled(model.info?.hasAudio != true)
-                    fluaGlassGroup {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Button("Export trimmed video…") { model.chooseExport("video") }.fluaGlassButton()
-                            Button("Export 5-second preview…") { model.chooseExport("preview") }.fluaGlassButton()
-                            Button("Export thumbnail…") { model.chooseExport("thumbnail") }.fluaGlassButton()
-                        }
-                    }
-                    Spacer()
-                    fluaGlassGroup {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Button("Undo changes") { model.revert() }.fluaGlassButton()
-                            Button("Save to library") { model.save() }.fluaProminentButton().tint(library.accentOverride)
-                        }
-                    }
-                    Text("Trim and thumbnail choices are saved without changing the source file. Export creates a new file.").font(.caption2).foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }.padding(24).textFieldStyle(FluaGlassTextFieldStyle()).disabled(model.busy || model.info == nil)
-            }.frame(width: 352)
-                .background(.ultraThinMaterial)
+            VStack(alignment: .leading, spacing: 16) {
+                Text("Trim and Cover").font(.headline)
+                Text("Choose a trim range and cover in the preview. Your source video is preserved.").font(.callout).foregroundStyle(.secondary)
+                Spacer()
+                Button("Cancel") { model.window?.close() }.fluaGlassButton()
+                Button("Save Changes") { model.save(); if model.error == nil { model.window?.close() } }
+                    .disabled(model.info == nil).fluaProminentButton()
+            }.padding(24).frame(width: 240)
         }.frame(minWidth: 980, minHeight: 650).fluaBackdrop(accent: library.accent)
             .fluaClearInitialFocus()
             .toggleStyle(.switch)
@@ -346,10 +271,20 @@ struct VideoEditorView: View {
 
 extension Library {
     @MainActor func choosePackageExport(_ wallpaper: Wallpaper) {
-        guard let source = disk.url(for: wallpaper), wallpaper.kind == "video" else { return }
+        guard let source = disk.url(for: wallpaper) else { return }
         let panel = NSSavePanel()
+        if wallpaper.kind == "image" {
+            panel.nameFieldStringValue = wallpaper.title + "." + source.pathExtension
+            panel.message = "Export a copy of this wallpaper image."
+            panel.begin { [weak self] response in
+                guard response == .OK, let destination = panel.url else { return }
+                do { try FileManager.default.copyItem(at: source, to: destination) }
+                catch { self?.error = error.localizedDescription }
+            }
+            return
+        }
         panel.nameFieldStringValue = wallpaper.title + ".flua"
-        panel.message = "Export a folder containing the edited video, a thumbnail and a portable scene manifest."
+        panel.message = "Export a folder containing the edited video, a thumbnail and a portable wallpaper manifest."
         panel.begin { [weak self] response in
             guard response == .OK, let destination = panel.url else { return }
             Task { @MainActor in
