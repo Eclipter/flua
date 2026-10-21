@@ -660,9 +660,12 @@ enum SmokeRunner {
                 library.setSurfacesLinked(true)
                 results["surfaceControlsLinkCopiesDesktop"] = library.surfacesLinked
                     && library.state.displays[key]?.lockScreen == library.state.displays[key]?.desktop
+                // Linked removes Lock Screen and normalizes the active selection to the Desktop.
+                results["configurePickerLinkedNormalizesToDesktop"] = library.surface == .desktop
                 library.setSurfaceMode(.still)
                 results["surfaceControlsLinkedMode"] = library.state.displays[key]?.desktop.mode == .still
                 library.setSurfacesLinked(false)
+                library.surface = .lockScreen
                 library.setSurfaceMode(.animated)
                 results["surfaceControlsUnlinkPreservesDesktop"] = library.state.displays[key]?.desktop.mode == .still
                     && library.state.displays[key]?.lockScreen?.mode == .animated

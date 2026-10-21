@@ -81,7 +81,7 @@ final class Library: ObservableObject {
         filter.tags.formUnion(normalizedTags(tag))
         section = "all"
     }
-    func clearFilters() { filter = LibraryFilter(); query = "" }
+    func clearFilters() { filter = LibraryFilter(); query = ""; browseSort = "name" }
     func blockTags(_ text: String) {
         importNotice = nil
         state.blockedTags = normalizedTags((state.blockedTags + normalizedTags(text)).joined(separator: ","))
@@ -153,6 +153,8 @@ final class Library: ObservableObject {
         let ids = targets.map(displayID)
         let previousAssignments = state.displays
         for id in ids { state.setSurfacesLinked(linked, display: id) }
+        // Linked surfaces have no independent Lock Screen target.
+        if linked && surface == .lockScreen { surface = .desktop }
         save()
         let changed = state.nativeAssignmentChanges(from: previousAssignments, displays: ids)
         scheduleNativeAssignmentRefresh(for: changed)

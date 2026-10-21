@@ -606,7 +606,7 @@ struct LibraryView: View {
                     FilterMenu(title: "Aspect", choices: LibraryChoices.aspects, selection: $library.filter.aspects)
                 }
             }
-            if library.filter.activeCount > 0 || !library.query.isEmpty {
+            if library.filter.activeCount > 0 || !library.query.isEmpty || library.browseSort != "name" {
                 HStack {
                     Text("\(library.filter.activeCount) selected · \(library.visible.count) matches").font(.caption).foregroundStyle(.secondary)
                     Spacer()
@@ -917,13 +917,28 @@ struct InspectorView: View {
         case lockScreen
     }
 
-    private var targetChoices: [(String, ConfigTarget)] {
+    private var visibleTargetChoices: [(String, ConfigTarget)] {
         var choices: [(String, ConfigTarget)] = []
-        for screen in library.screens {
-            choices.append((screen.localizedName, .display(displayID(screen))))
+        if library.playbackMode == "mirrored" {
+            choices.append(("Desktop", .display("all")))
+        } else {
+            for screen in library.screens {
+                choices.append((screen.localizedName, .display(displayID(screen))))
+            }
         }
-        choices.append(("Lock Screen", .lockScreen))
+        if !library.surfacesLinked {
+            choices.append(("Lock Screen", .lockScreen))
+        }
         return choices
+    }
+
+    private var configTarget: ConfigTarget {
+        let current: ConfigTarget
+        if library.surface == .lockScreen { current = .lockScreen }
+        else if library.playbackMode == "mirrored" { current = .display("all") }
+        else { current = .display(library.display) }
+        if visibleTargetChoices.contains(where: { $0.1 == current }) { return current }
+        return visibleTargetChoices.first.map { $0.1 } ?? .lockScreen
     }
 
     private func settingsSection(_ w: Wallpaper) -> some View {
@@ -940,22 +955,20 @@ struct InspectorView: View {
             ))
             .font(.caption).tint(library.accentOverride)
 
-            FluaSegmentedPicker(title: "Configure", selection: Binding(
-                get: {
-                    if library.surface == .lockScreen { return ConfigTarget.lockScreen }
-                    if library.playbackMode == "mirrored" { return .display(library.screens.first.map(displayID) ?? "") }
-                    return .display(library.display)
-                },
-                set: { target in
-                    switch target {
-                    case .display(let id):
-                        library.surface = .desktop
-                        if library.playbackMode == "perDisplay" { library.display = id }
-                    case .lockScreen:
-                        library.surface = .lockScreen
+            if library.playbackMode != "mirrored" || !library.surfacesLinked {
+                FluaSegmentedPicker(title: "Configure", selection: Binding(
+                    get: { configTarget },
+                    set: { target in
+                        switch target {
+                        case .display(let id):
+                            library.surface = .desktop
+                            if library.playbackMode == "perDisplay" { library.display = id }
+                        case .lockScreen:
+                            library.surface = .lockScreen
+                        }
                     }
-                }
-            ), choices: targetChoices, showsLabel: false)
+                ), choices: visibleTargetChoices, showsLabel: false)
+            }
 
             FluaSegmentedPicker(title: "Rendering mode", selection: Binding<WallpaperMode?>(get: { library.surfaceMode }, set: { if let mode = $0 { library.setSurfaceMode(mode) } }),
                 choices: (library.surfaceMode == nil ? [("Mixed", nil)] : []) + [("Animated", .animated), ("Still", .still)])
