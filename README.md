@@ -25,6 +25,7 @@
 | Speed and dimming controls | ✅ |
 | Interactive wallpapers | ❌ |
 | Audio-reactive wallpapers | ❌ |
+| Wallpaper audio | ❌ |
 | Wallpaper playlists | ✅ |
 | Low Power mode and on-battery pauses | ❌ |
 | Curate your own local wallpaper library | ✅ |
