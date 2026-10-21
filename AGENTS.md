@@ -36,6 +36,13 @@
 - Do not push, notarize, or register login items unless explicitly requested.
 - Reversible OS integration checks are authorized when needed to implement or verify the requested task, including temporary registration, selection and activation of the wallpaper provider. No separate confirmation is needed for these checks. Use disposable fixtures, record the affected system settings and establish a rollback procedure before changing them, then restore the previous settings and registration state on completion or failure. Ask before irreversible changes or when reliable restoration cannot be established.
 
+## Git history
+
+- Keep `main` linear. Integrate each completed task with a squash merge, producing one commit for one coherent change; do not create merge commits or replay a task's intermediate commits onto `main`.
+- Use `git merge --squash <branch>` locally or `gh pr merge --squash` for pull requests. Review the staged result, run the relevant checks, then commit before deleting the task branch or worktree.
+- Write English Conventional Commit subjects (`feat:`, `fix:`, `perf:`, `test:`, `docs:`, `build:`, `chore:`) describing the resulting behavior. Add a body only when it explains a useful reason, limitation or validation detail. Omit branch names, plan item numbers and intermediate attempts.
+- Rewrite published history or force-push only when explicitly requested. See [the development workflow](docs/DEVELOPMENT.md#git-workflow) for local configuration.
+
 ## Validation
 
 Run the narrowest relevant checks, then expand when the change crosses boundaries:

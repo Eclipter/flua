@@ -49,7 +49,28 @@ Keep media and account information out of the repository. Test model/import chan
 
 `make wallpaper-test` also verifies the boxed download-status reply over XPC. It does not register or select a wallpaper. Real-host playback and file-access checks use disposable containing apps, following the [provider verification and restoration procedure](../Sources/WallpaperExtension/README.md#playback-scoped-files-and-restoration). Keep their source copies, fixtures, local settings snapshots and logs outside Git.
 
-The project is a local Git repository; commits and remotes are left to the developer. No CI service, signing account or deployment credentials are required. Release bundles are ad-hoc signed, not notarized.
+Development and validation run locally; pushing changes is a separate developer action. No CI service, signing account or deployment credentials are required. Release bundles are ad-hoc signed, not notarized.
+
+## Git workflow
+
+Keep `main` linear with one squash commit per completed task. Work on a task branch in a separate worktree, then review the combined change and run its relevant checks before integration. Use an English Conventional Commit subject that describes the resulting change, such as `fix: restore wallpaper previews after selection`; summarize reasons or limitations in the body when needed.
+
+Configure a squash command in each clone and prevent pulls from creating merge commits:
+
+```sh
+git config --local alias.squash "merge --squash"
+git config --local pull.ff only
+```
+
+After reviewing the task branch, integrate from the `main` worktree:
+
+```sh
+git squash <task-branch>
+# Review the staged diff and run the relevant checks before committing.
+git commit
+```
+
+A squash merge stages the combined change without creating a commit. Keep the task branch and worktree until the commit succeeds. For GitHub pull requests, use **Squash and merge** or `gh pr merge --squash`, and edit the final title and body to describe the whole change. Repository settings should enable squash merging and disable merge commits and rebase merging, using the pull request title and description for the squash message. The `git squash` alias runs `git merge --squash`; `pull.ff=only` rejects pulls that would merge diverged history. Local Git configuration is not copied by cloning; apply the commands above in every new clone. Rewriting published history and force-pushing require an explicit request.
 
 ## Lock Screen integration checks
 
