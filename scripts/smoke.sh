@@ -15,7 +15,7 @@ run_dir=$(mktemp -d "$PWD/build/verification/run.XXXXXX")
     --data-dir "$run_dir/accessibility-library" \
     --accessibility-audit "$run_dir/results/accessibility.json"
 require_no_flua
-open -W "$PWD/build/Flua.app" \
+open -g -W "$PWD/build/Flua.app" \
     --args \
     --data-dir "$run_dir/library" \
     --smoke-test "$run_dir/results"

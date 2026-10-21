@@ -8,9 +8,20 @@ import Combine
 /// Runs opt-in isolated runtime checks and writes outputs only to their supplied directories.
 enum SmokeRunner {
     private static var running = false
-    /// Keeps an audit window off the active space and out of the window cycle.
+    @MainActor static func configureVerificationWindow(_ window: NSWindow, playback: Bool = false) {
+        let args = ProcessInfo.processInfo.arguments
+        guard ["--smoke-test", "--preview-smoke", "--accessibility-audit"].contains(where: args.contains) else { return }
+        if playback {
+            window.collectionBehavior = [.primary, .fullScreenNone, .stationary, .ignoresCycle]
+            window.hidesOnDeactivate = false
+            window.ignoresMouseEvents = true
+        } else {
+            park(window)
+        }
+    }
+    /// Keeps verification windows out of sight; accessibility inspection needs minimal opacity.
     @MainActor static func park(_ window: NSWindow) {
-        window.alphaValue = 0.01
+        window.alphaValue = ProcessInfo.processInfo.arguments.contains("--accessibility-audit") ? 0.01 : 0
         window.ignoresMouseEvents = true
         window.collectionBehavior = [.stationary, .ignoresCycle]
         window.setFrameOrigin(NSPoint(x: -20000, y: -20000))
@@ -77,12 +88,14 @@ enum SmokeRunner {
         var cpuUsage: [String: Double] = [:]
         var visibility: [String: String] = [:]
         for kind in AmbientSceneView.scenes.map(\.id) {
-            let window = NSWindow(contentRect: NSRect(x: 120, y: 120, width: 640, height: 392), styleMask: [.titled], backing: .buffered, defer: false)
+            let window = NSPanel(contentRect: NSRect(x: 120, y: 120, width: 640, height: 392), styleMask: [.titled, .nonactivatingPanel], backing: .buffered, defer: false)
             window.title = "Flua Scene Preview Benchmark — " + kind
             window.isReleasedWhenClosed = false
+            configureVerificationWindow(window, playback: true)
+            window.animationBehavior = .none
             let preview = AmbientSceneView(frame: NSRect(origin: .zero, size: NSSize(width: 640, height: 392)), scene: kind)
             window.contentView = preview
-            window.orderFrontRegardless()
+            window.orderBack(nil)
             await waitUntilVisible(window)
             visibility[kind] = "occlusion=\(window.occlusionState.rawValue) hidden=\(preview.isHiddenOrHasHiddenAncestor) rect=\(preview.visibleRect)"
             await pause(0.2)
@@ -191,10 +204,40 @@ enum SmokeRunner {
         let out = URL(fileURLWithPath: args[i + 1], isDirectory: true)
         var results: [String: Any] = [:]
         var failures: [String] = []
+        results["systemPlayback"] = "Not exercised: saved assignments and provider descriptors are validated without OS integration."
+        results["backgroundLaunch"] = !NSApp.isActive
+        let activationObserver = NotificationCenter.default.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { _ in
+            failures.append("Smoke verification activated Flua")
+        }
+        defer { NotificationCenter.default.removeObserver(activationObserver) }
+        let errorObservation = library.$error.compactMap { $0 }.sink { failures.append("Unexpected library error: " + $0) }
+        defer { errorObservation.cancel() }
+        let originalWallpapers = library.screens.map { NSWorkspace.shared.desktopImageURL(for: $0) }
         do {
             try FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
+            let validation = try Library(root: out.appendingPathComponent("NativeValidation"), systemPlaybackEnabled: false)
+            validation.tick?.invalidate()
+            validation.applySelected()
+            results["nativeDescriptorValidation"] = validation.error == nil && !validation.nativeSetupBusy
+                && validation.activity == "Validated saved wallpaper choices. System playback is disabled for verification."
+                && validation.state.nativePlayback.isEmpty
+            if let selectedID = validation.selected?.id {
+                validation.state.wallpapers.removeAll { $0.id == selectedID }
+                validation.applySavedNativeAssignments()
+                results["nativeDescriptorValidationRejectsMissing"] = validation.error?.contains("unavailable or blocked") == true
+            }
+            let mismatch = try Library(root: out.appendingPathComponent("NativeMismatch"))
+            mismatch.tick?.invalidate()
+            if NativeWallpaper.available, NativeWallpaper.catalogURL.resolvingSymlinksInPath() != mismatch.disk.catalog.resolvingSymlinksInPath() {
+                mismatch.applySelected()
+                results["nativeCatalogMismatchRejected"] = mismatch.error?.contains("This build uses a different library") == true
+                    && !mismatch.nativeSetupBusy && mismatch.state.nativePlayback.isEmpty
+            }
             await pause(1)
-            NSApp.windows.first(where: { $0.title == "Flua" })?.setContentSize(NSSize(width: 1320, height: 840))
+            if let window = NSApp.windows.first(where: { $0.title == "Flua" }) {
+                window.setContentSize(NSSize(width: 1320, height: 840))
+                park(window)
+            }
             await pause(0.3)
             if let screen = library.screens.first {
                 let key = displayID(screen)
@@ -280,16 +323,16 @@ enum SmokeRunner {
             results["imageImport"] = images.count == 1
             results["videoImport"] = videos.count == 1
             if videos.count != 1 || images.count != 1 { throw LibraryError.unreadableMedia("smoke fixtures") }
-            let testWindow = NSPanel(contentRect: NSRect(x: 100, y: 100, width: 640, height: 360), styleMask: [.titled, .nonactivatingPanel], backing: .buffered, defer: false)
+            let testWindow = NSPanel(contentRect: NSRect(x: 20, y: 20, width: 192, height: 108), styleMask: [.titled, .nonactivatingPanel], backing: .buffered, defer: false)
             testWindow.isReleasedWhenClosed = false
             testWindow.title = "Flua playback verification"
-            // Let the playback fixture join a fullscreen Space without moving the user to another desktop.
-            testWindow.collectionBehavior = [.stationary, .canJoinAllApplications, .canJoinAllSpaces, .fullScreenAuxiliary]
-            testWindow.level = .statusBar
-            let surface = MediaSurface(frame: NSRect(x: 0, y: 0, width: 640, height: 360))
+            configureVerificationWindow(testWindow, playback: true)
+            testWindow.level = .normal
+            testWindow.hidesOnDeactivate = false
+            testWindow.ignoresMouseEvents = true
+            let surface = MediaSurface(frame: NSRect(x: 0, y: 0, width: 192, height: 108))
             testWindow.contentView = surface
-            // Preview tests require a genuinely visible window now that occluded playback pauses.
-            testWindow.orderFrontRegardless()
+            defer { surface.cleanup(); testWindow.close() }
             surface.onError = { failures.append($0) }
             let video = videos[0]
             let copiedBytes = (try FileManager.default.attributesOfItem(atPath: library.disk.url(for: video)!.path)[.size] as? NSNumber)?.int64Value
@@ -337,8 +380,8 @@ enum SmokeRunner {
                 && legacyLibrary.state.item(unknownColor.id)?.color == "Unknown"
             legacyLibrary.tick?.invalidate()
             surface.configure(video, url: library.disk.url(for: video))
-            testWindow.orderFrontRegardless()
-            await waitUntilVisible(testWindow)
+            testWindow.orderBack(nil)
+            results["videoPreviewWindowVisible"] = await waitUntilVisible(testWindow)
             await pause(0.8)
             results["videoReady"] = surface.mediaReady
             results["previewWindowOcclusion"] = testWindow.occlusionState.rawValue
@@ -398,6 +441,55 @@ enum SmokeRunner {
             for _ in 0..<12 { await pause(0.1); trimmedTimes.append(surface.playbackTime) }
             results["trimmedTimes"] = trimmedTimes
             results["trimmedPlayback"] = trimmedTimes.allSatisfy { $0 >= 0.24 && $0 <= 0.77 } && zip(trimmedTimes, trimmedTimes.dropFirst()).contains { $1 < $0 - 0.1 }
+            testWindow.orderBack(nil)
+            results["scenePreviewWindowVisible"] = await waitUntilVisible(testWindow)
+            for kind in ["image", "aurora", "cosmos", "ocean", "ember"] {
+                let w = kind == "image" ? images[0] : library.state.wallpapers.first { $0.kind == kind }!
+                surface.configure(w, url: library.disk.url(for: w))
+                await pause(0.15)
+                results["render_" + kind] = surface.subviews.count > 0 || (surface.layer?.sublayers?.count ?? 0) > 0
+            }
+            weak var releasedScene = surface.subviews.compactMap { $0 as? AmbientSceneView }.first
+            if let scene = releasedScene {
+                let frames = scene.frameCount
+                let start = CACurrentMediaTime()
+                let cpuStart = processCPUTime()
+                await pause(0.6)
+                results["scenePreviewFPS"] = Double(scene.frameCount - frames) / (CACurrentMediaTime() - start)
+                results["scenePreviewCPUPercent"] = (processCPUTime() - cpuStart) / (CACurrentMediaTime() - start) * 100
+                results["scenePreviewVisibility"] = "\(testWindow.occlusionState.rawValue) hidden=\(scene.isHiddenOrHasHiddenAncestor) rect=\(surface.visibleRect)"
+                results["scenePreviewAnimated"] = scene.frameCount > frames + 2
+                surface.setPaused(true)
+                await pause(0.1)
+                let paused = scene.frameCount
+                await pause(0.2)
+                results["scenePreviewPaused"] = scene.frameCount == paused
+                surface.setPaused(false)
+                scene.isHidden = true
+                await pause(0.1)
+                let hidden = scene.frameCount
+                await pause(0.2)
+                results["scenePreviewHidden"] = scene.frameCount == hidden
+                scene.isHidden = false
+                await pause(0.2)
+                results["scenePreviewResumed"] = scene.frameCount > hidden
+                testWindow.orderOut(nil)
+                await pause(0.2)
+                let occluded = scene.frameCount
+                await pause(0.2)
+                results["scenePreviewWindowHidden"] = scene.frameCount == occluded
+                testWindow.orderBack(nil)
+                results["scenePreviewReshownWindowVisible"] = await waitUntilVisible(testWindow)
+                await pause(0.3)
+                results["scenePreviewWindowResumed"] = scene.frameCount > occluded
+            }
+            surface.cleanup()
+            await pause(0.1)
+            results["scenePreviewReleased"] = releasedScene == nil
+            for check in ["scenePreviewAnimated", "scenePreviewPaused", "scenePreviewHidden", "scenePreviewResumed", "scenePreviewReleased", "scenePreviewWindowHidden", "scenePreviewWindowResumed"] {
+                if results[check] as? Bool != true { failures.append(check) }
+            }
+            testWindow.close()
             let exported = out.appendingPathComponent("trimmed.mp4")
             let exportSession = try await VideoTools.exporter(source: videoURL, edit: edited.videoEdit!)
             try await VideoTools.export(exportSession, source: videoURL, destination: exported)
@@ -473,7 +565,8 @@ enum SmokeRunner {
             saveModel.close()
             library.edit(edited)
             results["editorPersistence"] = try library.disk.load().item(edited.id)?.videoEdit == edited.videoEdit
-            VideoEditorWindow.open(wallpaper: edited, source: library.disk.url(for: edited)!, library: library)
+            let editorWindow = VideoEditorWindow(wallpaper: edited, source: library.disk.url(for: edited)!, library: library)
+            editorWindow.window.orderBack(nil)
             await pause(0.7)
             if let window = NSApp.windows.first(where: { $0.title == "Edit — " + edited.title }), let view = window.contentView, let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) {
                 view.cacheDisplay(in: view.bounds, to: bitmap)
@@ -484,66 +577,12 @@ enum SmokeRunner {
                 await captureAppearances(window, stem: "Flua-editor", directory: out)
                 window.close()
             }
-            testWindow.orderFrontRegardless()
-            await waitUntilVisible(testWindow)
-            for kind in ["image", "aurora", "cosmos", "ocean", "ember"] {
-                let w = kind == "image" ? images[0] : library.state.wallpapers.first { $0.kind == kind }!
-                surface.configure(w, url: library.disk.url(for: w))
-                await pause(0.15)
-                results["render_" + kind] = surface.subviews.count > 0 || (surface.layer?.sublayers?.count ?? 0) > 0
-            }
-            weak var releasedScene = surface.subviews.compactMap { $0 as? AmbientSceneView }.first
-            if let scene = releasedScene {
-                let frames = scene.frameCount
-                let start = CACurrentMediaTime()
-                let cpuStart = processCPUTime()
-                await pause(0.6)
-                results["scenePreviewFPS"] = Double(scene.frameCount - frames) / (CACurrentMediaTime() - start)
-                results["scenePreviewCPUPercent"] = (processCPUTime() - cpuStart) / (CACurrentMediaTime() - start) * 100
-                results["scenePreviewVisibility"] = "\(testWindow.occlusionState.rawValue) hidden=\(scene.isHiddenOrHasHiddenAncestor) rect=\(surface.visibleRect)"
-                results["scenePreviewAnimated"] = scene.frameCount > frames + 2
-                scene.isPaused = true
-                await pause(0.1)
-                let paused = scene.frameCount
-                await pause(0.2)
-                results["scenePreviewPaused"] = scene.frameCount == paused
-                scene.isPaused = false
-                scene.isHidden = true
-                await pause(0.1)
-                let hidden = scene.frameCount
-                await pause(0.2)
-                results["scenePreviewHidden"] = scene.frameCount == hidden
-                scene.isHidden = false
-                await pause(0.2)
-                results["scenePreviewResumed"] = scene.frameCount > hidden
-                testWindow.orderOut(nil)
-                await pause(0.2)
-                let occluded = scene.frameCount
-                await pause(0.2)
-                results["scenePreviewWindowHidden"] = scene.frameCount == occluded
-                testWindow.orderFrontRegardless()
-                await waitUntilVisible(testWindow)
-                await pause(0.3)
-                results["scenePreviewWindowResumed"] = scene.frameCount > occluded
-            }
-            surface.cleanup()
-            await pause(0.1)
-            results["scenePreviewReleased"] = releasedScene == nil
-            for check in ["scenePreviewAnimated", "scenePreviewPaused", "scenePreviewHidden", "scenePreviewResumed", "scenePreviewReleased", "scenePreviewWindowHidden", "scenePreviewWindowResumed"] {
-                if results[check] as? Bool != true { failures.append(check) }
-            }
-            testWindow.close()
-            if let screen = NSScreen.screens.first {
-                let baseline = NSWorkspace.shared.desktopImageURL(for: screen)
-                results["desktopWindowVisible"] = true
-                results["desktopIgnoresMouse"] = true
-                results["desktopCleanup"] = true
-                results["systemWallpaperPreserved"] = NSWorkspace.shared.desktopImageURL(for: screen) == baseline
-            }
             library.selection = video.id
             await pause(0.3)
             results["inspectorVideoInteraction"] = await verifyInspectorInteraction(library: library)
-            results["libraryApply"] = library.state.displays.values.allSatisfy { $0.desktop.wallpaperID == video.id }
+            results["libraryAssignmentValidated"] = !library.state.displays.isEmpty
+                && library.state.displays.values.allSatisfy { $0.desktop.wallpaperID == video.id }
+                && library.error == nil
             library.updatePlaylist("ambient", shuffle: false)
             library.startPlaylist("ambient")
             results["playlistStart"] = library.state.displays.values.allSatisfy { $0.desktop.wallpaperID == "aurora" && $0.desktop.playlistID == "ambient" }
@@ -663,7 +702,7 @@ enum SmokeRunner {
             settings.isReleasedWhenClosed = false
             settings.title = "Flua Settings Verification"
             settings.contentView = NSHostingView(rootView: SettingsView().environmentObject(library))
-            settings.orderFront(nil)
+            settings.orderBack(nil)
             await pause(0.3)
             captureView(settings, to: out.appendingPathComponent("Flua-settings.png"))
             await captureAppearances(settings, stem: "Flua-settings", directory: out)
@@ -697,6 +736,7 @@ enum SmokeRunner {
                 await captureAppearances(window, stem: "Flua-discover", directory: out)
                 let originalFrame = window.frame
                 window.setFrame(NSRect(x: originalFrame.origin.x, y: originalFrame.origin.y, width: 720, height: 440), display: true, animate: false)
+                park(window)
                 await pause(0.3)
                 await pause(1)
                 results["compactWindow"] = window.minSize.width <= 720 && window.frame.width <= 720
@@ -712,6 +752,7 @@ enum SmokeRunner {
                 captureView(window, to: out.appendingPathComponent("Flua-minimum-browse.png"))
                 library.section = "discover"
                 window.setFrame(originalFrame, display: true)
+                park(window)
                 await pause(1)
                 if let view = window.contentView, let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) {
                     view.cacheDisplay(in: view.bounds, to: bitmap)
@@ -762,7 +803,14 @@ enum SmokeRunner {
             library.addToPlaylist([edited.id], playlistID: importPlaylist.id)
             library.addToPlaylist([edited.id], playlistID: importPlaylist.id)
             results["playlistExistingAdd"] = library.state.playlist(importPlaylist.id)?.items.filter { $0 == edited.id }.count == 1
-            let required = ["fileDrop", "fileDropUndo", "blockedImportRevealed", "importRevealsAdded", "editorCancel", "editorSave", "playlistFileImport", "importUndo", "playlistExistingAdd", "inspectorSceneInteraction", "inspectorVideoInteraction", "explicitSystemAccent", "systemAccentDefault", "accentSelection", "unknownAccentFallback", "systemAccentReset", "importFacts", "rotatedFacts", "missingFacts", "legacyBackfill", "staleEditPreservesFacts", "unknownColorBackfill", "unknownColorRoundTrip", "blockedDiscover", "clickableTag", "combinedBrowsing", "clearFiltersPreservesBlockedTags", "clearFilters", "imageImport", "videoImport", "videoReady", "videoPlaying", "videoLooped", "videoPaused", "videoResumed", "liveAdjustmentPreservesTime", "liveAdjustmentSpeed", "stillHeld", "stillIgnoresResume", "stillPreservesSource", "sceneStillRetained", "desktopStill", "desktopStillSurvivesPause", "desktopStillPersisted", "desktopStillPreservesSource", "render_image", "render_aurora", "render_cosmos", "render_ocean", "render_ember", "desktopWindowVisible", "desktopIgnoresMouse", "desktopCleanup", "systemWallpaperPreserved", "libraryApply", "playlistStart", "playlistNext", "libraryStop", "libraryRoundTrip", "discoverWindow", "windowSnapshot", "videoInformation", "trimmedPlayback", "trimmedExport", "thumbnailExport", "rejectInvalidTrim", "preserveSourceOnExport", "packageRoundTrip", "editorPersistence", "editorWindow", "audioExport", "muteExport"]
+            results["systemWallpaperPreserved"] = library.screens.map { NSWorkspace.shared.desktopImageURL(for: $0) } == originalWallpapers
+            let verificationWindows = NSApp.windows.filter { $0.styleMask.contains(.titled) }
+            results["verificationWindows"] = verificationWindows.map { ["title": $0.title, "visible": $0.isVisible, "alpha": $0.alphaValue, "frame": NSStringFromRect($0.frame)] as [String: Any] }
+            results["nonPlaybackWindowsHidden"] = verificationWindows.allSatisfy { window in
+                !window.isVisible || window.alphaValue == 0
+            }
+            if results["nonPlaybackWindowsHidden"] as? Bool != true { failures.append("nonPlaybackWindowsHidden") }
+            let required = ["fileDrop", "fileDropUndo", "blockedImportRevealed", "importRevealsAdded", "editorCancel", "editorSave", "playlistFileImport", "importUndo", "playlistExistingAdd", "inspectorSceneInteraction", "inspectorVideoInteraction", "explicitSystemAccent", "systemAccentDefault", "accentSelection", "unknownAccentFallback", "systemAccentReset", "importFacts", "rotatedFacts", "missingFacts", "legacyBackfill", "staleEditPreservesFacts", "unknownColorBackfill", "unknownColorRoundTrip", "blockedDiscover", "clickableTag", "combinedBrowsing", "clearFiltersPreservesBlockedTags", "clearFilters", "imageImport", "videoImport", "videoReady", "videoPlaying", "videoLooped", "videoPaused", "videoResumed", "liveAdjustmentPreservesTime", "liveAdjustmentSpeed", "stillHeld", "stillIgnoresResume", "stillPreservesSource", "sceneStillRetained", "desktopStill", "desktopStillSurvivesPause", "desktopStillPersisted", "desktopStillPreservesSource", "render_image", "render_aurora", "render_cosmos", "render_ocean", "render_ember", "systemWallpaperPreserved", "libraryAssignmentValidated", "nativeDescriptorValidation", "nativeDescriptorValidationRejectsMissing", "nativeCatalogMismatchRejected", "backgroundLaunch", "videoPreviewWindowVisible", "scenePreviewWindowVisible", "scenePreviewReshownWindowVisible", "playlistStart", "playlistNext", "libraryStop", "libraryRoundTrip", "discoverWindow", "windowSnapshot", "videoInformation", "trimmedPlayback", "trimmedExport", "thumbnailExport", "rejectInvalidTrim", "preserveSourceOnExport", "packageRoundTrip", "editorPersistence", "editorWindow", "audioExport", "muteExport"]
             for key in required + ["compactWindow"] where results[key] as? Bool != true { failures.append(key) }
             for (key, value) in results where key.hasPrefix("surfaceControls") && value as? Bool != true { failures.append(key) }
         } catch { failures.append(String(reflecting: error)) }
@@ -856,14 +904,9 @@ enum SmokeRunner {
         }
     }
     @MainActor private static func verifyInspectorInteraction(library: Library) async -> Bool {
-        // The isolated catalog rejects native Apply; dismiss that expected alert before later preview checks.
-        defer { library.error = nil }
         guard let window = NSApp.windows.first(where: { $0.title == "Flua" }),
               let root = window.contentView, let parent = root.superview,
               let selected = library.selected else { return false }
-        window.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
-        library.error = nil
         await pause(0.3)
         var inspector: NSScrollView?
         func findInspector(_ view: NSView) {
@@ -907,7 +950,7 @@ enum SmokeRunner {
             button.performClick(nil)
             await pause(0.3)
         }
-        return !library.state.displays.isEmpty
+        return library.error == nil && !library.state.displays.isEmpty
             && library.state.displays.values.allSatisfy { $0.desktop.wallpaperID == selected.id }
     }
     @MainActor private static func verifyReopening(library: Library) async throws -> [String: Bool] {
@@ -967,7 +1010,7 @@ enum SmokeRunner {
         return png
     }
     @MainActor static func capture(_ window: NSWindow, to url: URL) {
-        guard CGPreflightScreenCaptureAccess() else { return }
+        guard window.alphaValue > 0.01, CGPreflightScreenCaptureAccess() else { return }
         let task = Process()
         task.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
         task.arguments = ["-x", "-o", "-l", String(window.windowNumber), url.path]
@@ -980,11 +1023,20 @@ enum SmokeRunner {
         return Double(usage.ru_utime.tv_sec + usage.ru_stime.tv_sec)
             + Double(usage.ru_utime.tv_usec + usage.ru_stime.tv_usec) / 1_000_000
     }
-    @MainActor private static func waitUntilVisible(_ window: NSWindow) async {
-        NSApp.activate(ignoringOtherApps: true)
-        window.makeKeyAndOrderFront(nil)
+    @MainActor private static weak var presentedPlaybackWindow: NSWindow?
+    @discardableResult @MainActor private static func waitUntilVisible(_ window: NSWindow) async -> Bool {
+        if let previous = presentedPlaybackWindow, previous !== window { previous.orderOut(nil) }
+        presentedPlaybackWindow = window
+        await pause(0.15)
+        if !window.occlusionState.contains(.visible) {
+            // Only live playback needs an exposed surface, including over an active fullscreen app.
+            window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .canJoinAllApplications, .stationary, .ignoresCycle]
+            window.level = .statusBar
+            window.orderFrontRegardless()
+        }
         let deadline = Date().addingTimeInterval(5)
         while !window.occlusionState.contains(.visible) && Date() < deadline { await pause(0.05) }
+        return window.occlusionState.contains(.visible)
     }
     static func pause(_ seconds: Double) async { try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000)) }
     static func makeAudioVideo(video: URL, directory: URL) async throws -> URL {

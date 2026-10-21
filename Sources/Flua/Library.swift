@@ -22,6 +22,7 @@ final class Library: ObservableObject {
     @Published var activity = "Choose a wallpaper to preview and set on your desktop."
     @Published var thumbnails: [String: NSImage] = [:]
     let disk: LibraryDisk
+    private let systemPlaybackEnabled: Bool
     var tick: Timer?
     private var screenObserver: NSObjectProtocol?
     private var saveBlocked = false
@@ -32,7 +33,8 @@ final class Library: ObservableObject {
     var importTasks = Set<UUID>()
     var onChange: (() -> Void)?
 
-    init(root: URL) throws {
+    init(root: URL, systemPlaybackEnabled: Bool = true) throws {
+        self.systemPlaybackEnabled = systemPlaybackEnabled
         disk = try LibraryDisk(root: root)
         do { state = try disk.load() }
         catch { state = .initial; saveBlocked = true; self.error = error.localizedDescription }
@@ -224,7 +226,7 @@ final class Library: ObservableObject {
         guard !nativeSetupBusy else { return }
         let ids = targets.map(displayID)
         pendingNativeAssignmentDisplays.subtract(ids)
-        if NativeWallpaper.available && NativeWallpaper.catalogURL.resolvingSymlinksInPath() == disk.catalog.resolvingSymlinksInPath() {
+        if nativeRoutingAvailable {
             let mirrored = playbackMode == "mirrored"
             let root = disk.root
             nativeSetupBusy = true
@@ -269,7 +271,7 @@ final class Library: ObservableObject {
         activity = state.paused ? "Playback paused." : "Playback resumed."
     }
     private var nativeRoutingAvailable: Bool {
-        NativeWallpaper.available && NativeWallpaper.catalogURL.resolvingSymlinksInPath() == disk.catalog.resolvingSymlinksInPath()
+        systemPlaybackEnabled && NativeWallpaper.available && NativeWallpaper.catalogURL.resolvingSymlinksInPath() == disk.catalog.resolvingSymlinksInPath()
     }
     @MainActor private func restoreNativeAssignments(displays: [String]? = nil) {
         guard !saveBlocked, nativeRoutingAvailable else { return }
@@ -291,11 +293,13 @@ final class Library: ObservableObject {
     }
     @MainActor private func applySavedNativeAssignments(displays: [String], reloadUnchanged: Bool = true) {
         guard !nativeSetupBusy else { return }
-        guard NativeWallpaper.available else { error = NativeWallpaper.explanation; return }
         guard !saveBlocked else { error = LibraryError.invalidLibrary.localizedDescription; return }
-        guard NativeWallpaper.catalogURL.resolvingSymlinksInPath() == disk.catalog.resolvingSymlinksInPath() else {
-            error = "This build uses a different library. Rebuild it with FLUA_CATALOG_PATH set to this library’s catalog.json."
-            return
+        if systemPlaybackEnabled {
+            guard NativeWallpaper.available else { error = NativeWallpaper.explanation; return }
+            guard NativeWallpaper.catalogURL.resolvingSymlinksInPath() == disk.catalog.resolvingSymlinksInPath() else {
+                error = "This build uses a different library. Rebuild it with FLUA_CATALOG_PATH set to this library’s catalog.json."
+                return
+            }
         }
         do { try disk.save(state) } catch { self.error = error.localizedDescription; return }
         let assignments: [String: NativeWallpaperStore.Assignment]
@@ -303,6 +307,11 @@ final class Library: ObservableObject {
         catch { self.error = error.localizedDescription; return }
         guard !assignments.isEmpty || displays.contains(where: { state.nativePlayback[$0] == true }) else {
             error = "Save a wallpaper choice for the targeted displays first."
+            return
+        }
+        // Isolated smoke runs validate real descriptors without touching the system wallpaper store.
+        guard systemPlaybackEnabled else {
+            activity = "Validated saved wallpaper choices. System playback is disabled for verification."
             return
         }
         pendingNativeAssignmentDisplays.subtract(displays)
@@ -337,6 +346,7 @@ final class Library: ObservableObject {
         save()
     }
     @MainActor func removeNativeProvider() {
+        guard systemPlaybackEnabled else { return }
         guard !nativeSetupBusy else { return }
         guard !saveBlocked else { error = LibraryError.invalidLibrary.localizedDescription; return }
         guard NativeWallpaper.catalogURL.resolvingSymlinksInPath() == disk.catalog.resolvingSymlinksInPath() else {
@@ -393,8 +403,7 @@ final class Library: ObservableObject {
         nativeRefreshTask?.cancel()
         nativeRefreshTask = Task { @MainActor [weak self] in
             do { try await Task.sleep(nanoseconds: 500_000_000) } catch { return }
-            guard let self, !self.saveBlocked, NativeWallpaper.available,
-                  NativeWallpaper.catalogURL.resolvingSymlinksInPath() == self.disk.catalog.resolvingSymlinksInPath() else { return }
+            guard let self, !self.saveBlocked, self.nativeRoutingAvailable else { return }
             if self.nativeSetupBusy { self.scheduleNativeRefresh(); return }
             let queuedDisplays = self.pendingNativeAssignmentDisplays
             self.pendingNativeAssignmentDisplays.removeAll()

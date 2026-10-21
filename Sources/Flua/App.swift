@@ -3,7 +3,6 @@ import AppKit
 import Combine
 
 final class ViewState: ObservableObject {
-    @Published var showingPreview = false
     @Published var playlistPicker: String?
     @Published var pickerSelected = Set<String>()
     @Published var pickerQuery = ""
@@ -100,6 +99,7 @@ private final class FocusClearView: NSView {
         super.viewDidMoveToWindow()
         cleanObservers()
         guard let window = self.window else { return }
+        SmokeRunner.configureVerificationWindow(window)
         clearFocus(in: window)
 
         becomeKeyObserver = NotificationCenter.default.addObserver(
@@ -309,6 +309,12 @@ enum AppContext {
     static let library: Library = {
         let args = ProcessInfo.processInfo.arguments
         do {
+            if args.contains("--smoke-test") {
+                guard let i = args.firstIndex(of: "--data-dir"), args.indices.contains(i + 1),
+                      !args[i + 1].isEmpty, !args[i + 1].hasPrefix("--") else {
+                    throw NativeWallpaperError("Smoke verification requires an isolated --data-dir.")
+                }
+            }
             let root: URL
             if let i = args.firstIndex(of: "--data-dir"), args.indices.contains(i + 1) {
                 root = URL(fileURLWithPath: args[i + 1], isDirectory: true)
@@ -316,9 +322,13 @@ enum AppContext {
                 let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
                 root = LibraryPaths.resolve(applicationSupport: support)
             }
-            return try Library(root: root)
+            return try Library(root: root, systemPlaybackEnabled: !args.contains("--smoke-test"))
         }
         catch {
+            if args.contains("--smoke-test") {
+                fputs("Flua smoke: \(error.localizedDescription)\n", stderr)
+                exit(1)
+            }
             let alert = NSAlert()
             alert.messageText = "Flua could not open its library"
             alert.informativeText = error.localizedDescription
@@ -338,7 +348,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
     func applicationWillFinishLaunching(_ notification: Notification) {
         let arguments = ProcessInfo.processInfo.arguments
-        if arguments.contains("--accessibility-audit") || arguments.contains("--preview-smoke") {
+        if arguments.contains("--accessibility-audit") || arguments.contains("--preview-smoke") || arguments.contains("--smoke-test") {
             if arguments.contains("--accessibility-audit") { NSApp.setActivationPolicy(.accessory) }
             return
         }
@@ -367,11 +377,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var body: some Scene {
         let _ = appDelegate.openLibrary = {
             openWindow(id: "library")
-            NSApp.activate()
+            if !ProcessInfo.processInfo.arguments.contains("--smoke-test") { NSApp.activate() }
         }
         Window("Flua", id: "library") {
             LibraryView().environmentObject(library)
                 .frame(minWidth: 700, minHeight: 440)
+                .windowFullScreenBehavior(ProcessInfo.processInfo.arguments.contains("--smoke-test") || ProcessInfo.processInfo.arguments.contains("--preview-smoke") ? .disabled : .automatic)
         }
         .defaultSize(width: 1320, height: 840)
         // Smoke tests start without an automatic window to exercise explicit launch handling.
@@ -454,12 +465,6 @@ struct LibraryView: View {
                 InspectorView().inspectorColumnWidth(min: 220, ideal: 280, max: 360)
             }
         }
-        .sheet(isPresented: $ui.showingPreview) {
-            VStack {
-                HStack { Text("Wallpaper Preview").font(.headline); Spacer(); Button("Done") { ui.showingPreview = false } }.padding()
-                InspectorView()
-            }.frame(width: 420, height: 680).environmentObject(library)
-        }
         .sheet(isPresented: Binding(get: { ui.playlistPicker != nil }, set: { if !$0 { ui.playlistPicker = nil } })) {
             if let id = ui.playlistPicker { PlaylistWallpaperPicker(playlistID: id).environmentObject(library) }
         }
@@ -521,15 +526,6 @@ struct LibraryView: View {
             if displayed.isEmpty {
                 ContentUnavailableView {
                     Label("No Wallpapers", systemImage: "photo.on.rectangle.angled")
-                } description: {
-                    Text("Add wallpapers or reset filters to see your collection. Blocked tags can be adjusted in Settings.")
-                } actions: {
-                    if library.section.hasPrefix("playlist:") {
-                        Button("Add Wallpapers…") { ui.playlistPicker = String(library.section.dropFirst(9)) }
-                    } else {
-                        Button("Add Wallpaper…") { library.chooseMedia() }
-                    }
-                    Button("Reset Filters") { library.clearFilters() }
                 }
                     .frame(maxWidth: .infinity, minHeight: 320)
             } else {
@@ -634,7 +630,7 @@ struct LibraryView: View {
     }
     private func wallpaperCard(_ w: Wallpaper) -> some View {
         WallpaperCard(wallpaper: w, selected: library.selection == w.id || (library.importNotice != nil && library.lastImportIDs.contains(w.id)))
-            .onTapGesture { library.selection = w.id; ui.showingPreview = true }
+            .onTapGesture { library.selection = w.id }
             .contextMenu {
                 Button("Set Wallpaper") { library.selection = w.id; library.applySelected() }
                 Button(w.favorite ? "Remove from Favorites" : "Add to Favorites") { library.favorite(w) }

@@ -1,16 +1,16 @@
 # Wallpaper extension
 
-This is an independently written, compiled prototype of the native macOS wallpaper-provider boundary. It can create a remote Core Animation context backed by an IOSurface, return a snapshot, accept locked/suspended updates, and supply a nonempty settings catalog using Apple's actual private payload classes.
+This is the native macOS wallpaper provider embedded in Flua, with a separate standalone fixture and test build. It can create a remote Core Animation context backed by an IOSurface, return a snapshot, accept locked/suspended updates, and supply a nonempty settings catalog using Apple's actual private payload classes.
 
-A sandbox-signed disposable copy passed WallpaperAgent selection, context creation, snapshots and looping video on arm64 macOS 27.0.1 (26A434). A separate probe verified sandboxed access to external image/video fixtures through the host's file wrappers. During a real lock/unlock check, host updates were recorded and the user confirmed visible video motion on the Lock Screen. Real screen-saver transitions with video Animated/Still and aurora Still, plus aurora Still during explicit lock/unlock, passed the scoped check below. Broader hardware/OS behavior remains unverified. Flua writes `catalog.json` beside `library.json`, including speed, dimming, fit, trim, still-frame time, and desktop and Lock Screen modes, plus the four built-in scenes with no media file. This prototype lists those image, video and scene entries from `FLUA_CATALOG`, a bundled `catalog.json`, the absolute Info.plist key `FLUACatalogPath`, or, when the bundle is an appex, `~/Library/Application Support/Flua/catalog.json`. If that file is not readable, the provider asks the host once for read-only access and pushes an updated settings catalog. A later write or atomic replacement of that catalog file pushes again. Media bytes still arrive as host file wrappers. Scene choices carry a video badge and an empty file list; the provider draws them at up to 24 fps into a surface capped at 1280 pixels on the long edge and publishes a scaled full-size frame. A session uses the desktop mode for the default presentation and the Lock Screen mode for locked and idle presentations. A bundled catalog may name another directory with `root`; any other catalog may name only its own directory. Media is opened through host file wrappers. A direct read of an external file is logged and is not required. `make build` embeds this extension in `Flua.app`. Setup is described below.
+A sandbox-signed disposable copy passed WallpaperAgent selection, context creation, snapshots and looping video on arm64 macOS 27.0.1 (26A434). A separate probe verified sandboxed access to external image/video fixtures through the host's file wrappers. During a real lock/unlock check, host updates were recorded and the user confirmed visible video motion on the Lock Screen. Real screen-saver transitions with video Animated/Still and aurora Still, plus aurora Still during explicit lock/unlock, passed the scoped check below. Broader hardware/OS behavior remains unverified. Flua writes `catalog.json` beside `library.json`, including speed, dimming, fit, trim, still-frame time, and desktop and Lock Screen modes, plus the four built-in scenes with no media file. The provider lists those image, video and scene entries from `FLUA_CATALOG`, a bundled `catalog.json`, the absolute Info.plist key `FLUACatalogPath`, or, when the bundle is an appex, `~/Library/Application Support/Flua/catalog.json`. If that file is not readable, the provider asks the host for read-only access, retrying failed requests and pushes an updated settings catalog. A later write or atomic replacement of that catalog file pushes again. Media bytes still arrive as host file wrappers. Scene choices carry a video badge and an empty file list; the provider draws them at up to 24 fps into a surface capped at 1280 pixels on the long edge and publishes a scaled full-size frame. A session uses the desktop mode for the default presentation and the Lock Screen mode for locked and idle presentations. A bundled catalog may name another directory with `root`; any other catalog may name only its own directory. Media is opened through host file wrappers. A direct read of an external file is logged and is not required. `make build` embeds this extension in `Flua.app`. Setup is described below.
 
 ## App build
 
 `make build` produces `build/Flua.app`. It embeds a sandbox-signed copy with identifier `local.flua.desktop.wallpaper`, `FLUALibraryOnly = true` and a file-only read exception for the standard Flua catalog. `FLUA_CATALOG_PATH` can instead bind a build to a disposable absolute catalog path; `FLUA_WALLPAPER_IDENTIFIER` supplies a separate provider identifier for these tests. The application checks that this path matches its library before setup. Only macOS 27 exposes setup.
 
-**Play Wallpaper** in the inspector and card interactions registers the current containing app and extension, verifies the registered path and applies the saved surface choices for targeted displays directly to macOS. `NativeWallpaperStore` constructs separate Desktop and Lock Screen descriptors with their saved modes and library-owned media URLs; linked surfaces resolve to the same choice. Images are supported and remain still. Unassigned surfaces retain the system wallpaper. Per Display preserves the global wallpaper as the default fallback and writes targeted overrides, with `$null` for the global override. It validates the private `Index.plist` schema and updates global, display and Space assignments while retaining unrelated metadata. `NativeWallpaper.swift` serializes concurrent Flua applies, saves `NativeWallpaperBackup.plist` in the library, writes atomically and verifies the result. The signed `FluaWallpaperGuard` helper verifies the exact current-user WallpaperAgent executable, pauses it during the transaction and restarts it on commit. EOF, timeout or handled termination resumes it on abandonment. No private Apple entitlement is used.
+**Set Wallpaper** in the inspector registers the current containing app and extension, verifies the registered path and applies the saved surface choices for targeted displays directly to macOS. `NativeWallpaperStore` constructs separate Desktop and Lock Screen descriptors with their saved modes and library-owned media URLs; linked surfaces resolve to the same choice. Images are supported and remain still. Unassigned surfaces retain the system wallpaper. Per Display preserves the global wallpaper as the default fallback and writes targeted overrides, with `$null` for the global override. It validates the private `Index.plist` schema and updates global, display and Space assignments while retaining unrelated metadata. `NativeWallpaper.swift` serializes concurrent Flua applies, saves `NativeWallpaperBackup.plist` in the library, writes atomically and verifies the result. The signed `FluaWallpaperGuard` helper verifies the exact current-user WallpaperAgent executable, pauses it during the transaction and restarts it on commit. EOF, timeout or handled termination resumes it on abandonment. No private Apple entitlement is used.
 
-Application is independent of System Settings discovery or cached choices. macOS owns playback after Flua exits; playlists and Stop remain available in Flua. Stop restores both targeted native surfaces from the baseline retained before Apply, keeping saved Flua assignments. If Flua is already selected and no baseline exists, Play Wallpaper updates that choice in place. Stop still needs a baseline: select another wallpaper in System Settings, then apply Flua once. Keep the app and library in place while selected. Settings → Lock Screen → Remove native provider… restores the retained baseline before unregistering this copy. If the baseline is unavailable, choose another wallpaper in System Settings and retry removal. Playback edits automatically refresh matching active choices.
+Application is independent of System Settings discovery or cached choices. macOS owns playback after Flua exits; playlists and Stop remain available in Flua. Stop restores both targeted native surfaces from the baseline retained before Apply, keeping saved Flua assignments. If Flua is already selected and no baseline exists, Set Wallpaper updates that choice in place. Stop still needs a baseline: select another wallpaper in System Settings, then apply Flua once. Keep the app and library in place while selected. Settings → Lock Screen → Remove native provider… restores the retained baseline before unregistering this copy. If the baseline is unavailable, choose another wallpaper in System Settings and retry removal. Playback edits automatically refresh matching active choices.
 
 The library-only catalog omits prototype fixtures and uses a separate group ID. When the host acquires a cached choice without fetching settings, the provider loads the current catalog, pushes it and attaches its file watcher. Atomic saves reattach that watcher to the replacement inode, so the sandbox needs no directory-wide file-read exception. Media bytes are still delivered through host file wrappers.
 
@@ -50,7 +50,7 @@ The build script writes the bundle and test results under `Sources/WallpaperExte
 
 ## Integration gate
 
-`make wallpaper-test` passes the entrypoint, standalone lifecycle, XPC and image/video checks on arm64 macOS 27.0.1 (26A434), using the macOS 27 SDK. The standalone tests correctly report `systemActivationPerformed: false` and `sandboxAuthorizationVerified: false`. Separate real-host checks established playback and sandbox media access, satisfying the core feasibility gate in `docs/PLAN.md`. Real video Animated/Still and aurora Still screen-saver transitions passed on one built-in display; see the transition check below. A real-host active-video truncation check also verified fallback and recovery after restoring the same file. The app build supplies library discovery and explicit registration/retry setup. Explicit application of saved independent or linked assignments and modes is implemented for targeted displays and existing Spaces. Native Stop is implemented through a guarded restoration transaction. Automatic media and catalog retries are implemented; fresh media grants still require reapply. Native launch restoration and playback-edit refresh passed the separate-process real-host check below on one built-in display. Physical multi-display validation remains unfinished. A reversible built-in Retina mode check is recorded below; sleep/wake and EDR wallpaper output remain unverified.
+`make wallpaper-test` passes the entrypoint, standalone lifecycle, XPC and image/video checks on arm64 macOS 27.0.1 (26A434), using the macOS 27 SDK. The standalone tests correctly report `systemActivationPerformed: false` and `sandboxAuthorizationVerified: false`. Separate real-host checks established playback and sandbox media access, establishing the core feasibility result recorded below. Real video Animated/Still and aurora Still screen-saver transitions passed on one built-in display; see the transition check below. A real-host active-video truncation check also verified fallback and recovery after restoring the same file. The app build supplies library discovery and explicit registration/retry setup. Explicit application of saved independent or linked assignments and modes is implemented for targeted displays and existing Spaces. Native Stop is implemented through a guarded restoration transaction. Automatic media and catalog retries are implemented; fresh media grants still require reapply. Native launch restoration and playback-edit refresh passed the separate-process real-host check below on one built-in display. Physical multi-display validation remains unfinished. A reversible built-in Retina mode check is recorded below; sleep/wake and EDR wallpaper output remain unverified.
 
 ### Real-host feasibility result
 
@@ -133,33 +133,33 @@ This procedure verifies startup and catalog discovery without selecting another 
 3. Create a plist containing only the boolean entitlement `com.apple.security.app-sandbox = true`. Sign the copied extension with `codesign --force --sign - --entitlements <entitlements.plist> <extension-path>`, then sign the containing application with `codesign --force --sign - <app-path>`. This is the tested ad-hoc sandbox setup, not a proven production signature.
 4. Register the containing app, then its extension, using the commands below. Set `FLUA_HOST_CHECK_APP` to the absolute disposable app path first.
 
-```sh
-/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister \
-    -f "$FLUA_HOST_CHECK_APP"
-pluginkit -a \
-    "$FLUA_HOST_CHECK_APP/Contents/Extensions/FluaWallpaperExtension.appex"
-pluginkit -m \
-    -A -D -vv \
-    -i org.flua.wallpaper.prototype
-/usr/bin/log show \
-    --last 5m \
-    --style compact \
-    --predicate 'process == "FluaWallpaperExtension" OR (process == "WallpaperAgent" AND eventMessage CONTAINS[c] "org.flua.wallpaper.prototype")' \
-    --info --debug
-```
+    ```sh
+    /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister \
+        -f "$FLUA_HOST_CHECK_APP"
+    pluginkit -a \
+        "$FLUA_HOST_CHECK_APP/Contents/Extensions/FluaWallpaperExtension.appex"
+    pluginkit -m \
+        -A -D -vv \
+        -i org.flua.wallpaper.prototype
+    /usr/bin/log show \
+        --last 5m \
+        --style compact \
+        --predicate 'process == "FluaWallpaperExtension" OR (process == "WallpaperAgent" AND eventMessage CONTAINS[c] "org.flua.wallpaper.prototype")' \
+        --info --debug
+    ```
 
 5. Inspect System Settings → Wallpaper without selecting anything. If the catalog arrives after the page opens, navigate away and back to refresh it. Verify the Flua group and all three fixture names. Save relevant host logs and any new `FluaWallpaperExtension-*.ips` report from `~/Library/Logs/DiagnosticReports/`. The corrected build completed the catalog request and showed the fixtures. Do not interpret registration, connection or catalog delivery as rendered playback. Actual selection needs a separately established restoration procedure.
 6. Always unregister the exact disposable extension and containing app, including after failure:
 
-```sh
-pluginkit -r \
-    "$FLUA_HOST_CHECK_APP/Contents/Extensions/FluaWallpaperExtension.appex"
-/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister \
-    -u "$FLUA_HOST_CHECK_APP"
-pluginkit -m \
-    -A -D -v \
-    -i org.flua.wallpaper.prototype
-```
+    ```sh
+    pluginkit -r \
+        "$FLUA_HOST_CHECK_APP/Contents/Extensions/FluaWallpaperExtension.appex"
+    /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister \
+        -u "$FLUA_HOST_CHECK_APP"
+    pluginkit -m \
+        -A -D -v \
+        -i org.flua.wallpaper.prototype
+    ```
 
 7. Confirm no prototype matches and compare the complete provider path list with the baseline. Rename the disposable app to a suffix other than `.app` to avoid rediscovery. If this run created the prototype sandbox container, move only that new container into the verification directory after the process exits; preserve any pre-existing container. Return System Settings to its original page. Compare both wallpaper plists structurally with the snapshots. The discovery-only run changed only system-maintained `LastUse` timestamps; playback selection also changed `LastSet`. Leave timestamp updates intact. All choices, configurations and other values must match the intended baseline before claiming restoration.
 
