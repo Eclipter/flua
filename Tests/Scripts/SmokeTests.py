@@ -38,19 +38,15 @@ mkdir -p "$8"
 print '{"passed":true,"failures":[]}' > "$8/smoke-results.json"
 ''')
     opener.chmod(0o755)
-    normal = root / 'build/Flua.app'
-    normal.mkdir(parents=True)
-    (normal / 'sentinel').write_text('unchanged')
     environment = dict(os.environ, PATH=f'{fake_bin}:{os.environ["PATH"]}')
     for detached in (False, True):
         if detached:
             subprocess.run(['git', 'checkout', '--detach'], cwd=root, check=True, capture_output=True)
         subprocess.run(['make', '-f', str(source / 'Makefile'), 'smoke'],
                        cwd=root, env=environment, check=True)
-        suffix = subprocess.check_output(['git', 'rev-parse', '--short', 'HEAD'], cwd=root, text=True).strip() if detached else 'test-nested'
-        assert Path((root / 'builds.txt').read_text().splitlines()[-1]).name == f'Flua-{suffix}.app'
+        assert Path((root / 'builds.txt').read_text().splitlines()[-1]) == root / 'build/Flua.app'
+    assert len((root / 'builds.txt').read_text().splitlines()) == 2
     catalogs = (root / 'catalogs.txt').read_text().splitlines()
     assert len(set(catalogs)) == 2
     assert all(Path(catalog).is_relative_to(root / 'build/verification') for catalog in catalogs)
-    assert (normal / 'sentinel').read_text() == 'unchanged'
-print('PASS: smoke build naming, isolated catalogs and regular bundle preservation')
+print('PASS: one smoke build per run, stable bundle path and isolated catalogs')

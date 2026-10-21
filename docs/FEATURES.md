@@ -11,7 +11,7 @@ Flua is a local wallpaper library for macOS 27+ on Apple Silicon. Playback uses 
 | Displays and surfaces | Mirrored or Per Display; separate or linked Desktop/Lock Screen choices with Animated/Still modes | Stable display UUIDs retain disconnected choices; physical reconnect and multi-display validation remain open |
 | Library | Wallpapers, All/Built-in/Imported filters, favorites, tags, search, sorting, classifications and blocked tags | No online catalog, accounts or cloud storage |
 | Playlists | Timing, shuffle, duplication, previous history and reorder | Automatic advancement requires Flua to be running; Pause/Resume playlists controls automatic advancement while wallpaper animation continues |
-| Rendering controls | Native speed, dimming, fit, video trim and still-frame time | Volume affects app previews and is not sent to the native provider |
+| Rendering controls | Native speed, dimming, fit, video trim and still-frame time; Speed, Dim and Volume support sliders and typed values (Return or leaving the field applies; invalid or out-of-range entries revert) | Speed uses a multiplier (0.25–2×), Dim uses percent (0–85%), and Volume uses percent (0–100%). Volume affects app previews and is not sent to the native provider |
 | Power preferences | Battery, Low Power Mode and fullscreen preferences are saved | These preferences currently do not control native playback |
 | Video editor | Draft trim and cover selection with Save Changes / Cancel; name and tags in Details | No standalone video studio or separate MP4/PNG export controls |
 | Export and packages | Video `.flua` folders; image copies; manifest folders, JSON, ZIP and `.bdpkg` imports | Source media is preserved; package export refuses an existing destination |

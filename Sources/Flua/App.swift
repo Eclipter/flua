@@ -964,9 +964,9 @@ struct InspectorView: View {
                 Toggle("Fit entire image", isOn: binding(\.fit, w)).font(.caption).tint(library.accentOverride)
             }
 
-            if w.kind != "image" { slider("Speed", value: binding(\.speed, w), range: 0.25...2, suffix: String(format: "%.2f×", w.speed)) }
-            slider("Dim", value: binding(\.dimming, w), range: 0...0.85, suffix: "\(Int(w.dimming * 100))%")
-            if w.kind == "video" { slider("Volume", value: binding(\.volume, w), range: 0...1, suffix: "\(Int(w.volume * 100))%") }
+            if w.kind != "image" { NumericSlider(name: "Speed", value: binding(\.speed, w), range: 0.25...2, format: { String(format: "%.2f", $0) }, parse: { Double($0) }, unit: "×", accent: library.accent).id(w.id) }
+            NumericSlider(name: "Dim", value: binding(\.dimming, w), range: 0...0.85, format: formatPercentage, parse: { Double($0).map { $0 / 100 } }, unit: "%", accent: library.accent).id(w.id)
+            if w.kind == "video" { NumericSlider(name: "Volume", value: binding(\.volume, w), range: 0...1, format: formatPercentage, parse: { Double($0).map { $0 / 100 } }, unit: "%", accent: library.accent).id(w.id) }
         }
     }
 
@@ -1012,10 +1012,56 @@ struct InspectorView: View {
     private func binding<T>(_ key: WritableKeyPath<Wallpaper, T>, _ original: Wallpaper) -> Binding<T> {
         Binding(get: { (library.state.item(original.id) ?? original)[keyPath: key] }, set: { newValue in var v = library.state.item(original.id) ?? original; v[keyPath: key] = newValue; library.edit(v) })
     }
-    private func slider(_ name: String, value: Binding<Double>, range: ClosedRange<Double>, suffix: String) -> some View {
-        // A nil tint leaves the track gray in this scrolling inspector.
-        VStack(spacing: 8) { HStack { Text(name); Spacer(); Text(suffix).foregroundStyle(.secondary).monospacedDigit() }.font(.caption); Slider(value: value, in: range).tint(library.accent).accessibilityLabel(name) }
+}
+
+private struct NumericSlider: View {
+    let name: String
+    @Binding var value: Double
+    let range: ClosedRange<Double>
+    let format: (Double) -> String
+    let parse: (String) -> Double?
+    let unit: String
+    let accent: Color
+    @FocusState private var isFocused: Bool
+    @StateObject private var draft = NumericDraft()
+
+    var body: some View {
+        VStack(spacing: 8) {
+            HStack {
+                Text(name)
+                Spacer()
+                HStack(spacing: 2) {
+                    TextField("", text: $draft.text)
+                        .textFieldStyle(.roundedBorder)
+                        .multilineTextAlignment(.trailing)
+                        .monospacedDigit()
+                        .focused($isFocused)
+                        .onSubmit { commit() }
+                        .onChange(of: isFocused) { _, focused in
+                            if focused { draft.text = format(value) } else { commit() }
+                        }
+                        .frame(width: 56)
+                        .accessibilityLabel("\(name) value")
+                        .help("Enter \(format(range.lowerBound))–\(format(range.upperBound))\(unit). Press Return to apply.")
+                    Text(unit).font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            .font(.caption)
+            Slider(value: $value, in: range).tint(accent).accessibilityLabel(name)
+        }
+        .onAppear { draft.text = format(value) }
+        .onChange(of: value) { _, newValue in draft.text = format(newValue) }
     }
+
+    private func commit() {
+        let (newValue, text) = applyNumericEntry(draft: draft.text, current: value, range: range, parse: parse, format: format)
+        if value != newValue { value = newValue }
+        draft.text = text
+    }
+}
+
+private final class NumericDraft: ObservableObject {
+    @Published var text: String = ""
 }
 
 struct SettingsView: View {

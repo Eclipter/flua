@@ -21,7 +21,7 @@ Use disposable libraries and matching catalog builds. Follow the [integration an
 ## Inspector and library refinements
 
 - In the wallpaper settings, drop per-display screen segments from the Configure picker while "Mirror all displays" is on, and drop the Lock Screen segment while Desktop and Lock Screen are linked; only offer choices the active toggles allow.
-- Let users type numeric values directly into the Speed, Dim and Volume scrolls instead of only dragging them, so an exact value can be entered like a volume level.
+- [x] Let users type numeric values directly into the Speed, Dim and Volume scrolls instead of only dragging them, so an exact value can be entered like a volume level.
 - Add a pressed animation to prominent buttons such as "Add Wallpaper…" so a press gives immediate visual feedback.
 - Make Clear filters also reset the sort type (Name / Favorites First / Recently Added) to its default.
 

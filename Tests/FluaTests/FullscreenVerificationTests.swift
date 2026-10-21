@@ -1,6 +1,6 @@
 import AppKit
 
-// Run after make build; fullscreen is supported but not required.
+// Builds the app through smoke; fullscreen is supported but not required.
 let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
 precondition(NSRunningApplication.runningApplications(withBundleIdentifier: "local.flua.desktop").isEmpty, "Quit Flua before verification")
 let foreground = NSWorkspace.shared.frontmostApplication?.processIdentifier
