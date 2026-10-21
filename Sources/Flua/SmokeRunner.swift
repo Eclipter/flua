@@ -433,7 +433,7 @@ enum SmokeRunner {
             let information = try await VideoInformation.load(videoURL)
             results["videoInformation"] = information.width == 640 && information.height == 360 && abs(information.duration - 1) < 0.05
             var edited = video
-            edited.videoEdit = VideoEdit(start: 0.25, end: 0.75, thumbnail: 0.5, includeAudio: false, quality: "medium")
+            edited.videoEdit = VideoEdit(start: 0.25, end: 0.75, thumbnail: 0.5, quality: "medium")
             edited.metadata = SceneMetadata(details: "Portable test scene", category: "Abstract", creditTitle: "Flua", creditURL: "", color: "Purple", motion: "High")
             edited.tags = "test, portable"
             surface.configure(edited, url: library.disk.url(for: edited))
@@ -497,16 +497,15 @@ enum SmokeRunner {
             let exportedInfo = try await VideoInformation.load(exported)
             results["trimmedExport"] = abs(exportedInfo.duration - 0.5) < 0.06 && !exportedInfo.hasAudio
             let sourceWithAudio = try await makeAudioVideo(video: videoURL, directory: out)
-            let audioEdit = VideoEdit(start: 0.25, end: 0.75, includeAudio: true, quality: "medium")
-            let withAudio = out.appendingPathComponent("with-audio.mp4")
-            let audioSession = try await VideoTools.exporter(source: sourceWithAudio, edit: audioEdit)
-            try await VideoTools.export(audioSession, source: sourceWithAudio, destination: withAudio)
-            let audioInfo = try await VideoInformation.load(withAudio)
-            results["audioExport"] = audioInfo.hasAudio && abs(audioInfo.duration - 0.5) < 0.08
-            var mutedEdit = audioEdit; mutedEdit.includeAudio = false
-            let muted = out.appendingPathComponent("muted.mp4")
-            try await VideoTools.export(VideoTools.exporter(source: sourceWithAudio, edit: mutedEdit), source: sourceWithAudio, destination: muted)
-            results["muteExport"] = try await !VideoInformation.load(muted).hasAudio
+            let audioSourceInfo = try await VideoInformation.load(sourceWithAudio)
+            let audioSourceBytes = try Data(contentsOf: sourceWithAudio)
+            let silentEdit = VideoEdit(start: 0.25, end: 0.75, quality: "medium")
+            let silent = out.appendingPathComponent("silent.mp4")
+            try await VideoTools.export(VideoTools.exporter(source: sourceWithAudio, edit: silentEdit), source: sourceWithAudio, destination: silent)
+            let silentInfo = try await VideoInformation.load(silent)
+            // Exported wallpaper video carries no audio track even when the source has one.
+            let preservedAudioSource = try Data(contentsOf: sourceWithAudio) == audioSourceBytes
+            results["silentExport"] = audioSourceInfo.hasAudio && !silentInfo.hasAudio && abs(silentInfo.duration - 0.5) < 0.08 && preservedAudioSource
             let thumbnail = try await VideoTools.thumbnail(source: videoURL, time: 0.5)
             results["thumbnailExport"] = NSImage(data: thumbnail) != nil
             let sourceBeforeStill = try Data(contentsOf: videoURL)
@@ -823,7 +822,7 @@ enum SmokeRunner {
                 !window.isVisible || window.alphaValue == 0
             }
             if results["nonPlaybackWindowsHidden"] as? Bool != true { failures.append("nonPlaybackWindowsHidden") }
-            let required = ["fileDrop", "fileDropUndo", "blockedImportRevealed", "importRevealsAdded", "editorCancel", "editorSave", "playlistFileImport", "importUndo", "playlistExistingAdd", "inspectorSceneInteraction", "inspectorVideoInteraction", "explicitSystemAccent", "systemAccentDefault", "accentSelection", "unknownAccentFallback", "systemAccentReset", "importFacts", "rotatedFacts", "missingFacts", "legacyBackfill", "staleEditPreservesFacts", "unknownColorBackfill", "unknownColorRoundTrip", "blockedDiscover", "clickableTag", "combinedBrowsing", "clearFiltersPreservesBlockedTags", "clearFilters", "imageImport", "videoImport", "videoReady", "videoPlaying", "videoLooped", "videoPaused", "videoResumed", "liveAdjustmentPreservesTime", "liveAdjustmentSpeed", "stillHeld", "stillIgnoresResume", "stillPreservesSource", "sceneStillRetained", "desktopStill", "desktopStillSurvivesPause", "playlistPauseStatus", "playlistResumeStatus", "desktopStillPersisted", "desktopStillPreservesSource", "render_image", "render_aurora", "render_cosmos", "render_ocean", "render_ember", "systemWallpaperPreserved", "libraryAssignmentValidated", "nativeDescriptorValidation", "nativeDescriptorValidationRejectsMissing", "nativeCatalogMismatchRejected", "backgroundLaunch", "videoPreviewWindowVisible", "scenePreviewWindowVisible", "scenePreviewReshownWindowVisible", "playlistStart", "playlistNext", "libraryStop", "libraryRoundTrip", "discoverWindow", "windowSnapshot", "videoInformation", "trimmedPlayback", "trimmedExport", "thumbnailExport", "rejectInvalidTrim", "preserveSourceOnExport", "packageRoundTrip", "editorPersistence", "editorWindow", "audioExport", "muteExport"]
+            let required = ["fileDrop", "fileDropUndo", "blockedImportRevealed", "importRevealsAdded", "editorCancel", "editorSave", "playlistFileImport", "importUndo", "playlistExistingAdd", "inspectorSceneInteraction", "inspectorVideoInteraction", "explicitSystemAccent", "systemAccentDefault", "accentSelection", "unknownAccentFallback", "systemAccentReset", "importFacts", "rotatedFacts", "missingFacts", "legacyBackfill", "staleEditPreservesFacts", "unknownColorBackfill", "unknownColorRoundTrip", "blockedDiscover", "clickableTag", "combinedBrowsing", "clearFiltersPreservesBlockedTags", "clearFilters", "imageImport", "videoImport", "videoReady", "videoPlaying", "videoLooped", "videoPaused", "videoResumed", "liveAdjustmentPreservesTime", "liveAdjustmentSpeed", "stillHeld", "stillIgnoresResume", "stillPreservesSource", "sceneStillRetained", "desktopStill", "desktopStillSurvivesPause", "playlistPauseStatus", "playlistResumeStatus", "desktopStillPersisted", "desktopStillPreservesSource", "render_image", "render_aurora", "render_cosmos", "render_ocean", "render_ember", "systemWallpaperPreserved", "libraryAssignmentValidated", "nativeDescriptorValidation", "nativeDescriptorValidationRejectsMissing", "nativeCatalogMismatchRejected", "backgroundLaunch", "videoPreviewWindowVisible", "scenePreviewWindowVisible", "scenePreviewReshownWindowVisible", "playlistStart", "playlistNext", "libraryStop", "libraryRoundTrip", "discoverWindow", "windowSnapshot", "videoInformation", "trimmedPlayback", "trimmedExport", "thumbnailExport", "rejectInvalidTrim", "preserveSourceOnExport", "packageRoundTrip", "editorPersistence", "editorWindow", "silentExport"]
             for key in required + ["compactWindow"] where results[key] as? Bool != true { failures.append(key) }
             for (key, value) in results where key.hasPrefix("surfaceControls") && value as? Bool != true { failures.append(key) }
         } catch { failures.append(String(reflecting: error)) }

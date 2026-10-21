@@ -994,7 +994,6 @@ struct InspectorView: View {
 
             if w.kind != "image" { NumericSlider(name: "Speed", value: binding(\.speed, w), range: 0.25...2, format: { String(format: "%.2f", $0) }, parse: { Double($0) }, unit: "×", accent: library.accent).id(w.id) }
             NumericSlider(name: "Dim", value: binding(\.dimming, w), range: 0...0.85, format: formatPercentage, parse: { Double($0).map { $0 / 100 } }, unit: "%", accent: library.accent).id(w.id)
-            if w.kind == "video" { NumericSlider(name: "Volume", value: binding(\.volume, w), range: 0...1, format: formatPercentage, parse: { Double($0).map { $0 / 100 } }, unit: "%", accent: library.accent).id(w.id) }
         }
     }
 

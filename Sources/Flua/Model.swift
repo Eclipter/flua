@@ -16,7 +16,6 @@ struct Wallpaper: Codable, Identifiable, Equatable {
     var tags: String = ""
     var favorite: Bool = false
     var speed: Double = 1
-    var volume: Double = 0
     var dimming: Double = 0
     var fit: Bool = false
     var videoEdit: VideoEdit?
@@ -29,7 +28,6 @@ struct VideoEdit: Codable, Equatable {
     var start: Double = 0
     var end: Double?
     var thumbnail: Double = 0
-    var includeAudio: Bool = true
     var quality: String = "high"
 }
 

@@ -15,11 +15,11 @@ The versioned provider catalog publishes eligible images, videos and the four bu
 
 ## Previews, editing and imports
 
-`Engine.swift` provides `MediaSurface` for app previews and display identification. Video and scene previews pause when hidden, offscreen or fully occluded. Volume applies to app video previews; native configuration does not carry it.
+`Engine.swift` provides `MediaSurface` for app previews and display identification. Video and scene previews pause when hidden, offscreen or fully occluded. Video previews are explicitly silent.
 
 `SceneView.swift` hosts an `MTKView`. `ScenePreviewRenderer.swift` shares Metal resources, and `ScenePreview.metal` renders four scenes at up to 60 fps, capped at 1280 pixels on the long edge with at most two frames in flight. A busy GPU skips frames; failed setup shows a still preview. `SceneDrawing.swift` supplies the Core Graphics reference used for thumbnails, still frames and provider rendering at up to 24 fps.
 
-`Editor.swift` owns draft video trim/cover edits and portable package export. Save Changes commits; Cancel or closing discards drafts. `ScenePackage.swift` validates package manifests, paths and ZIP contents before copying media. Source files are preserved. Global imports reveal the added batch and retain IDs for Undo; playlist imports receive an explicit destination.
+`Editor.swift` owns draft video trim/cover edits and portable package export. Export composes video tracks only, omitting source audio. Save Changes commits; Cancel or closing discards drafts. `ScenePackage.swift` validates package manifests, paths and ZIP contents before copying media. Source files are preserved. Global imports reveal the added batch and retain IDs for Undo; playlist imports receive an explicit destination.
 
 ## Native wallpaper boundary
 

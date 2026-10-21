@@ -67,14 +67,12 @@ final class MediaSurface: NSView {
             let asset = AVURLAsset(url: url)
             let item = AVPlayerItem(asset: asset)
             let player = AVQueuePlayer()
-            player.isMuted = wallpaper.volume == 0
-            player.volume = Float(wallpaper.volume)
+            player.isMuted = true
             player.automaticallyWaitsToMinimizeStalling = true
             queue = player
             if let edit = wallpaper.videoEdit, let end = edit.end, end > edit.start, edit.start >= 0 {
                 looper = AVPlayerLooper(player: player, templateItem: item, timeRange: CMTimeRange(start: CMTime(seconds: edit.start, preferredTimescale: 600), end: CMTime(seconds: end, preferredTimescale: 600)))
             } else { looper = AVPlayerLooper(player: player, templateItem: item) }
-            player.isMuted = wallpaper.volume == 0 || wallpaper.videoEdit?.includeAudio == false
             let vl = AVPlayerLayer(player: player)
             vl.videoGravity = wallpaper.fit ? .resizeAspect : .resizeAspectFill
             layer?.addSublayer(vl)
@@ -137,8 +135,7 @@ final class MediaSurface: NSView {
         }
         currentWallpaper = w
         desiredRate = Float(w.speed)
-        queue?.isMuted = w.volume == 0 || w.videoEdit?.includeAudio == false
-        queue?.volume = Float(w.volume)
+        queue?.isMuted = true
         if !playbackSuspended, queue?.currentItem?.status == .readyToPlay { queue?.rate = desiredRate }
         videoLayer?.videoGravity = w.fit ? .resizeAspect : .resizeAspectFill
         imageLayer?.contentsGravity = w.fit ? .resizeAspect : .resizeAspectFill
@@ -194,4 +191,3 @@ func displayID(_ screen: NSScreen) -> String {
     }
     return String(id)
 }
-

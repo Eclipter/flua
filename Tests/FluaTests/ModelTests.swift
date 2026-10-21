@@ -147,6 +147,13 @@ import Foundation
         let oldSchema = Data("{\"id\":\"old\",\"title\":\"Old scene\",\"kind\":\"video\",\"tags\":\"\",\"favorite\":false,\"speed\":1,\"volume\":0,\"dimming\":0,\"fit\":false}".utf8)
         let oldWallpaper = try JSONDecoder().decode(Wallpaper.self, from: oldSchema)
         precondition(oldWallpaper.videoEdit == nil && oldWallpaper.metadata == nil)
+        // Regression: older persisted catalogs carrying `volume` still decode; the dropped field is not re-published.
+        let reencoded = String(data: try JSONEncoder().encode(oldWallpaper), encoding: .utf8)!
+        precondition(!reencoded.contains("volume"))
+        let oldEdit = try JSONDecoder().decode(VideoEdit.self, from: Data("{\"start\":0.25,\"end\":0.75,\"thumbnail\":0.5,\"includeAudio\":true,\"quality\":\"medium\"}".utf8))
+        precondition(oldEdit == VideoEdit(start: 0.25, end: 0.75, thumbnail: 0.5, quality: "medium"))
+        let reencodedEdit = try JSONEncoder().encode(oldEdit)
+        precondition(!String(decoding: reencodedEdit, as: UTF8.self).contains("includeAudio"))
         state.displays["display-A"] = DisplayAssignment(desktop: SurfaceAssignment(wallpaperID: "aurora"))
         state.displays["display-B"] = DisplayAssignment(desktop: SurfaceAssignment(wallpaperID: "ember"))
         state.remove("ember")

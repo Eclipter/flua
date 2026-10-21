@@ -51,15 +51,14 @@ enum VideoTools {
         let duration = try await asset.load(.duration).seconds
         let clip = try range(edit, duration: duration, maximum: preview ? 5 : nil)
         let composition = AVMutableComposition()
-        for type in [AVMediaType.video, .audio] where type != .audio || edit.includeAudio {
-            for sourceTrack in try await asset.loadTracks(withMediaType: type) {
-                guard let track = composition.addMutableTrack(withMediaType: type, preferredTrackID: kCMPersistentTrackID_Invalid) else { throw EditorFailure.unavailableExporter }
-                let available = try await sourceTrack.load(.timeRange)
-                let included = CMTimeRangeGetIntersection(clip, otherRange: available)
-                guard included.duration.seconds > 0 else { composition.removeTrack(track); continue }
-                try track.insertTimeRange(included, of: sourceTrack, at: CMTimeSubtract(included.start, clip.start))
-                if type == .video { track.preferredTransform = try await sourceTrack.load(.preferredTransform) }
-            }
+        // Exported wallpaper video is explicitly silent; no audio track is carried over.
+        for sourceTrack in try await asset.loadTracks(withMediaType: .video) {
+            guard let track = composition.addMutableTrack(withMediaType: .video, preferredTrackID: kCMPersistentTrackID_Invalid) else { throw EditorFailure.unavailableExporter }
+            let available = try await sourceTrack.load(.timeRange)
+            let included = CMTimeRangeGetIntersection(clip, otherRange: available)
+            guard included.duration.seconds > 0 else { composition.removeTrack(track); continue }
+            try track.insertTimeRange(included, of: sourceTrack, at: CMTimeSubtract(included.start, clip.start))
+            track.preferredTransform = try await sourceTrack.load(.preferredTransform)
         }
         let preset: String
         switch edit.quality {
