@@ -161,6 +161,39 @@ import Foundation
         precondition(restored.wallpapers == state.wallpapers && restored.playlists == state.playlists && restored.displays == state.displays && restored.displayMode == "perDisplay")
         precondition(disk.url(for: Wallpaper(title: "bad", kind: "video", file: "../../secret")) == nil)
         precondition(disk.url(for: Wallpaper(title: "good", kind: "video", file: "clip.mp4"))!.deletingLastPathComponent() == disk.assets)
+        // Numeric entry validation: valid entries apply, invalid/out-of-range preserve the current value.
+        var (applied, text) = applyNumericEntry(draft: "1.5", current: 1.0, range: 0.25...2, parse: { Double($0) }, format: { String(format: "%.2f", $0) })
+        precondition(applied == 1.5 && text == "1.50")
+        (applied, text) = applyNumericEntry(draft: "50", current: 0.3, range: 0...0.85, parse: { Double($0).map { $0 / 100 } }, format: { "\(Int($0 * 100))%" })
+        precondition(applied == 0.5 && text == "50%")
+        (applied, text) = applyNumericEntry(draft: "90", current: 0.3, range: 0...0.85, parse: { Double($0).map { $0 / 100 } }, format: { "\(Int($0 * 100))%" })
+        precondition(applied == 0.3 && text == "30%") // out of range preserved
+        (applied, text) = applyNumericEntry(draft: "abc", current: 1.0, range: 0.25...2, parse: { Double($0) }, format: { String(format: "%.2f", $0) })
+        precondition(applied == 1.0 && text == "1.00") // unparseable preserved
+        (applied, text) = applyNumericEntry(draft: "-1", current: 1.0, range: 0.25...2, parse: { Double($0) }, format: { String(format: "%.2f", $0) })
+        precondition(applied == 1.0 && text == "1.00") // below range preserved
+        for invalid in ["", " ", "nan", "inf", "-inf", "1e999", "2.01", "0.24", "1.5×"] {
+            let result = applyNumericEntry(draft: invalid, current: 1, range: 0.25...2, parse: Double.init, format: { String(format: "%.2f", $0) })
+            precondition(result.0 == 1 && result.1 == "1.00")
+        }
+        for entry in ["0.25", "2", " 1.25\n"] {
+            let result = applyNumericEntry(draft: entry, current: 1, range: 0.25...2, parse: Double.init, format: { String(format: "%.2f", $0) })
+            precondition(result.0 == Double(entry.trimmingCharacters(in: .whitespacesAndNewlines))!)
+        }
+        for percent in [0.0, 29, 57, 85, 100, 37.5] {
+            let formatted = formatPercentage(percent / 100)
+            precondition(Double(formatted) == percent)
+            let result = applyNumericEntry(draft: formatted, current: 0.2, range: 0...1, parse: { Double($0).map { $0 / 100 } }, format: formatPercentage)
+            precondition(result.0 == percent / 100 && result.1 == formatted)
+        }
+        for (range, upper) in [(0.0...0.85, "85"), (0.0...1.0, "100")] {
+            for entry in ["0", upper] {
+                let result = applyNumericEntry(draft: entry, current: 0.2, range: range, parse: { Double($0).map { $0 / 100 } }, format: formatPercentage)
+                precondition(result.0 == Double(entry)! / 100)
+            }
+            let result = applyNumericEntry(draft: "101", current: 0.2, range: range, parse: { Double($0).map { $0 / 100 } }, format: formatPercentage)
+            precondition(result.0 == 0.2 && result.1 == "20")
+        }
         try surfaceAssignmentTests(disk: disk)
         try browsingTests(disk: disk)
         let invalid = Data("not valid json".utf8)

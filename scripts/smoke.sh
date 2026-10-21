@@ -10,9 +10,7 @@ require_no_flua() {
 require_no_flua
 mkdir -p build/verification
 run_dir=$(mktemp -d "$PWD/build/verification/run.XXXXXX")
-branch=$(git symbolic-ref --quiet --short HEAD || git rev-parse --short HEAD)
-branch=${branch//[^a-zA-Z0-9._-]/-}
-app="$PWD/build/Flua-$branch.app"
+app="$PWD/build/Flua.app"
 FLUA_APP_PATH="$app" \
     FLUA_CATALOG_PATH="$run_dir/library/catalog.json" \
     ./scripts/build.sh

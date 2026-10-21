@@ -33,6 +33,21 @@ struct VideoEdit: Codable, Equatable {
     var quality: String = "high"
 }
 
+func formatPercentage(_ value: Double) -> String {
+    (value * 100).formatted(.number.locale(Locale(identifier: "en_US_POSIX")).precision(.fractionLength(0...2)))
+}
+
+// Invalid entries restore the field without changing the stored value.
+func applyNumericEntry(draft: String, current: Double, range: ClosedRange<Double>, parse: (String) -> Double?, format: (Double) -> String) -> (Double, String) {
+    let value: Double
+    if let number = parse(draft.trimmingCharacters(in: .whitespacesAndNewlines)), number.isFinite, range.contains(number) {
+        value = number
+    } else {
+        value = current
+    }
+    return (value, format(value))
+}
+
 func stillFrameTime(edit: VideoEdit?, duration: Double?) -> Double {
     let thumb = edit?.thumbnail ?? 0
     let requested = thumb.isFinite && thumb >= 0 ? thumb : 0
