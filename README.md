@@ -5,7 +5,7 @@
 <h1 align="center">Flua</h1>
 
 <p align="center">
-  Completely free live wallpapers for your Mac displays and Lock Screen.
+  Completely free live wallpapers for your Mac Desktop and Lock Screen.
 </p>
 
 <p align="center">
@@ -15,20 +15,20 @@
 
 ## Features
 
-| Feature                                                                                  | Support |
-| ---------------------------------------------------------------------------------------- | :-----: |
-| Animated wallpapers                                                                      |   ✅   |
-| Create your own wallpapers from images and videos                                        |   ✅   |
-| Per-display wallpapers                                                                   |   ✅   |
-| Lock Screen wallpapers                                                                   |   ✅   |
-| Native macOS playback (continues after Flua quits; the previous state can be restored) |   ✅   |
-| Speed, dimming, motion intensity, volume and fit/fill controls                          |   ✅   |
-| Interactive wallpapers                                                                   |   ❌   |
-| Audio-reactive wallpapers                                                                |   ❌   |
-| Wallpaper playlists                                                                      |   ✅   |
-| Low Power mode and on-battery pauses                                                     |   ✅   |
-| Local storage with no account, subscription, watermark or limits                         |   ✅   |
-| Online wallpaper catalog                                                                 |   ❌   |
+| Feature | Support |
+| --- | :---: |
+| Live wallpapers | ✅ |
+| Create your own wallpapers from images and videos | ✅ |
+| Per-display wallpapers | ✅ |
+| Lock Screen wallpapers | ✅ |
+| Native macOS playback (continues after Flua quits; the previous state can be restored) | ✅ |
+| Speed and dimming controls | ✅ |
+| Interactive wallpapers | ❌ |
+| Audio-reactive wallpapers | ❌ |
+| Wallpaper playlists | ✅ |
+| Low Power mode and on-battery pauses | ❌ |
+| Curate your own local wallpaper library | ✅ |
+| Online wallpaper catalog | ❌ |
 
 ## Installation
 
@@ -41,10 +41,8 @@ curl -fsSL https://raw.githubusercontent.com/Eclipter/flua/main/install.sh | bas
 ## Getting started
 
 1. Use **Add Wallpaper…** to add images, videos or supported packages, or choose a built-in wallpaper.
-2. Click a card to preview it. Adjust playback or use **Edit Video…** to trim and choose a cover, then **Save Changes** or **Cancel**.
-3. Choose the display and **Desktop** / **Lock Screen**, then click **Set Wallpaper**. Use **Stop** to restore the previous system wallpapers.
-
-**Wallpapers** combines search and sorting with **All / Built-in / Imported** filters. Adding files reveals the result and offers **Undo**. Global adding changes only the library; **Add Wallpapers…** in a playlist selects existing wallpapers or adds files to that playlist. Use **Export Wallpaper…** in a video's context menu to transfer it as a portable package.
+2. Click a card to select it. Preview and settings appear in the right inspector when the window is at least 1000 points wide. Adjust playback or use **Edit Video…** to trim and choose a cover, then **Save Changes** or **Cancel**.
+3. Click **Set Wallpaper**. Use **Stop** to restore the previous system wallpapers.
 
 ## Building from source
 
