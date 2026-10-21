@@ -4,7 +4,7 @@ build:
 	@./scripts/build.sh
 test:
 	@./scripts/test.sh
-smoke: build
+smoke:
 	@./scripts/smoke.sh
 run: build
 	@open build/Flua.app

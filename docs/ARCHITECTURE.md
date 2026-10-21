@@ -5,7 +5,7 @@ Flua is a local SwiftUI/AppKit application for Apple Silicon Macs running macOS 
 ## Application and library
 
 - `App.swift` owns application lifecycle, windows, Settings, menu bar and library views. Shared controls honor the selected accent and Reduce Transparency. Menu bar and Dock visibility are persisted; hiding the Dock requires the menu bar icon to remain enabled.
-- `Library.swift` coordinates browsing, imports, edits, persistence, playlists and native playback. A two-second timer advances playlists only when needed. Pause stops automatic playlist advancement; battery, Low Power Mode and fullscreen preferences are stored but do not control native playback.
+- `Library.swift` coordinates browsing, imports, edits, persistence, playlists and native playback. A two-second timer advances playlists only when needed. Pause/Resume playlists controls automatic playlist advancement without changing wallpaper animation; battery, Low Power Mode and fullscreen preferences are stored but do not control native playback.
 - `Model.swift` contains backward-compatible Codable state, filtering, media classifications and playlist transitions. Display assignments use stable UUIDs and retain disconnected displays. Each stores Desktop and optional Lock Screen choices with separate modes and playlist state. Linking synchronizes both surfaces; Mirrored mode synchronizes the whole pair across connected displays.
 - `LibraryPaths.swift` resolves the library root. `MediaFacts.swift` inspects local media and classifies bounded thumbnails off the main thread.
 

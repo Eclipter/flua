@@ -10,7 +10,7 @@ Flua is a local wallpaper library for macOS 27+ on Apple Silicon. Playback uses 
 | Previews | Metal scene previews at up to 60 fps; hidden, offscreen and occluded playback pauses | Provider scene rendering uses Core Graphics at up to 24 fps |
 | Displays and surfaces | Mirrored or Per Display; separate or linked Desktop/Lock Screen choices with Animated/Still modes | Stable display UUIDs retain disconnected choices; physical reconnect and multi-display validation remain open |
 | Library | Wallpapers, All/Built-in/Imported filters, favorites, tags, search, sorting, classifications and blocked tags | No online catalog, accounts or cloud storage |
-| Playlists | Timing, shuffle, duplication, previous history and reorder | Automatic advancement requires Flua to be running; Pause suspends advancement rather than native animation |
+| Playlists | Timing, shuffle, duplication, previous history and reorder | Automatic advancement requires Flua to be running; Pause/Resume playlists controls automatic advancement while wallpaper animation continues |
 | Rendering controls | Native speed, dimming, fit, video trim and still-frame time | Volume affects app previews and is not sent to the native provider |
 | Power preferences | Battery, Low Power Mode and fullscreen preferences are saved | These preferences currently do not control native playback |
 | Video editor | Draft trim and cover selection with Save Changes / Cancel; name and tags in Details | No standalone video studio or separate MP4/PNG export controls |
@@ -32,9 +32,11 @@ Physical multi-display behavior, sleep/wake, visible output across scaling modes
 
 ## Library behavior
 
+The right inspector shows the selected wallpaper's title above its live preview, followed by editable details and playback settings.
+
 Global **Add Wallpaper…** accepts multiple files and supported packages without filling the current playlist. File drops use the same importer. Successful imports reset browsing filters, reveal the batch and offer Undo. Undo removes entries from the library and playlists while retaining source and copied media. Added wallpapers with blocked tags remain temporarily visible until the import confirmation is dismissed. Playlist **Add Wallpapers…** offers existing items and **Add Files…**.
 
-Category accepts user text; the menu includes existing visible categories and Abstract, Nature, Space, Urban and Unknown. Color is derived from the average sRGB thumbnail color and can be edited; it is an approximate classification, not a dominant-color analysis. Motion intensity is Low, Medium, High or Unknown and is curated or explicitly edited/imported rather than inferred from video movement. All missing classifications have an Unknown choice.
+Category accepts user text; the menu includes existing visible categories and Abstract, Nature, Space, Urban and Unknown. Color is derived from the average sRGB thumbnail color and can be edited; it is an approximate classification, not a dominant-color analysis. Motion intensity is Low, Medium, High or Unknown and is curated or explicitly edited/imported rather than inferred from video movement. All missing classifications have an Unknown choice. The inspector shows the name, tags, category, color and motion fields at all times; name, tags and category text edits save when you press Return.
 
 Resolution buckets require both the long and short pixel edges to meet 1280×720, 1920×1080, 2560×1440 or 3840×2160; the highest satisfied threshold wins, independent of orientation. Smaller media is Below 720p. Aspect ratio uses width/height: Portrait below 0.95, Square from 0.95 through 1.05, Standard above 1.05 and below 2, and Ultrawide at 2 or above. Media without measurable dimensions uses Unknown.
 

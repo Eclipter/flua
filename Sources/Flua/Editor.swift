@@ -157,7 +157,7 @@ struct EditorPlayer: NSViewRepresentable {
 
 final class EditorFrameView: NSView {
     let player: AVPlayer
-    private let output = AVPlayerItemVideoOutput(pixelBufferAttributes: [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA])
+    private let output = AVPlayerItemVideoOutput(pixelBufferAttributes: CVPixelBufferAttributes(pixelFormatTypes: [CVPixelFormatType(rawValue: kCVPixelFormatType_32BGRA)]))
     private let imageContext = CIContext(options: [.cacheIntermediates: false])
     private var timer: Timer?
     private weak var item: AVPlayerItem?
@@ -180,8 +180,8 @@ final class EditorFrameView: NSView {
     required init?(coder: NSCoder) { fatalError() }
     private func drawFrame() {
         let time = player.currentTime()
-        guard output.hasNewPixelBuffer(forItemTime: time), let pixels = output.copyPixelBuffer(forItemTime: time, itemTimeForDisplay: nil) else { return }
-        let image = CIImage(cvPixelBuffer: pixels).transformed(by: transform)
+        guard output.hasNewPixelBuffer(forItemTime: time), let pixels = output.pixelBufferAndDisplayTime(forItemTime: time).pixelBuffer else { return }
+        let image = pixels.withUnsafeBuffer { CIImage(cvPixelBuffer: $0) }.transformed(by: transform)
         guard let frame = imageContext.createCGImage(image, from: image.extent) else { return }
         CATransaction.begin(); CATransaction.setDisableActions(true)
         layer?.contents = frame

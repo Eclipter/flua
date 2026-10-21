@@ -1,6 +1,7 @@
 #!/bin/zsh
 set -euo pipefail
 cd "${0:A:h:h}"
+python3 Tests/Scripts/SmokeTests.py
 mkdir -p build/tests
 swiftc Sources/Flua/Model.swift Sources/Flua/LibraryPaths.swift Tests/FluaTests/ModelTests.swift -o build/tests/model-tests
 build/tests/model-tests

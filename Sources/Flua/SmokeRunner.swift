@@ -43,10 +43,11 @@ enum SmokeRunner {
         await pause(0.4)
         var missing = missingNames("Flua Library Audit", [
             "Playback type: All", "Playback type: Animated", "Playback type: Still",
-            "Display Mode: Mirrored", "Display Mode: Per Display", "Surface: Desktop", "Surface: Lock Screen",
-            "Rendering mode: Animated", "Rendering mode: Still", "Link Desktop and Lock Screen",
+            "Display Mode: Mirrored", "Display Mode: Per Display", "Configure: Lock Screen", "Mirror all displays",
+            "Rendering mode: Animated", "Rendering mode: Still", "Mirror Desktop and Lock Screen",
             "Search", "Category filter", "Color filter", "Motion filter", "Resolution filter", "Aspect filter",
             "Filter by ambient", "Filter by green", "Filter by nature", "Add favorite", "Wallpaper name", "Tags", "Category",
+            "Color", "Motion intensity",
             "Speed", "Dim", "Previous in playlist", "Next in playlist", "Stop on selected displays", "Create playlist"
         ])
         library.query = "no-match"
@@ -303,7 +304,7 @@ enum SmokeRunner {
             let imageURL = out.appendingPathComponent("sample.png")
             try png(image).write(to: imageURL)
             let videoURL = out.appendingPathComponent("sample.mov")
-            try await Task.detached { try makeVideo(videoURL) }.value
+            try await Task.detached { try await makeVideo(videoURL) }.value
             let importPlaylist = library.state.playlists[0]
             library.section = "playlist:" + importPlaylist.id
             library.query = "no match"
@@ -343,7 +344,7 @@ enum SmokeRunner {
                 && images[0].mediaFacts?.width == 640 && images[0].mediaFacts?.height == 360
                 && images[0].mediaFacts?.sourceDuration == nil && images[0].dateAdded != nil
             let rotatedURL = out.appendingPathComponent("rotated.mov")
-            try await Task.detached { try makeVideo(rotatedURL, transform: CGAffineTransform(a: 0, b: 1, c: -1, d: 0, tx: 360, ty: 0)) }.value
+            try await Task.detached { try await makeVideo(rotatedURL, transform: CGAffineTransform(a: 0, b: 1, c: -1, d: 0, tx: 360, ty: 0)) }.value
             let rotated = await MediaInspection.load(url: rotatedURL, kind: "video")
             results["rotatedFacts"] = rotated.facts.width == 360 && rotated.facts.height == 640 && rotated.facts.aspect == "Portrait"
             let missing = await MediaInspection.load(url: out.appendingPathComponent("missing.mp4"), kind: "video")
@@ -449,7 +450,7 @@ enum SmokeRunner {
                 await pause(0.15)
                 results["render_" + kind] = surface.subviews.count > 0 || (surface.layer?.sublayers?.count ?? 0) > 0
             }
-            weak var releasedScene = surface.subviews.compactMap { $0 as? AmbientSceneView }.first
+            weak let releasedScene = surface.subviews.compactMap { $0 as? AmbientSceneView }.first
             if let scene = releasedScene {
                 let frames = scene.frameCount
                 let start = CACurrentMediaTime()
@@ -602,8 +603,17 @@ enum SmokeRunner {
                 let sourceBefore = try Data(contentsOf: sourceURL)
                 library.applySelected()
                 results["desktopStill"] = library.state.displays[key]?.desktop.mode == .still
-                library.togglePause()
-                library.togglePause()
+                let assignmentsBeforePause = library.state.displays
+                library.togglePlaylistPause()
+                results["playlistPauseStatus"] = try library.state.paused
+                    && library.activity == "Playlists paused. Wallpapers keep playing."
+                    && library.state.displays == assignmentsBeforePause
+                    && library.disk.load().paused
+                library.togglePlaylistPause()
+                results["playlistResumeStatus"] = try !library.state.paused
+                    && library.activity == "Playlists resumed."
+                    && library.state.displays == assignmentsBeforePause
+                    && !library.disk.load().paused
                 results["desktopStillSurvivesPause"] = library.state.paused == false && library.state.displays[key]?.desktop.mode == .still
                 results["desktopStillPersisted"] = try library.disk.load().displays[key]?.desktop.mode == .still
                 results["desktopStillPreservesSource"] = try Data(contentsOf: sourceURL) == sourceBefore
@@ -810,7 +820,7 @@ enum SmokeRunner {
                 !window.isVisible || window.alphaValue == 0
             }
             if results["nonPlaybackWindowsHidden"] as? Bool != true { failures.append("nonPlaybackWindowsHidden") }
-            let required = ["fileDrop", "fileDropUndo", "blockedImportRevealed", "importRevealsAdded", "editorCancel", "editorSave", "playlistFileImport", "importUndo", "playlistExistingAdd", "inspectorSceneInteraction", "inspectorVideoInteraction", "explicitSystemAccent", "systemAccentDefault", "accentSelection", "unknownAccentFallback", "systemAccentReset", "importFacts", "rotatedFacts", "missingFacts", "legacyBackfill", "staleEditPreservesFacts", "unknownColorBackfill", "unknownColorRoundTrip", "blockedDiscover", "clickableTag", "combinedBrowsing", "clearFiltersPreservesBlockedTags", "clearFilters", "imageImport", "videoImport", "videoReady", "videoPlaying", "videoLooped", "videoPaused", "videoResumed", "liveAdjustmentPreservesTime", "liveAdjustmentSpeed", "stillHeld", "stillIgnoresResume", "stillPreservesSource", "sceneStillRetained", "desktopStill", "desktopStillSurvivesPause", "desktopStillPersisted", "desktopStillPreservesSource", "render_image", "render_aurora", "render_cosmos", "render_ocean", "render_ember", "systemWallpaperPreserved", "libraryAssignmentValidated", "nativeDescriptorValidation", "nativeDescriptorValidationRejectsMissing", "nativeCatalogMismatchRejected", "backgroundLaunch", "videoPreviewWindowVisible", "scenePreviewWindowVisible", "scenePreviewReshownWindowVisible", "playlistStart", "playlistNext", "libraryStop", "libraryRoundTrip", "discoverWindow", "windowSnapshot", "videoInformation", "trimmedPlayback", "trimmedExport", "thumbnailExport", "rejectInvalidTrim", "preserveSourceOnExport", "packageRoundTrip", "editorPersistence", "editorWindow", "audioExport", "muteExport"]
+            let required = ["fileDrop", "fileDropUndo", "blockedImportRevealed", "importRevealsAdded", "editorCancel", "editorSave", "playlistFileImport", "importUndo", "playlistExistingAdd", "inspectorSceneInteraction", "inspectorVideoInteraction", "explicitSystemAccent", "systemAccentDefault", "accentSelection", "unknownAccentFallback", "systemAccentReset", "importFacts", "rotatedFacts", "missingFacts", "legacyBackfill", "staleEditPreservesFacts", "unknownColorBackfill", "unknownColorRoundTrip", "blockedDiscover", "clickableTag", "combinedBrowsing", "clearFiltersPreservesBlockedTags", "clearFilters", "imageImport", "videoImport", "videoReady", "videoPlaying", "videoLooped", "videoPaused", "videoResumed", "liveAdjustmentPreservesTime", "liveAdjustmentSpeed", "stillHeld", "stillIgnoresResume", "stillPreservesSource", "sceneStillRetained", "desktopStill", "desktopStillSurvivesPause", "playlistPauseStatus", "playlistResumeStatus", "desktopStillPersisted", "desktopStillPreservesSource", "render_image", "render_aurora", "render_cosmos", "render_ocean", "render_ember", "systemWallpaperPreserved", "libraryAssignmentValidated", "nativeDescriptorValidation", "nativeDescriptorValidationRejectsMissing", "nativeCatalogMismatchRejected", "backgroundLaunch", "videoPreviewWindowVisible", "scenePreviewWindowVisible", "scenePreviewReshownWindowVisible", "playlistStart", "playlistNext", "libraryStop", "libraryRoundTrip", "discoverWindow", "windowSnapshot", "videoInformation", "trimmedPlayback", "trimmedExport", "thumbnailExport", "rejectInvalidTrim", "preserveSourceOnExport", "packageRoundTrip", "editorPersistence", "editorWindow", "audioExport", "muteExport"]
             for key in required + ["compactWindow"] where results[key] as? Bool != true { failures.append(key) }
             for (key, value) in results where key.hasPrefix("surfaceControls") && value as? Bool != true { failures.append(key) }
         } catch { failures.append(String(reflecting: error)) }
@@ -925,7 +935,8 @@ enum SmokeRunner {
         }
         collect(inspector)
         let buttons = controls.compactMap({ $0 as? NSButton })
-        guard let button = buttons.first else { return false }
+        // Apply follows the metadata and playback controls; SwiftUI exposes no native button title.
+        guard let button = buttons.last else { return false }
         let slider = controls.compactMap({ $0 as? NSSlider }).first
         let testControls: [NSControl] = [button] + (slider != nil ? [slider!] : [])
         for control in testControls {
@@ -1061,33 +1072,32 @@ enum SmokeRunner {
         try await exporter.export(to: output, as: .mov)
         return output
     }
-    static func makeVideo(_ url: URL, transform: CGAffineTransform = .identity) throws {
+    static func makeVideo(_ url: URL, transform: CGAffineTransform = .identity) async throws {
         try? FileManager.default.removeItem(at: url)
         let writer = try AVAssetWriter(outputURL: url, fileType: .mov)
         let input = AVAssetWriterInput(mediaType: .video, outputSettings: [AVVideoCodecKey: AVVideoCodecType.h264, AVVideoWidthKey: 640, AVVideoHeightKey: 360])
         input.transform = transform
-        let adaptor = AVAssetWriterInputPixelBufferAdaptor(assetWriterInput: input, sourcePixelBufferAttributes: [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32ARGB, kCVPixelBufferWidthKey as String: 640, kCVPixelBufferHeightKey as String: 360, kCVPixelBufferCGImageCompatibilityKey as String: true, kCVPixelBufferCGBitmapContextCompatibilityKey as String: true])
-        writer.add(input)
-        guard writer.startWriting() else { throw writer.error ?? LibraryError.unreadableMedia("writer") }
+        let attributes = CVPixelBufferCreationAttributes(pixelFormatType: .init(rawValue: kCVPixelFormatType_32ARGB), size: CVImageSize(width: 640, height: 360), compatibility: [.cgBitmapContext])
+        let receiver = writer.inputPixelBufferReceiver(for: input, pixelBufferAttributes: attributes)
+        try writer.start()
         writer.startSession(atSourceTime: .zero)
         for frame in 0..<24 {
-            let deadline = Date().addingTimeInterval(10)
-            while !input.isReadyForMoreMediaData && Date() < deadline { Thread.sleep(forTimeInterval: 0.005) }
-            guard input.isReadyForMoreMediaData, let pool = adaptor.pixelBufferPool else { throw LibraryError.unreadableMedia("video encoder") }
-            var maybeBuffer: CVPixelBuffer?
-            CVPixelBufferPoolCreatePixelBuffer(nil, pool, &maybeBuffer)
-            guard let buffer = maybeBuffer else { throw LibraryError.unreadableMedia("pixel buffer") }
-            CVPixelBufferLockBaseAddress(buffer, [])
-            if let c = CGContext(data: CVPixelBufferGetBaseAddress(buffer), width: 640, height: 360, bitsPerComponent: 8, bytesPerRow: CVPixelBufferGetBytesPerRow(buffer), space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.noneSkipFirst.rawValue) {
-                c.setFillColor(CGColor(red: 0.03, green: 0.10, blue: 0.17, alpha: 1)); c.fill(CGRect(x: 0, y: 0, width: 640, height: 360))
-                c.setFillColor(CGColor(red: 0.45, green: 0.8, blue: 0.68, alpha: 1)); c.fillEllipse(in: CGRect(x: 20 + frame * 20, y: 130, width: 80, height: 80))
+            guard let pool = receiver.pixelBufferPool else { throw LibraryError.unreadableMedia("video encoder") }
+            let pixels = try pool.makeMutablePixelBuffer()
+            pixels.withUnsafeBuffer { buffer in
+                CVPixelBufferLockBaseAddress(buffer, [])
+                defer { CVPixelBufferUnlockBaseAddress(buffer, []) }
+                if let c = CGContext(data: CVPixelBufferGetBaseAddress(buffer), width: 640, height: 360, bitsPerComponent: 8, bytesPerRow: CVPixelBufferGetBytesPerRow(buffer), space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.noneSkipFirst.rawValue) {
+                    c.setFillColor(CGColor(red: 0.03, green: 0.10, blue: 0.17, alpha: 1)); c.fill(CGRect(x: 0, y: 0, width: 640, height: 360))
+                    c.setFillColor(CGColor(red: 0.45, green: 0.8, blue: 0.68, alpha: 1)); c.fillEllipse(in: CGRect(x: 20 + frame * 20, y: 130, width: 80, height: 80))
+                }
             }
-            CVPixelBufferUnlockBaseAddress(buffer, [])
-            guard adaptor.append(buffer, withPresentationTime: CMTime(value: Int64(frame), timescale: 24)) else { throw writer.error ?? LibraryError.unreadableMedia("video frame") }
+            try await receiver.append(CVReadOnlyPixelBuffer(pixels), with: CMTime(value: Int64(frame), timescale: 24))
         }
-        input.markAsFinished()
-        let semaphore = DispatchSemaphore(value: 0)
-        writer.finishWriting { semaphore.signal() }
-        guard semaphore.wait(timeout: .now() + 15) == .success, writer.status == .completed else { throw writer.error ?? LibraryError.unreadableMedia("video finalize") }
+        receiver.finish()
+        await withCheckedContinuation { continuation in
+            writer.finishWriting { continuation.resume() }
+        }
+        guard writer.status == .completed else { throw writer.error ?? LibraryError.unreadableMedia("video finalize") }
     }
 }

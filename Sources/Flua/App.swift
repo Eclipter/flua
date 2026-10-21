@@ -393,7 +393,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 Button("Add Wallpaper…") { library.chooseMedia() }.keyboardShortcut("n")
             }
             CommandMenu("Playback") {
-                Button(library.state.paused ? "Resume" : "Pause") { library.togglePause() }.keyboardShortcut("p", modifiers: [.command, .shift])
+                Button(library.state.paused ? "Resume playlists" : "Pause playlists") { library.togglePlaylistPause() }.keyboardShortcut("p", modifiers: [.command, .shift])
                 Button("Previous on every display") { library.advancePlaylists(force: true, backwards: true, allDisplays: true) }.keyboardShortcut(.leftArrow, modifiers: [.command])
                 Button("Next on every display") { library.advancePlaylists(force: true, allDisplays: true) }.keyboardShortcut(.rightArrow, modifiers: [.command])
                 Button("Stop wallpapers") { library.stop() }
@@ -414,7 +414,7 @@ struct TrayView: View {
     var body: some View {
         Button("Open Flua") { openWindow(id: "library"); NSApp.activate(ignoringOtherApps: true) }
         Divider()
-        Button(library.state.paused ? "Resume wallpapers" : "Pause wallpapers") { library.togglePause() }
+        Button(library.state.paused ? "Resume playlists" : "Pause playlists") { library.togglePlaylistPause() }
         Button("Next on every display") { library.advancePlaylists(force: true, allDisplays: true) }
         Button("Stop wallpapers") { library.stop() }
         Divider()
@@ -829,124 +829,177 @@ struct InspectorView: View {
     private var content: some View {
         Group {
             if let w = library.selected {
-                VStack(alignment: .leading, spacing: 24) {
+                VStack(alignment: .leading, spacing: 20) {
+                    Text(w.title).font(.system(size: 24, weight: .semibold, design: .serif))
                     SurfacePreview(wallpaper: w, url: library.disk.url(for: w)).id(w.id).aspectRatio(16/10, contentMode: .fit).clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text(w.title).font(.system(size: 24, weight: .semibold, design: .serif))
-                        Text(w.file == nil ? "A built-in animated wallpaper, rendered on your Mac." : "Imported \(w.kind), stored in this library.").font(.caption).foregroundStyle(.secondary)
-                    }
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Set on").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-                        FluaSegmentedPicker(title: "Display Mode", selection: Binding(get: { library.playbackMode }, set: { library.setPlaybackMode($0) }),
-                            choices: [("Mirrored", "mirrored"), ("Per Display", "perDisplay")])
-                        if library.playbackMode == "perDisplay" {
-                            Picker("Display", selection: $library.display) {
-                                ForEach(library.screens, id: \.self) { screen in Text(screen.localizedName).tag(displayID(screen)) }
-                            }.labelsHidden().fluaMenuPicker().frame(maxWidth: .infinity)
-                        }
-                        FluaSegmentedPicker(title: "Surface", selection: $library.surface,
-                            choices: [("Desktop", .desktop), ("Lock Screen", .lockScreen)])
-                        Toggle("Link Desktop and Lock Screen", isOn: Binding(get: { library.surfacesLinked }, set: { library.setSurfacesLinked($0) }))
-                            .font(.caption).tint(library.accentOverride)
-                        FluaSegmentedPicker(title: "Rendering mode", selection: Binding<WallpaperMode?>(get: { library.surfaceMode }, set: { if let mode = $0 { library.setSurfaceMode(mode) } }),
-                            choices: (library.surfaceMode == nil ? [("Mixed", nil)] : []) + [("Animated", .animated), ("Still", .still)])
-                        LabeledContent("Desktop", value: library.surfaceSummary(.desktop)).font(.caption)
-                        LabeledContent("Lock Screen", value: library.surfaceSummary(.lockScreen)).font(.caption)
-                        Text((library.playbackMode == "mirrored" ? "All displays" : library.targets.first?.localizedName ?? "No display") + " · " + (library.surfacesLinked ? "Desktop + Lock Screen" : library.surface == .desktop ? "Desktop" : "Lock Screen")).font(.caption)
-                        fluaGlassGroup {
-                            VStack(alignment: .leading, spacing: 8) {
-                                Button {
-                                    library.applySelected()
-                                } label: {
-                                    Label(library.nativeSetupBusy ? "Working…" : "Set Wallpaper", systemImage: "desktopcomputer")
-                                        .frame(maxWidth: .infinity)
-                                        .padding(.vertical, 8)
-                                }
-                                .disabled(library.nativeSetupBusy)
-                                .accessibilityLabel("Set Wallpaper")
-                                .fluaProminentButton()
-                                .tint(library.accentOverride)
-                            }
-                        }
-                        Text("Applies directly to macOS. Continues playing when Flua quits.")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
-                    mediaFacts(w)
+                    detailsSection(w)
                     Divider().opacity(0.3)
+                    settingsSection(w)
                     if w.kind == "video", let source = library.disk.url(for: w) {
-                        fluaGlassGroup {
-                            VStack(alignment: .leading, spacing: 8) {
-                                Button { VideoEditorWindow.open(wallpaper: w, source: source, library: library) } label: {
-                                    Label("Edit Video…", systemImage: "slider.horizontal.3").frame(maxWidth: .infinity)
-                                }.fluaGlassButton()
-                            }
-                        }
+                        trimSection(wallpaper: w, source: source)
                     }
-                    VStack(alignment: .leading, spacing: 16) {
-                        Text("Playback").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-                        if w.kind != "image" { slider("Speed", value: binding(\.speed, w), range: 0.25...2, suffix: String(format: "%.2f×", w.speed)) }
-                        slider("Dim", value: binding(\.dimming, w), range: 0...0.85, suffix: "\(Int(w.dimming * 100))%")
-                        if w.kind == "video" { slider("Volume", value: binding(\.volume, w), range: 0...1, suffix: "\(Int(w.volume * 100))%") }
-                        if w.file != nil { Toggle("Fit entire image", isOn: binding(\.fit, w)).font(.caption).tint(library.accentOverride) }
-                    }
-                    Divider().opacity(0.3)
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Details").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-                        TextField("Wallpaper name", text: $ui.draftTitle).accessibilityLabel("Wallpaper name").onSubmit { var v = library.selected ?? w; if !ui.draftTitle.trimmingCharacters(in: .whitespaces).isEmpty { v.title = ui.draftTitle; library.edit(v) } }
-                        TextField("Tags, separated by commas", text: $ui.draftTags).accessibilityLabel("Tags").onSubmit { var v = library.selected ?? w; v.tags = ui.draftTags; library.edit(v) }
-                        TextField("Category", text: $ui.draftCategory).accessibilityLabel("Category").onSubmit {
-                            var value = library.selected ?? w
-                            if value.metadata == nil { value.metadata = SceneMetadata() }
-                            value.metadata?.category = ui.draftCategory.trimmingCharacters(in: .whitespacesAndNewlines)
-                            library.edit(value)
-                        }
-                        Picker("Color", selection: classificationBinding(\.color, w)) {
-                            ForEach(LibraryChoices.colors, id: \.self) { color in LibraryColorOption(color: color).tag(color) }
-                        }.fluaMenuPicker()
-                        Picker("Motion intensity", selection: classificationBinding(\.motion, w)) {
-                            ForEach(LibraryChoices.motions, id: \.self) { Text($0).tag($0) }
-                        }.fluaMenuPicker()
-                        let tags = normalizedTags(w.tags)
-                        // Eager rows keep offscreen tags in the keyboard focus order.
-                        Grid(alignment: .leading) {
-                            ForEach(Array(stride(from: 0, to: tags.count, by: 3)), id: \.self) { start in
-                                GridRow {
-                                    ForEach(tags[start..<min(start + 3, tags.count)], id: \.self) { tag in
-                                        Button(tag) { library.filterTag(tag) }
-                                            .accessibilityLabel("Filter by " + tag)
-                                            .help("Filter library by tag: " + tag)
-                                            .frame(maxWidth: .infinity)
-                                            .focused($focusedTag, equals: tag).id(tag)
-                                    }
-                                }
-                            }
-                        }
-                        Text("Press Return to save text edits.").font(.caption).foregroundStyle(.tertiary)
-                        Menu {
-                            ForEach(library.state.playlists) { p in Button((p.items.contains(w.id) ? "✓ " : "") + p.name) { library.toggleInPlaylist(w.id, p.id) } }
-                        } label: { Label("Add to playlist", systemImage: "text.badge.plus") }.fluaGlassMenu().frame(maxWidth: .infinity)
-                    }.textFieldStyle(FluaGlassTextFieldStyle())
+                    setWallpapersSection(w)
                 }.padding(24)
                 .onAppear { ui.draftTitle = w.title; ui.draftTags = w.tags; ui.draftCategory = w.metadata?.category ?? "" }
                 .onChange(of: w.id) { _, _ in ui.draftTitle = w.title; ui.draftTags = w.tags; ui.draftCategory = w.metadata?.category ?? "" }
-            } else { ContentUnavailableView("Select a wallpaper", systemImage: "sparkles").padding(.top, 100) }
+            } else {
+                ContentUnavailableView("Select a wallpaper", systemImage: "sparkles").padding(.top, 100)
+            }
         }
+        .textFieldStyle(FluaGlassTextFieldStyle())
+        .toggleStyle(.switch)
         .buttonStyle(FluaGlassButtonStyle())
     }
-    private func mediaFacts(_ w: Wallpaper) -> some View {
-        VStack(alignment: .leading, spacing: 7) {
-            LabeledContent("Resolution", value: w.file == nil ? "Not applicable" : w.mediaFacts.flatMap { $0.hasDimensions ? "\($0.width!) × \($0.height!)" : nil } ?? "Unknown")
-            LabeledContent("File size", value: w.file == nil ? "Not applicable" : w.mediaFacts?.bytes.flatMap { $0 >= 0 ? ByteCountFormatter.string(fromByteCount: $0, countStyle: .file) : nil } ?? "Unknown")
-            LabeledContent("Source duration", value: w.kind == "video" ? formattedDuration(w.mediaFacts?.sourceDuration) : "Not applicable")
-            if let source = w.mediaFacts?.sourceDuration, let edited = w.editedDuration, abs(source - edited) > 0.001 {
-                LabeledContent("Trimmed duration", value: formattedDuration(edited))
+
+    private func detailsSection(_ w: Wallpaper) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            detailsFields(w)
+
+            Text("Press Return to save text edits.").font(.caption).foregroundStyle(.tertiary)
+
+            Menu {
+                ForEach(library.state.playlists) { p in
+                    Button((p.items.contains(w.id) ? "✓ " : "") + p.name) { library.toggleInPlaylist(w.id, p.id) }
+                }
+            } label: {
+                Label("Add to playlist", systemImage: "text.badge.plus")
             }
-            LabeledContent("Date added", value: w.dateAdded?.formatted(date: .abbreviated, time: .omitted) ?? "Unknown")
-        }.font(.caption).textSelection(.enabled)
+            .fluaGlassMenu()
+            .frame(maxWidth: .infinity)
+            .padding(.top, 24)
+        }
     }
-    private func formattedDuration(_ seconds: Double?) -> String {
-        guard let seconds, seconds.isFinite, seconds > 0 else { return "Unknown" }
-        return Duration.seconds(seconds).formatted(.units(allowed: [.hours, .minutes, .seconds], width: .abbreviated, fractionalPart: .show(length: 2)))
+
+    private func detailsFields(_ w: Wallpaper) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            TextField("Wallpaper name", text: $ui.draftTitle)
+                .accessibilityLabel("Wallpaper name")
+                .onSubmit {
+                    var v = library.selected ?? w
+                    if !ui.draftTitle.trimmingCharacters(in: .whitespaces).isEmpty { v.title = ui.draftTitle; library.edit(v) }
+                }
+            TextField("Tags, separated by commas", text: $ui.draftTags)
+                .accessibilityLabel("Tags")
+                .onSubmit { var v = library.selected ?? w; v.tags = ui.draftTags; library.edit(v) }
+            TextField("Category", text: $ui.draftCategory)
+                .accessibilityLabel("Category")
+                .onSubmit {
+                    var value = library.selected ?? w
+                    if value.metadata == nil { value.metadata = SceneMetadata() }
+                    value.metadata?.category = ui.draftCategory.trimmingCharacters(in: .whitespacesAndNewlines)
+                    library.edit(value)
+                }
+            Picker("Color", selection: classificationBinding(\.color, w)) {
+                ForEach(LibraryChoices.colors, id: \.self) { color in LibraryColorOption(color: color).tag(color) }
+            }.fluaMenuPicker()
+            Picker("Motion intensity", selection: classificationBinding(\.motion, w)) {
+                ForEach(LibraryChoices.motions, id: \.self) { Text($0).tag($0) }
+            }.fluaMenuPicker()
+            let tags = normalizedTags(w.tags)
+            Grid(alignment: .leading) {
+                ForEach(Array(stride(from: 0, to: tags.count, by: 3)), id: \.self) { start in
+                    GridRow {
+                        ForEach(tags[start..<min(start + 3, tags.count)], id: \.self) { tag in
+                            Button(tag) { library.filterTag(tag) }
+                                .accessibilityLabel("Filter by " + tag)
+                                .help("Filter library by tag: " + tag)
+                                .frame(maxWidth: .infinity)
+                                .focused($focusedTag, equals: tag).id(tag)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private enum ConfigTarget: Hashable {
+        case display(String)
+        case lockScreen
+    }
+
+    private var targetChoices: [(String, ConfigTarget)] {
+        var choices: [(String, ConfigTarget)] = []
+        for screen in library.screens {
+            choices.append((screen.localizedName, .display(displayID(screen))))
+        }
+        choices.append(("Lock Screen", .lockScreen))
+        return choices
+    }
+
+    private func settingsSection(_ w: Wallpaper) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Toggle("Mirror all displays", isOn: Binding(
+                get: { library.playbackMode == "mirrored" },
+                set: { library.setPlaybackMode($0 ? "mirrored" : "perDisplay") }
+            ))
+            .font(.caption).tint(library.accentOverride)
+
+            Toggle("Mirror Desktop and Lock Screen", isOn: Binding(
+                get: { library.surfacesLinked },
+                set: { library.setSurfacesLinked($0) }
+            ))
+            .font(.caption).tint(library.accentOverride)
+
+            FluaSegmentedPicker(title: "Configure", selection: Binding(
+                get: {
+                    if library.surface == .lockScreen { return ConfigTarget.lockScreen }
+                    if library.playbackMode == "mirrored" { return .display(library.screens.first.map(displayID) ?? "") }
+                    return .display(library.display)
+                },
+                set: { target in
+                    switch target {
+                    case .display(let id):
+                        library.surface = .desktop
+                        if library.playbackMode == "perDisplay" { library.display = id }
+                    case .lockScreen:
+                        library.surface = .lockScreen
+                    }
+                }
+            ), choices: targetChoices, showsLabel: false)
+
+            FluaSegmentedPicker(title: "Rendering mode", selection: Binding<WallpaperMode?>(get: { library.surfaceMode }, set: { if let mode = $0 { library.setSurfaceMode(mode) } }),
+                choices: (library.surfaceMode == nil ? [("Mixed", nil)] : []) + [("Animated", .animated), ("Still", .still)])
+
+            if w.file != nil {
+                Toggle("Fit entire image", isOn: binding(\.fit, w)).font(.caption).tint(library.accentOverride)
+            }
+
+            if w.kind != "image" { slider("Speed", value: binding(\.speed, w), range: 0.25...2, suffix: String(format: "%.2f×", w.speed)) }
+            slider("Dim", value: binding(\.dimming, w), range: 0...0.85, suffix: "\(Int(w.dimming * 100))%")
+            if w.kind == "video" { slider("Volume", value: binding(\.volume, w), range: 0...1, suffix: "\(Int(w.volume * 100))%") }
+        }
+    }
+
+    private func trimSection(wallpaper w: Wallpaper, source: URL) -> some View {
+        fluaGlassGroup {
+            VStack(alignment: .leading, spacing: 8) {
+                Button { VideoEditorWindow.open(wallpaper: w, source: source, library: library) } label: {
+                    Label("Trim range and choose cover", systemImage: "slider.horizontal.3").frame(maxWidth: .infinity)
+                }.fluaGlassButton()
+            }
+        }
+    }
+
+    private func setWallpapersSection(_ w: Wallpaper) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            fluaGlassGroup {
+                VStack(alignment: .leading, spacing: 8) {
+                    Button {
+                        library.applySelected()
+                    } label: {
+                        Label(library.nativeSetupBusy ? "Working…" : "Set Wallpapers", systemImage: "desktopcomputer")
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 8)
+                    }
+                    .disabled(library.nativeSetupBusy)
+                    .accessibilityLabel("Set Wallpapers")
+                    .fluaProminentButton()
+                    .tint(library.accentOverride)
+                }
+            }
+            Text("Applies directly to macOS. Continues playing when Flua quits.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
     }
     private func classificationBinding(_ key: WritableKeyPath<SceneMetadata, String?>, _ w: Wallpaper) -> Binding<String> {
         Binding(get: { let value = library.state.item(w.id) ?? w; return key == \.color ? value.color : value.motion }, set: { value in
