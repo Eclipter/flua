@@ -21,7 +21,7 @@ Use disposable libraries and matching catalog builds. Follow the [integration an
 ## Inspector and library refinements
 
 - [x] Let users type numeric values directly into the Speed, Dim and Volume scrolls instead of only dragging them, so an exact value can be entered like a volume level.
-- Add a pressed animation to prominent buttons such as "Add Wallpaper…" so a press gives immediate visual feedback.
+- [x] Add a pressed animation to prominent buttons such as "Add Wallpaper…" so a press gives immediate visual feedback.
 - [x] Make Clear filters also reset the sort type (Name / Favorites First / Recently Added) to its default.
 
 Update capability claims only after the relevant checks pass. Keep untested OS versions and hardware explicitly unverified.

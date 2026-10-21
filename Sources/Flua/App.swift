@@ -63,14 +63,35 @@ private struct FrostedSurface<S: Shape>: ViewModifier {
 }
 
 struct FluaGlassButtonStyle: PrimitiveButtonStyle {
-    @Environment(\.isEnabled) private var enabled
+    var prominent = false
 
     func makeBody(configuration: Configuration) -> some View {
-        Button(configuration).buttonStyle(.borderless)
+        Button(configuration)
+            .buttonStyle(GlassPressEffect(prominent: prominent))
+    }
+}
+
+private struct GlassPressEffect: ButtonStyle {
+    @Environment(\.isEnabled) private var enabled
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    var prominent = false
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
             .foregroundStyle(configuration.role == .destructive ? Color.red : Color.primary)
             .padding(.horizontal, 12).padding(.vertical, 7)
             .fluaGlass(in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+            .overlay {
+                if prominent {
+                    RoundedRectangle(cornerRadius: 9, style: .continuous)
+                        .fill(.tint.opacity(0.16))
+                        .overlay { RoundedRectangle(cornerRadius: 9, style: .continuous).strokeBorder(.tint.opacity(0.4), lineWidth: 1) }
+                        .allowsHitTesting(false)
+                }
+            }
             .opacity(enabled ? 1 : 0.45)
+            .scaleEffect(configuration.isPressed && !reduceMotion ? 0.97 : 1)
+            .animation(reduceMotion ? nil : .easeInOut(duration: 0.1), value: configuration.isPressed)
     }
 }
 
@@ -266,13 +287,7 @@ extension View {
         modifier(FrostedSurface(shape: shape, clear: clear))
     }
     func fluaProminentButton() -> some View {
-        fluaGlassButton()
-            .overlay {
-                RoundedRectangle(cornerRadius: 9, style: .continuous)
-                    .fill(.tint.opacity(0.16))
-                    .overlay { RoundedRectangle(cornerRadius: 9, style: .continuous).strokeBorder(.tint.opacity(0.4), lineWidth: 1) }
-                    .allowsHitTesting(false)
-            }
+        buttonStyle(FluaGlassButtonStyle(prominent: true))
     }
     func fluaGlassButton() -> some View {
         buttonStyle(FluaGlassButtonStyle())
