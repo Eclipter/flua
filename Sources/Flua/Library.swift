@@ -265,10 +265,10 @@ final class Library: ObservableObject {
         activity = "Wallpaper stopped. Your system wallpaper is visible."
         save()
     }
-    func togglePause() {
+    func togglePlaylistPause() {
         state.paused.toggle()
         settingChanged()
-        activity = state.paused ? "Playback paused." : "Playback resumed."
+        activity = state.paused ? "Playlists paused. Wallpapers keep playing." : "Playlists resumed."
     }
     private var nativeRoutingAvailable: Bool {
         systemPlaybackEnabled && NativeWallpaper.available && NativeWallpaper.catalogURL.resolvingSymlinksInPath() == disk.catalog.resolvingSymlinksInPath()

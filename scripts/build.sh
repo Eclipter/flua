@@ -3,7 +3,7 @@ set -euo pipefail
 cd "${0:A:h:h}"
 swift build -c release --triple arm64-apple-macosx27.0
 bin_dir=$(swift build -c release --triple arm64-apple-macosx27.0 --show-bin-path)
-app="$PWD/build/Flua.app"
+app="${FLUA_APP_PATH:-$PWD/build/Flua.app}"
 extension_build="$PWD/build/wallpaper"
 extension="$app/Contents/Extensions/FluaWallpaperExtension.appex"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources" "$app/Contents/Extensions" "$app/Contents/Helpers"

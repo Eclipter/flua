@@ -10,12 +10,18 @@ require_no_flua() {
 require_no_flua
 mkdir -p build/verification
 run_dir=$(mktemp -d "$PWD/build/verification/run.XXXXXX")
+branch=$(git symbolic-ref --quiet --short HEAD || git rev-parse --short HEAD)
+branch=${branch//[^a-zA-Z0-9._-]/-}
+app="$PWD/build/Flua-$branch.app"
+FLUA_APP_PATH="$app" \
+    FLUA_CATALOG_PATH="$run_dir/library/catalog.json" \
+    ./scripts/build.sh
 # Offscreen accessibility names. Launching the binary directly does not activate the app.
-"$PWD/build/Flua.app/Contents/MacOS/Flua" \
+"$app/Contents/MacOS/Flua" \
     --data-dir "$run_dir/accessibility-library" \
     --accessibility-audit "$run_dir/results/accessibility.json"
 require_no_flua
-open -g -W "$PWD/build/Flua.app" \
+open -g -W "$app" \
     --args \
     --data-dir "$run_dir/library" \
     --smoke-test "$run_dir/results"
