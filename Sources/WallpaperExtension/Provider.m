@@ -366,6 +366,8 @@ NSDictionary *FSInspectSettings(id settings) { return FSJSON(settings, @"Wallpap
 @property BOOL askedForCatalog;
 @property dispatch_source_t recoveryTimer;
 @property dispatch_source_t playbackTimer;
+@property NSDictionary *playbackEnvironment;
+@property CFTimeInterval powerSampleTime;
 @end
 @implementation FSProvider
 - (instancetype)init {
@@ -390,8 +392,21 @@ NSDictionary *FSInspectSettings(id settings) { return FSJSON(settings, @"Wallpap
     session.root.speed = suspended ? 0 : 1;
     if (session.renderer.suspended != suspended) [session.renderer setPlaybackSuspended:suspended];
 }
+- (NSDictionary *)currentPlaybackEnvironment {
+    CFTimeInterval now = CACurrentMediaTime();
+    // Space visibility must update within a frame; power sampling can stay at one second.
+    if (!self.playbackEnvironment || now - self.powerSampleTime >= 1) {
+        self.playbackEnvironment = FSPlaybackEnvironment();
+        self.powerSampleTime = now;
+    } else {
+        NSMutableDictionary *environment = [self.playbackEnvironment mutableCopy];
+        environment[@"fullscreenDisplays"] = FSFullscreenDisplays();
+        self.playbackEnvironment = environment;
+    }
+    return self.playbackEnvironment;
+}
 - (void)refreshPlayback {
-    NSDictionary *environment = FSPlaybackEnvironment();
+    NSDictionary *environment = [self currentPlaybackEnvironment];
     for (FSSession *session in self.sessions.allValues)
         [self applyPlaybackToSession:session environment:environment];
 }
@@ -399,7 +414,7 @@ NSDictionary *FSInspectSettings(id settings) { return FSJSON(settings, @"Wallpap
     if (self.playbackTimer) return;
     __weak FSProvider *host = self;
     self.playbackTimer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, dispatch_get_main_queue());
-    dispatch_source_set_timer(self.playbackTimer, DISPATCH_TIME_NOW, NSEC_PER_SEC, NSEC_PER_SEC / 5);
+    dispatch_source_set_timer(self.playbackTimer, DISPATCH_TIME_NOW, NSEC_PER_SEC / 30, NSEC_PER_MSEC);
     dispatch_source_set_event_handler(self.playbackTimer, ^{ [host refreshPlayback]; });
     dispatch_resume(self.playbackTimer);
 }
@@ -612,7 +627,7 @@ NSDictionary *FSInspectSettings(id settings) { return FSJSON(settings, @"Wallpap
         s.suspended = payload[@"activityState"][@"suspended"] != nil;
         s.renderer = renderer;
         s.root = renderer.layer;
-        [self applyPlaybackToSession:s environment:FSPlaybackEnvironment()];
+        [self applyPlaybackToSession:s environment:[self currentPlaybackEnvironment]];
         s.context = ((id (*)(id, SEL, id))objc_msgSend)(NSClassFromString(@"CAContext"),
                                                         NSSelectorFromString(@"remoteContextWithOptions:"), @{});
         if (!s.context) {
@@ -693,7 +708,7 @@ NSDictionary *FSInspectSettings(id settings) { return FSJSON(settings, @"Wallpap
     if (p[@"destination"]) {
         s.displayID = [p[@"destination"][@"directDisplayID"] isKindOfClass:NSNumber.class] ? p[@"destination"][@"directDisplayID"] : nil;
     }
-    [self applyPlaybackToSession:s environment:FSPlaybackEnvironment()];
+    [self applyPlaybackToSession:s environment:[self currentPlaybackEnvironment]];
     NSLog(@"Flua updated kind=%@ locked=%d idle=%d suspended=%d frames=%lu loops=%ld",
           s.renderConfiguration[@"kind"], [s.mode isEqual:@"locked"], [s.mode isEqual:@"idle"], suspended,
           (unsigned long)s.renderer.frameCount, (long)s.renderer.loopCount);
@@ -867,6 +882,40 @@ BOOL FSConfigureConnection(NSXPCConnection *connection) {
     [connection resume];
     return YES;
 }
+#ifdef FS_SELF_TEST
+@interface FSPlaybackMonitoringTestProvider : FSProvider
+@property NSUInteger playbackSamples;
+@end
+@implementation FSPlaybackMonitoringTestProvider
+- (void)refreshPlayback {
+    self.playbackSamples++;
+    [super refreshPlayback];
+}
+@end
+
+static BOOL FSPlaybackMonitoringSelfTest(void) {
+    FSPlaybackMonitoringTestProvider *provider = FSPlaybackMonitoringTestProvider.new;
+    [provider refreshPlayback];
+    provider.playbackEnvironment = @{@"onBattery":@YES, @"fullscreenDisplays":@[@"stale-display"]};
+    [provider refreshPlayback];
+    BOOL fullscreenSampleRefreshed = ![provider.playbackEnvironment[@"fullscreenDisplays"] containsObject:@"stale-display"];
+    BOOL powerValueReused = [provider.playbackEnvironment[@"onBattery"] boolValue];
+    CFTimeInterval firstPowerSample = provider.powerSampleTime;
+    [provider startPlaybackMonitoring];
+    NSDate *deadline = [NSDate dateWithTimeIntervalSinceNow:0.25];
+    while (deadline.timeIntervalSinceNow > 0)
+        [NSRunLoop.currentRunLoop runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.005]];
+    BOOL fastDisplayChecks = provider.playbackSamples >= 5;
+    BOOL powerSampleReused = provider.powerSampleTime == firstPowerSample;
+    provider.powerSampleTime -= 1;
+    [provider refreshPlayback];
+    BOOL powerSampleRefreshed = provider.powerSampleTime > firstPowerSample;
+    dispatch_source_cancel(provider.playbackTimer);
+    provider.playbackTimer = nil;
+    return fastDisplayChecks && fullscreenSampleRefreshed && powerValueReused && powerSampleReused && powerSampleRefreshed;
+}
+#endif
+
 int FSProviderSelfTest(void) {
     @autoreleasepool {
         if (!FSLoad())
@@ -953,7 +1002,12 @@ int FSProviderSelfTest(void) {
         BOOL noFixtures = [libraryOnly[@"desktop"][@"groups"][0][@"items"] count] == 0 &&
             FSBox(@"WallpaperSettingsViewModelsXPC", @"WallpaperSettingsViewModels", libraryOnly) != nil;
         BOOL playbackPolicyOK = FSPlaybackPolicySelfTest();
+        BOOL playbackMonitoringOK = YES;
+#ifdef FS_SELF_TEST
+        playbackMonitoringOK = FSPlaybackMonitoringSelfTest();
+#endif
         NSDictionary *out = @{
+            @"playbackMonitoring" : @(playbackMonitoringOK),
             @"playbackPolicy" : @(playbackPolicyOK),
             @"policyPrecedence" : @(policyPrecedence),
             @"libraryOnlyCatalog" : @(noFixtures),
@@ -967,7 +1021,7 @@ int FSProviderSelfTest(void) {
         NSData *d = [NSJSONSerialization dataWithJSONObject:out options:NSJSONWritingPrettyPrinted error:nil];
         fwrite(d.bytes, 1, d.length, stdout);
         puts("");
-        return acquired && updated && invalidated && snapshotted && settingsOK && noFixtures && playbackPolicyOK && policyPrecedence ? 0 : 2;
+        return acquired && updated && invalidated && snapshotted && settingsOK && noFixtures && playbackPolicyOK && policyPrecedence && playbackMonitoringOK ? 0 : 2;
     }
 }
 #ifdef FS_SELF_TEST

@@ -36,7 +36,7 @@ static NSArray<NSString *> *FSFullscreenDisplaysFromSnapshot(id snapshot) {
 }
 
 // shortcut: fullscreen uses private Space type 4 on macOS 27, recheck when its format changes.
-static NSArray<NSString *> *FSFullscreenDisplays(void) {
+NSArray<NSString *> *FSFullscreenDisplays(void) {
     typedef int32_t (*FSMainConnectionIDFunction)(void);
     typedef CFArrayRef (*FSCopyManagedDisplaySpacesFunction)(int32_t);
     static dispatch_once_t once;
