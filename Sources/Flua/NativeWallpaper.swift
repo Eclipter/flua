@@ -63,7 +63,7 @@ enum NativeWallpaper {
             let baseline = FileManager.default.fileExists(atPath: baselineURL.path) ? try Data(contentsOf: baselineURL) : nil
             let expected = try NativeWallpaperStore.replacing(assignments, displays: displays, provider: identifier,
                 mirrored: mirrored, in: current, baseline: baseline)
-            if NativeWallpaperStore.stopMatches(expected, in: current) {
+            if NativeWallpaperStore.applicationMatches(assignments, mirrored: mirrored, expected: expected, in: current) {
                 let elected = try run("/usr/bin/pluginkit", ["-m", "-v", "-i", identifier], allowedStatuses: [0, 1])
                 if pluginPaths(in: elected).contains(extensionURL.resolvingSymlinksInPath().path) { return }
             }
@@ -74,8 +74,7 @@ enum NativeWallpaper {
             return try NativeWallpaperStore.replacing(assignments, displays: displays, provider: identifier,
                 mirrored: mirrored, in: current, baseline: baseline)
         }, verify: { actual, expected in
-            NativeWallpaperStore.matches(assignments, mirrored: mirrored, in: actual)
-                && NativeWallpaperStore.stopMatches(expected, in: actual)
+            NativeWallpaperStore.applicationMatches(assignments, mirrored: mirrored, expected: expected, in: actual)
         })
     }
     static func stop(displays: [String], mirrored: Bool, root: URL) throws -> Bool {

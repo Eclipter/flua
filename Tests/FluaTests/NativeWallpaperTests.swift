@@ -76,6 +76,155 @@ import Foundation
             mirrored: true, in: updated, baseline: original)
         precondition(NativeWallpaperStore.stopMatches(unchangedRestore, in: updated), "Restoration must ignore refreshed surface timestamps")
         precondition(!NativeWallpaperStore.stopMatches(unchangedRestore, in: original), "A different system wallpaper still needs application")
+        func decoded(_ data: Data) throws -> [String: Any] {
+            try PropertyListSerialization.propertyList(from: data, format: nil) as! [String: Any]
+        }
+        func replaceChoice(_ choice: [String: Any], surface: String, in value: inout [String: Any]) {
+            var settings = value[surface] as! [String: Any]
+            var content = settings["Content"] as! [String: Any]
+            content["Choices"] = [choice]
+            settings["Content"] = content
+            settings["LastSet"] = Date(timeIntervalSince1970: 200)
+            settings["LastUse"] = Date(timeIntervalSince1970: 201)
+            value[surface] = settings
+        }
+        var idleChoice = choice
+        idleChoice["Provider"] = "local.flua.idle"
+        let applicationAssignments = ["display": NativeWallpaperStore.Assignment(desktop: choice, lockScreen: idleChoice)]
+        var applicationDefault = old
+        for surface in ["Desktop", "Idle"] {
+            var settings = applicationDefault[surface] as! [String: Any]
+            var content = settings["Content"] as! [String: Any]
+            content["Shuffle"] = "$null"
+            content["EncodedOptionValues"] = Data([0])
+            settings["Content"] = content
+            applicationDefault[surface] = settings
+        }
+        var applicationBase = try decoded(original)
+        applicationBase["SystemDefault"] = applicationDefault
+        var applicationSpaces = applicationBase["Spaces"] as! [String: Any]
+        for id in ["space-2", "space-3"] {
+            applicationSpaces[id] = ["Default": applicationDefault, "Displays": ["display": old, "untargeted": old]]
+        }
+        for id in Array(applicationSpaces.keys) {
+            var space = applicationSpaces[id] as! [String: Any]
+            space["Default"] = applicationDefault
+            applicationSpaces[id] = space
+        }
+        applicationBase["Spaces"] = applicationSpaces
+        applicationBase["Displays"] = ["display": old, "untargeted": old]
+        let applicationExpected = try NativeWallpaperStore.applying(applicationAssignments, mirrored: false,
+            to: encode(applicationBase), now: Date(timeIntervalSince1970: 100))
+        func propagated(_ surfaces: [String], systemDefault: Bool, spaceIDs: [String]) throws -> Data {
+            var value = try decoded(applicationExpected)
+            for surface in surfaces {
+                let requested = surface == "Desktop" ? choice : idleChoice
+                if systemDefault {
+                    var defaults = value["SystemDefault"] as! [String: Any]
+                    replaceChoice(requested, surface: surface, in: &defaults)
+                    value["SystemDefault"] = defaults
+                }
+                var spaces = value["Spaces"] as! [String: Any]
+                for id in spaceIDs {
+                    var space = spaces[id] as! [String: Any]
+                    var defaults = space["Default"] as! [String: Any]
+                    replaceChoice(requested, surface: surface, in: &defaults)
+                    space["Default"] = defaults
+                    spaces[id] = space
+                }
+                value["Spaces"] = spaces
+            }
+            return try encode(value)
+        }
+        for surfaces in [["Desktop"], ["Idle"], ["Desktop", "Idle"]] {
+            let actual = try propagated(surfaces, systemDefault: true, spaceIDs: ["space-2"])
+            precondition(NativeWallpaperStore.matches(applicationAssignments, mirrored: false, in: actual))
+            precondition(NativeWallpaperStore.applicationMatches(applicationAssignments, mirrored: false,
+                expected: applicationExpected, in: actual))
+            precondition(!NativeWallpaperStore.stopMatches(applicationExpected, in: actual))
+        }
+        let subsetDefault = try propagated(["Desktop"], systemDefault: false, spaceIDs: ["space-2"])
+        precondition(NativeWallpaperStore.applicationMatches(applicationAssignments, mirrored: false,
+            expected: applicationExpected, in: subsetDefault))
+        var foreignChoice = choice
+        foreignChoice["Provider"] = "foreign.provider"
+        var wrongSurface = try decoded(propagated(["Desktop"], systemDefault: true, spaceIDs: []))
+        var wrongDefaults = wrongSurface["SystemDefault"] as! [String: Any]
+        replaceChoice(idleChoice, surface: "Desktop", in: &wrongDefaults)
+        wrongSurface["SystemDefault"] = wrongDefaults
+        let wrongSurfaceData = try encode(wrongSurface)
+        precondition(NativeWallpaperStore.matches(applicationAssignments, mirrored: false, in: wrongSurfaceData))
+        precondition(!NativeWallpaperStore.applicationMatches(applicationAssignments, mirrored: false,
+            expected: applicationExpected, in: wrongSurfaceData))
+        let desktopOnly = ["display": NativeWallpaperStore.Assignment(desktop: choice)]
+        let desktopOnlyExpected = try NativeWallpaperStore.applying(desktopOnly, mirrored: false, to: encode(applicationBase))
+        var unassignedSurface = try decoded(desktopOnlyExpected)
+        var unassignedDefaults = unassignedSurface["SystemDefault"] as! [String: Any]
+        replaceChoice(idleChoice, surface: "Idle", in: &unassignedDefaults)
+        unassignedSurface["SystemDefault"] = unassignedDefaults
+        let unassignedData = try encode(unassignedSurface)
+        precondition(NativeWallpaperStore.matches(desktopOnly, mirrored: false, in: unassignedData))
+        precondition(!NativeWallpaperStore.applicationMatches(desktopOnly, mirrored: false,
+            expected: desktopOnlyExpected, in: unassignedData))
+        var foreignDefaultPropagation = try decoded(propagated(["Desktop"], systemDefault: true, spaceIDs: []))
+        var foreignDefaults = foreignDefaultPropagation["SystemDefault"] as! [String: Any]
+        replaceChoice(foreignChoice, surface: "Desktop", in: &foreignDefaults)
+        foreignDefaultPropagation["SystemDefault"] = foreignDefaults
+        let foreignDefaultData = try encode(foreignDefaultPropagation)
+        precondition(NativeWallpaperStore.matches(applicationAssignments, mirrored: false, in: foreignDefaultData))
+        precondition(!NativeWallpaperStore.applicationMatches(applicationAssignments, mirrored: false,
+            expected: applicationExpected, in: foreignDefaultData))
+        var untargeted = try decoded(applicationExpected)
+        var displays = untargeted["Displays"] as! [String: Any]
+        var untargetedDisplay = displays["untargeted"] as! [String: Any]
+        replaceChoice(foreignChoice, surface: "Desktop", in: &untargetedDisplay)
+        displays["untargeted"] = untargetedDisplay
+        untargeted["Displays"] = displays
+        let untargetedData = try encode(untargeted)
+        precondition(NativeWallpaperStore.matches(applicationAssignments, mirrored: false, in: untargetedData))
+        precondition(!NativeWallpaperStore.applicationMatches(applicationAssignments, mirrored: false,
+            expected: applicationExpected, in: untargetedData))
+        var changedContent = try decoded(propagated(["Desktop"], systemDefault: true, spaceIDs: []))
+        var changedDefaults = changedContent["SystemDefault"] as! [String: Any]
+        var changedDesktop = changedDefaults["Desktop"] as! [String: Any]
+        var changedDesktopContent = changedDesktop["Content"] as! [String: Any]
+        changedDesktopContent["Shuffle"] = "changed"
+        changedDesktop["Content"] = changedDesktopContent
+        changedDefaults["Desktop"] = changedDesktop
+        changedContent["SystemDefault"] = changedDefaults
+        let changedContentData = try encode(changedContent)
+        precondition(NativeWallpaperStore.matches(applicationAssignments, mirrored: false, in: changedContentData))
+        precondition(!NativeWallpaperStore.applicationMatches(applicationAssignments, mirrored: false,
+            expected: applicationExpected, in: changedContentData))
+        var missingTarget = try decoded(applicationExpected)
+        var missingDisplays = missingTarget["Displays"] as! [String: Any]
+        missingDisplays.removeValue(forKey: "display")
+        missingTarget["Displays"] = missingDisplays
+        let missingTargetData = try encode(missingTarget)
+        precondition(!NativeWallpaperStore.applicationMatches(applicationAssignments, mirrored: false,
+            expected: applicationExpected, in: missingTargetData))
+        var mismatchedTarget = try decoded(applicationExpected)
+        var mismatchedDisplays = mismatchedTarget["Displays"] as! [String: Any]
+        var mismatchedDisplay = mismatchedDisplays["display"] as! [String: Any]
+        replaceChoice(foreignChoice, surface: "Desktop", in: &mismatchedDisplay)
+        mismatchedDisplays["display"] = mismatchedDisplay
+        mismatchedTarget["Displays"] = mismatchedDisplays
+        let mismatchedTargetData = try encode(mismatchedTarget)
+        precondition(!NativeWallpaperStore.applicationMatches(applicationAssignments, mirrored: false,
+            expected: applicationExpected, in: mismatchedTargetData))
+        precondition(!NativeWallpaperStore.applicationMatches(applicationAssignments, mirrored: false,
+            expected: applicationExpected, in: Data("not a plist".utf8)))
+        let mirroredExpected = try NativeWallpaperStore.applying(applicationAssignments, mirrored: true, to: encode(applicationBase))
+        var mirroredFixture = try decoded(mirroredExpected)
+        var mirroredDefaults = mirroredFixture["SystemDefault"] as! [String: Any]
+        let oldDesktopChoice = ((old["Desktop"] as! [String: Any])["Content"] as! [String: Any])["Choices"] as! [[String: Any]]
+        replaceChoice(oldDesktopChoice[0], surface: "Desktop", in: &mirroredDefaults)
+        mirroredFixture["SystemDefault"] = mirroredDefaults
+        let mirroredExpectedWithOldDefault = try encode(mirroredFixture)
+        precondition(NativeWallpaperStore.matches(applicationAssignments, mirrored: true, in: mirroredExpected))
+        precondition(!NativeWallpaperStore.applicationMatches(applicationAssignments, mirrored: true,
+            expected: mirroredExpectedWithOldDefault, in: mirroredExpected))
+        print("PASS: Apply verification allows only requested per-display choice propagation into defaults")
         let captureFresh = try NativeWallpaperStore.shouldCaptureBaseline(nil, provider: "local.flua.desktop.wallpaper", in: original)
         let skipExisting = try NativeWallpaperStore.shouldCaptureBaseline(nil, provider: "local.flua.desktop.wallpaper", in: updated)
         let refreshSaved = try NativeWallpaperStore.shouldCaptureBaseline(original, provider: "local.flua.desktop.wallpaper", in: updated)

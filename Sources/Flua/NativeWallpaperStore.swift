@@ -177,6 +177,42 @@ enum NativeWallpaperStore {
         return true
     }
 
+    static func applicationMatches(_ assignments: [String: Assignment], mirrored: Bool, expected: Data, in actual: Data) -> Bool {
+        guard matches(assignments, mirrored: mirrored, in: actual) else { return false }
+        if mirrored { return stopMatches(expected, in: actual) }
+        guard var expectedStore = try? decode(expected), let actualStore = try? decode(actual) else { return false }
+        // macOS can copy targeted choices into defaults when reconciling per-display assignments.
+        func reconcile(_ expected: Any?, with actual: Any?) -> Any? {
+            guard var expected = expected as? [String: Any], let actual = actual as? [String: Any] else { return expected }
+            for surface in ["Desktop", "Idle"] {
+                guard var settings = expected[surface] as? [String: Any],
+                      var content = settings["Content"] as? [String: Any],
+                      let actualSettings = actual[surface] as? [String: Any],
+                      let actualContent = actualSettings["Content"] as? [String: Any],
+                      let choices = actualContent["Choices"] as? [[String: Any]], choices.count == 1,
+                      assignments.values.contains(where: {
+                          guard let choice = surface == "Desktop" ? $0.desktop : $0.lockScreen else { return false }
+                          return NSDictionary(dictionary: choice).isEqual(to: choices[0])
+                      }) else { continue }
+                content["Choices"] = choices
+                settings["Content"] = content
+                expected[surface] = settings
+            }
+            return expected
+        }
+        expectedStore["SystemDefault"] = reconcile(expectedStore["SystemDefault"], with: actualStore["SystemDefault"])
+        if var spaces = expectedStore["Spaces"] as? [String: Any], let actualSpaces = actualStore["Spaces"] as? [String: Any] {
+            for (id, value) in spaces {
+                guard var space = value as? [String: Any], let actualSpace = actualSpaces[id] as? [String: Any] else { continue }
+                space["Default"] = reconcile(space["Default"], with: actualSpace["Default"])
+                spaces[id] = space
+            }
+            expectedStore["Spaces"] = spaces
+        }
+        guard let reconciled = try? PropertyListSerialization.data(fromPropertyList: expectedStore, format: .binary, options: 0) else { return false }
+        return stopMatches(reconciled, in: actual)
+    }
+
     static func shouldCaptureBaseline(_ baseline: Data?, provider: String, in data: Data) throws -> Bool {
         guard baseline == nil else { return true }
         return try !containsProvider(provider, in: data)
