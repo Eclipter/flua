@@ -123,6 +123,10 @@ enum SmokeRunner {
     @MainActor static func runPreviewSmokeIfRequested() async {
         let args = ProcessInfo.processInfo.arguments
         guard let i = args.firstIndex(of: "--preview-smoke"), args.indices.contains(i + 1) else { return }
+        if args.contains("--scroll-benchmark") {
+            await runScrollBenchmark(destination: URL(fileURLWithPath: args[i + 1]))
+            return
+        }
         let destination = URL(fileURLWithPath: args[i + 1])
         try? FileManager.default.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
         var frameRates: [String: Double] = [:]
@@ -162,6 +166,61 @@ enum SmokeRunner {
             print(String(decoding: data, as: UTF8.self))
         }
         exit(frameRates.values.allSatisfy { $0 > 0 } ? 0 : 1)
+    }
+    @MainActor private static func runScrollBenchmark(destination: URL) async {
+        let library = AppContext.library
+        library.tick?.invalidate()
+        await pause(0.2)
+        for original in library.state.wallpapers {
+            var copy = original
+            copy.id += "-scroll-fixture"
+            copy.title += " copy"
+            library.state.wallpapers.append(copy)
+            library.thumbnails[copy.id] = library.thumbnails[original.id]
+        }
+        let window = NSPanel(contentRect: NSRect(x: 10, y: 20, width: 1440, height: 900),
+            styleMask: [.titled, .nonactivatingPanel], backing: .buffered, defer: false)
+        window.title = "Flua Scroll Benchmark"
+        window.isReleasedWhenClosed = false
+        let root = NSHostingView(rootView: LibraryView().environmentObject(library))
+        window.contentView = root
+        await pause(1)
+        window.alphaValue = 1
+        window.ignoresMouseEvents = true
+        window.setFrameOrigin(NSPoint(x: 10, y: 20))
+        window.level = .floating
+        window.collectionBehavior = [.fullScreenAuxiliary, .canJoinAllSpaces]
+        window.orderFrontRegardless()
+        let ready = destination.appendingPathExtension("ready")
+        let start = destination.appendingPathExtension("start")
+        try? Data(String(window.windowNumber).utf8).write(to: ready)
+        let deadline = Date().addingTimeInterval(30)
+        while !FileManager.default.fileExists(atPath: start.path), Date() < deadline { await pause(0.05) }
+        guard FileManager.default.fileExists(atPath: start.path) else { window.close(); exit(1) }
+        var scrolls: [NSScrollView] = []
+        func visit(_ view: NSView) {
+            if let scroll = view as? NSScrollView, scroll.hasVerticalScroller, scroll.bounds.width > 260 {
+                scrolls.append(scroll)
+            }
+            view.subviews.forEach(visit)
+        }
+        visit(root)
+        var phases: [[Double]] = []
+        for scroll in scrolls {
+            let began = CACurrentMediaTime()
+            for step in 0..<360 {
+                let clip = scroll.contentView
+                let maximum = max(0, (scroll.documentView?.bounds.height ?? 0) - clip.bounds.height)
+                let phase = Double(step % 120) / 119
+                clip.scroll(to: NSPoint(x: 0, y: maximum * (1 - cos(phase * 2 * .pi)) / 2))
+                scroll.reflectScrolledClipView(clip)
+                await pause(1.0 / 60)
+            }
+            phases.append([began, CACurrentMediaTime()])
+        }
+        if let data = try? JSONSerialization.data(withJSONObject: phases) { try? data.write(to: destination) }
+        window.close()
+        exit(phases.count == 2 ? 0 : 1)
     }
     private static func checkboxValue(_ title: String, named name: String) -> Bool? {
         checkboxAttribute(title, named: name, kAXValueAttribute)

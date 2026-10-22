@@ -35,30 +35,32 @@ private struct FrostedSurface<S: Shape>: ViewModifier {
     let shape: S
     let clear: Bool
 
-    @ViewBuilder
     func body(content: Content) -> some View {
-        let base = content
+        content
             .background {
-                if reduceTransparency {
-                    shape.fill(Color(nsColor: .windowBackgroundColor))
-                } else if clear {
-                    shape.fill(scheme == .dark ? Color.white.opacity(0.14) : Color.white.opacity(0.35))
+                let background = Group {
+                    if reduceTransparency {
+                        shape.fill(Color(nsColor: .windowBackgroundColor))
+                    } else if clear {
+                        shape.fill(scheme == .dark ? Color.white.opacity(0.14) : Color.white.opacity(0.35))
+                    } else {
+                        shape.fill(.ultraThinMaterial)
+                            .overlay {
+                                shape.fill(scheme == .dark ? Color.black.opacity(0.2) : Color.white.opacity(0.3))
+                            }
+                    }
+                }
+                // Shadow the shape without flattening the scrolling control subtree.
+                if clear {
+                    background
                 } else {
-                    shape.fill(.ultraThinMaterial)
-                        .overlay {
-                            shape.fill(scheme == .dark ? Color.black.opacity(0.2) : Color.white.opacity(0.3))
-                        }
+                    background.shadow(color: .black.opacity(scheme == .dark ? 0.16 : 0.06), radius: 12, y: 4)
                 }
             }
             .overlay {
                 shape.stroke(LinearGradient(colors: [.white.opacity(scheme == .dark ? 0.24 : 0.7), .white.opacity(0.06)], startPoint: .topLeading, endPoint: .bottomTrailing), lineWidth: 0.75)
                     .allowsHitTesting(false)
             }
-        if clear {
-            base
-        } else {
-            base.shadow(color: .black.opacity(scheme == .dark ? 0.16 : 0.06), radius: 12, y: 4)
-        }
     }
 }
 
@@ -323,8 +325,9 @@ extension View {
 enum AppContext {
     static let library: Library = {
         let args = ProcessInfo.processInfo.arguments
+        let isolatedVerification = args.contains("--smoke-test") || args.contains("--scroll-benchmark")
         do {
-            if args.contains("--smoke-test") {
+            if isolatedVerification {
                 guard let i = args.firstIndex(of: "--data-dir"), args.indices.contains(i + 1),
                       !args[i + 1].isEmpty, !args[i + 1].hasPrefix("--") else {
                     throw NativeWallpaperError("Smoke verification requires an isolated --data-dir.")
@@ -337,10 +340,10 @@ enum AppContext {
                 let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
                 root = LibraryPaths.resolve(applicationSupport: support, boundCatalog: NativeWallpaper.boundCatalogURL)
             }
-            return try Library(root: root, systemPlaybackEnabled: !args.contains("--smoke-test"))
+            return try Library(root: root, systemPlaybackEnabled: !isolatedVerification)
         }
         catch {
-            if args.contains("--smoke-test") {
+            if isolatedVerification {
                 fputs("Flua smoke: \(error.localizedDescription)\n", stderr)
                 exit(1)
             }
