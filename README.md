@@ -27,7 +27,7 @@
 | Audio-reactive wallpapers | ❌ |
 | Wallpaper audio | ❌ |
 | Wallpaper playlists | ✅ |
-| Low Power mode and on-battery pauses | ❌ |
+| Low Power mode and on-battery pauses | ✅ (physical power transitions remain unverified) |
 | Curate your own local wallpaper library | ✅ |
 | Online wallpaper catalog | ❌ |
 

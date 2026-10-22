@@ -253,6 +253,12 @@ import Foundation
         let disk = try LibraryDisk(root: root)
         var state = LibraryState()
         state.blockedTags = ["hidden"]
+        state.pauseOnBattery = true
+        state.pauseOnLowPower = true
+        state.lowPowerThreshold = 140
+        state.pauseOnFullscreen = false
+        let playbackPolicy = PlaybackPolicy(pauseOnBattery: true, pauseOnLowPower: true,
+                                           lowPowerThreshold: 100, pauseOnFullscreen: false)
         state.wallpapers = [
             Wallpaper(id: "clip", title: "Clip", kind: "video", file: "clip.mov", speed: 1.5, dimming: 0.25, fit: true,
                       videoEdit: VideoEdit(start: 0.25, end: 0.75, thumbnail: 0.5)),
@@ -280,12 +286,25 @@ import Foundation
         let catalog = providerCatalog(from: state)
         precondition(catalog == ProviderCatalog(items: [
             .init(id: "clip", title: "Clip", kind: "video", file: "Media/clip.mov", fit: "fit", speed: 1.5, dimming: 0.25,
-                  trimStart: 0.25, trimEnd: 0.75, still: 0.5, desktop: .still, lockScreen: .animated),
-            .init(id: "pic", title: "Pic", kind: "image", file: "Media/pic.png", fit: "fill", lockScreen: .still),
+                  trimStart: 0.25, trimEnd: 0.75, still: 0.5, desktop: .still, lockScreen: .animated,
+                  playbackPolicy: playbackPolicy),
+            .init(id: "pic", title: "Pic", kind: "image", file: "Media/pic.png", fit: "fill", lockScreen: .still,
+                  playbackPolicy: playbackPolicy),
             .init(id: "aurora", title: "Northern lights", kind: "aurora", file: "", fit: "fill", speed: 0.5, dimming: 0.2,
-                  still: 7, desktop: .still, lockScreen: .animated),
-            .init(id: "bad", title: "Bad", kind: "video", file: "Media/bad.mov", fit: "fill", still: 0.2)
-        ]))
+                  still: 7, desktop: .still, lockScreen: .animated, playbackPolicy: playbackPolicy),
+            .init(id: "bad", title: "Bad", kind: "video", file: "Media/bad.mov", fit: "fill", still: 0.2,
+                  playbackPolicy: playbackPolicy)
+        ], playbackPolicy: playbackPolicy))
+        let catalogJSON = try JSONSerialization.jsonObject(with: JSONEncoder().encode(catalog)) as! [String: Any]
+        let savedPolicy = catalogJSON["playbackPolicy"] as! [String: Any]
+        let savedItems = catalogJSON["items"] as! [[String: Any]]
+        precondition(savedPolicy["pauseOnBattery"] as? Bool == true)
+        precondition(savedPolicy["pauseOnLowPower"] as? Bool == true)
+        precondition(savedPolicy["lowPowerThreshold"] as? Int == 100)
+        precondition(savedPolicy["pauseOnFullscreen"] as? Bool == false)
+        precondition(savedItems.allSatisfy { ($0["playbackPolicy"] as? [String: Any])?["lowPowerThreshold"] as? Int == 100 })
+        let legacyCatalog = try JSONDecoder().decode(ProviderCatalog.self, from: Data(#"{"version":1,"items":[{"id":"legacy","title":"Legacy","kind":"image","file":"Media/legacy.png","fit":"fill","speed":1,"dimming":0,"desktop":"animated","lockScreen":"animated"}]}"#.utf8))
+        precondition(legacyCatalog.playbackPolicy == nil && legacyCatalog.items.first?.playbackPolicy == nil)
         try disk.save(state)
         let saved = try JSONDecoder().decode(ProviderCatalog.self, from: Data(contentsOf: disk.catalog))
         precondition(saved == catalog)

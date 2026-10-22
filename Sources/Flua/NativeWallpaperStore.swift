@@ -12,6 +12,14 @@ enum NativeWallpaperStore {
             "speed": item.speed, "dimming": item.dimming,
             "modes": ["desktop": item.desktop.rawValue, "lockScreen": item.lockScreen.rawValue]
         ]
+        if let policy = item.playbackPolicy?.clampedForExport {
+            configuration["playbackPolicy"] = [
+                "pauseOnBattery": policy.pauseOnBattery,
+                "pauseOnLowPower": policy.pauseOnLowPower,
+                "lowPowerThreshold": policy.lowPowerThreshold,
+                "pauseOnFullscreen": policy.pauseOnFullscreen
+            ]
+        }
         var files: [[String: String]] = []
         if item.kind == "video" || item.kind == "image" {
             let media = root.appendingPathComponent("Media", isDirectory: true).resolvingSymlinksInPath()

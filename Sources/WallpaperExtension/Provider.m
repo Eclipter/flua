@@ -1,5 +1,6 @@
 #import "Provider.h"
 #import "MediaRenderer.h"
+#import "PlaybackPolicy.h"
 #import <IOSurface/IOSurface.h>
 #import <QuartzCore/QuartzCore.h>
 #import <dlfcn.h>
@@ -138,6 +139,7 @@ static NSString *FSEncodeConfiguration(NSDictionary *configuration) {
 // A library file is accepted only as Media/<name> inside the catalog root.
 // shortcut: rows reuse the bundled prototype thumbnail, replace it when still frames exist.
 static NSURL *FSActiveCatalogURL;
+static NSDictionary *FSActivePlaybackPolicy;
 static NSMutableArray *FSHeldCatalogAccess;
 @protocol FSHostProxy <NSObject>
 - (void)updateSettingsViewModels:(id)models reply:(void (^)(NSError *error))reply;
@@ -213,6 +215,7 @@ static NSArray *FSLibraryChoices(NSString **directRead) {
         root = root.stringByStandardizingPath;
         if (!bundled && ![root isEqualToString:parent]) return @[];
     } else root = parent;
+    FSActivePlaybackPolicy = [json[@"playbackPolicy"] isKindOfClass:NSDictionary.class] ? json[@"playbackPolicy"] : nil;
     NSMutableArray *choices = NSMutableArray.new;
     for (id entry in json[@"items"]) {
         if (![entry isKindOfClass:NSDictionary.class]) continue;
@@ -297,6 +300,7 @@ static NSDictionary *FSBuildSettingsModel(BOOL libraryOnly) {
         NSMutableDictionary *playback = [@{@"version":@1, @"kind":library[@"kind"], @"fit":library[@"fit"],
                                            @"speed":library[@"speed"], @"dimming":library[@"dimming"],
                                            @"modes":@{@"desktop":library[@"desktop"], @"lockScreen":library[@"lockScreen"]}} mutableCopy];
+        if (FSActivePlaybackPolicy) playback[@"playbackPolicy"] = FSActivePlaybackPolicy;
         if (library[@"url"]) playback[@"fileIndex"] = @0;
         if (library[@"trimStart"] && library[@"trimEnd"]) playback[@"trim"] = @[library[@"trimStart"], library[@"trimEnd"]];
         if (library[@"still"]) playback[@"still"] = library[@"still"];
@@ -344,6 +348,8 @@ NSDictionary *FSInspectSettings(id settings) { return FSJSON(settings, @"Wallpap
 @property NSArray *fileWrappers;
 @property BOOL needsRecovery;
 @property BOOL suspended;
+@property BOOL playbackSuspended;
+@property NSNumber *displayID;
 @end
 @implementation FSSession
 - (void)dealloc {
@@ -358,6 +364,7 @@ NSDictionary *FSInspectSettings(id settings) { return FSJSON(settings, @"Wallpap
 @property dispatch_source_t catalogWatch;
 @property BOOL askedForCatalog;
 @property dispatch_source_t recoveryTimer;
+@property dispatch_source_t playbackTimer;
 @end
 @implementation FSProvider
 - (instancetype)init {
@@ -368,10 +375,36 @@ NSDictionary *FSInspectSettings(id settings) { return FSJSON(settings, @"Wallpap
 - (void)dealloc {
     if (_catalogWatch) dispatch_source_cancel(_catalogWatch);
     if (_recoveryTimer) dispatch_source_cancel(_recoveryTimer);
+    if (_playbackTimer) dispatch_source_cancel(_playbackTimer);
+}
+- (void)applyPlaybackToSession:(FSSession *)session environment:(NSDictionary *)environment {
+    NSDictionary *policy = FSActivePlaybackPolicy ?: session.configuration[@"playbackPolicy"];
+    BOOL suspended = FSPlaybackShouldPause(policy, environment, session.displayID, session.mode,
+        [session.request[@"isPreview"] boolValue], session.suspended);
+    if (suspended != session.playbackSuspended) {
+        NSLog(@"Flua playback suspended=%d hostSuspended=%d display=%@ mode=%@ frames=%lu",
+            suspended, session.suspended, session.displayID, session.mode, (unsigned long)session.renderer.frameCount);
+    }
+    session.playbackSuspended = suspended;
+    session.root.speed = suspended ? 0 : 1;
+    if (session.renderer.suspended != suspended) [session.renderer setPlaybackSuspended:suspended];
+}
+- (void)refreshPlayback {
+    NSDictionary *environment = FSPlaybackEnvironment();
+    for (FSSession *session in self.sessions.allValues)
+        [self applyPlaybackToSession:session environment:environment];
+}
+- (void)startPlaybackMonitoring {
+    if (self.playbackTimer) return;
+    __weak FSProvider *host = self;
+    self.playbackTimer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, dispatch_get_main_queue());
+    dispatch_source_set_timer(self.playbackTimer, DISPATCH_TIME_NOW, NSEC_PER_SEC, NSEC_PER_SEC / 5);
+    dispatch_source_set_event_handler(self.playbackTimer, ^{ [host refreshPlayback]; });
+    dispatch_resume(self.playbackTimer);
 }
 - (void)recoverSessions {
     for (FSSession *session in self.sessions.allValues) {
-        if ((!session.needsRecovery && !session.renderer.playbackFailed) || session.suspended) continue;
+        if ((!session.needsRecovery && !session.renderer.playbackFailed) || session.playbackSuspended) continue;
         NSMutableDictionary *configuration = [session.configuration mutableCopy];
         configuration[@"presentation"] = session.mode;
         BOOL alreadyShowingFallback = session.needsRecovery;
@@ -389,8 +422,8 @@ NSDictionary *FSInspectSettings(id settings) { return FSJSON(settings, @"Wallpap
                                 mediaError.localizedDescription ?: @"unknown error");
         }
         if (!renderer) continue;
-        renderer.layer.speed = session.suspended ? 0 : 1;
-        [renderer setPlaybackSuspended:session.suspended];
+        renderer.layer.speed = session.playbackSuspended ? 0 : 1;
+        [renderer setPlaybackSuspended:session.playbackSuspended];
         ((void (*)(id, SEL, id))objc_msgSend)(session.context, NSSelectorFromString(@"setLayer:"), renderer.layer);
         [session.renderer dispose];
         session.renderer = renderer;
@@ -439,6 +472,7 @@ NSDictionary *FSInspectSettings(id settings) { return FSJSON(settings, @"Wallpap
             provider.catalogWatch = nil;
         }
         [provider pushCatalog];
+        [provider refreshPlayback];
         // Atomic saves replace the inode; watch the new catalog with the same file-only grant.
         [provider watchCatalog:url];
     });
@@ -521,6 +555,7 @@ NSDictionary *FSInspectSettings(id settings) { return FSJSON(settings, @"Wallpap
         if (!renderer) { reply(nil,mediaError ?: FSError(@"Cannot create renderer")); return; }
         FSSession *s = FSSession.new;
         s.request = payload;
+        s.displayID = [payload[@"destination"][@"directDisplayID"] isKindOfClass:NSNumber.class] ? payload[@"destination"][@"directDisplayID"] : nil;
         s.configuration = configuration;
         s.fileWrappers = captured.objects[@"files"] ?: @[];
         s.needsRecovery = needsRecovery;
@@ -528,7 +563,7 @@ NSDictionary *FSInspectSettings(id settings) { return FSJSON(settings, @"Wallpap
         s.mode = [payload[@"presentationMode"] allKeys].firstObject ?: @"default";
         s.renderer = renderer;
         s.root = renderer.layer;
-        [renderer setPlaybackSuspended:payload[@"activityState"][@"suspended"] != nil];
+        [self applyPlaybackToSession:s environment:FSPlaybackEnvironment()];
         s.context = ((id (*)(id, SEL, id))objc_msgSend)(NSClassFromString(@"CAContext"),
                                                         NSSelectorFromString(@"remoteContextWithOptions:"), @{});
         if (!s.context) {
@@ -545,9 +580,10 @@ NSDictionary *FSInspectSettings(id settings) { return FSJSON(settings, @"Wallpap
         }
         self.sessions[[self key:ident]] = s;
         [self startRecovery];
-        NSLog(@"Flua acquired locked=%d idle=%d preview=%d context=%u frames=%lu scopedFiles=%lu activeScopes=%lu",
+        [self startPlaybackMonitoring];
+        NSLog(@"Flua acquired locked=%d idle=%d preview=%d context=%u frames=%lu scopedFiles=%lu activeScopes=%lu display=%@",
               [s.mode isEqual:@"locked"], [s.mode isEqual:@"idle"], [payload[@"isPreview"] boolValue], cid, (unsigned long)renderer.frameCount,
-              (unsigned long)renderer.scopedFileCount, (unsigned long)renderer.activeScopeCount);
+              (unsigned long)renderer.scopedFileCount, (unsigned long)renderer.activeScopeCount, s.displayID);
         reply(box, nil);
         // The host can reuse a cached choice after relaunch without requesting settings again.
         if (!FSActiveCatalogURL) {
@@ -576,8 +612,10 @@ NSDictionary *FSInspectSettings(id settings) { return FSJSON(settings, @"Wallpap
     BOOL suspended = p[@"activityState"][@"suspended"] != nil;
     s.suspended = suspended;
     [s.renderer setPresentation:s.mode];
-    s.root.speed = suspended ? 0 : 1;
-    [s.renderer setPlaybackSuspended:suspended];
+    if (p[@"destination"]) {
+        s.displayID = [p[@"destination"][@"directDisplayID"] isKindOfClass:NSNumber.class] ? p[@"destination"][@"directDisplayID"] : nil;
+    }
+    [self applyPlaybackToSession:s environment:FSPlaybackEnvironment()];
     NSLog(@"Flua updated locked=%d idle=%d suspended=%d frames=%lu loops=%ld",
           [s.mode isEqual:@"locked"], [s.mode isEqual:@"idle"], suspended,
           (unsigned long)s.renderer.frameCount, (long)s.renderer.loopCount);
@@ -593,6 +631,10 @@ NSDictionary *FSInspectSettings(id settings) { return FSJSON(settings, @"Wallpap
     self.sessions[[self key:ident]].fileWrappers = @[];
     [self.sessions[[self key:ident]].renderer dispose];
     [self.sessions removeObjectForKey:[self key:ident]];
+    if (self.sessions.count == 0 && self.playbackTimer) {
+        dispatch_source_cancel(self.playbackTimer);
+        self.playbackTimer = nil;
+    }
     reply(nil);
 }
 - (void)snapshotWithId:(id)ident reply:(void (^)(id, NSError *))reply {
@@ -797,6 +839,23 @@ int FSProviderSelfTest(void) {
                         snapshotted =
                             error == nil && [info[@"width"] intValue] == 64 && [info[@"height"] intValue] == 64;
                     }];
+        FSSession *policySession = p.sessions.allValues.firstObject;
+        policySession.request = @{@"isPreview":@NO};
+        policySession.configuration = @{@"playbackPolicy":@{@"pauseOnBattery":@YES}};
+        policySession.suspended = NO;
+        NSDictionary *previousPolicy = FSActivePlaybackPolicy;
+        FSActivePlaybackPolicy = nil;
+        [p applyPlaybackToSession:policySession environment:@{@"onBattery":@YES}];
+        BOOL descriptorPolicyPaused = policySession.playbackSuspended;
+        FSActivePlaybackPolicy = @{@"pauseOnBattery":@NO};
+        [p applyPlaybackToSession:policySession environment:@{@"onBattery":@YES}];
+        BOOL catalogOverridesDescriptor = !policySession.playbackSuspended;
+        policySession.request = @{@"isPreview":@YES};
+        FSActivePlaybackPolicy = @{@"pauseOnBattery":@YES};
+        [p applyPlaybackToSession:policySession environment:@{@"onBattery":@YES}];
+        BOOL previewIgnoresPolicy = !policySession.playbackSuspended;
+        FSActivePlaybackPolicy = previousPolicy;
+        BOOL policyPrecedence = descriptorPolicyPaused && catalogOverridesDescriptor && previewIgnoresPolicy;
         [p invalidateWithId:ident
                       reply:^(NSError *error) {
                           invalidated = error == nil && p.sessions.count == 0;
@@ -815,7 +874,10 @@ int FSProviderSelfTest(void) {
         NSDictionary *libraryOnly = FSBuildSettingsModel(YES);
         BOOL noFixtures = [libraryOnly[@"desktop"][@"groups"][0][@"items"] count] == 0 &&
             FSBox(@"WallpaperSettingsViewModelsXPC", @"WallpaperSettingsViewModels", libraryOnly) != nil;
+        BOOL playbackPolicyOK = FSPlaybackPolicySelfTest();
         NSDictionary *out = @{
+            @"playbackPolicy" : @(playbackPolicyOK),
+            @"policyPrecedence" : @(policyPrecedence),
             @"libraryOnlyCatalog" : @(noFixtures),
             @"settingsCatalog" : @(settingsOK),
             @"acquire" : @(acquired),
@@ -827,7 +889,7 @@ int FSProviderSelfTest(void) {
         NSData *d = [NSJSONSerialization dataWithJSONObject:out options:NSJSONWritingPrettyPrinted error:nil];
         fwrite(d.bytes, 1, d.length, stdout);
         puts("");
-        return acquired && updated && invalidated && snapshotted && settingsOK && noFixtures ? 0 : 2;
+        return acquired && updated && invalidated && snapshotted && settingsOK && noFixtures && playbackPolicyOK && policyPrecedence ? 0 : 2;
     }
 }
 #ifdef FS_SELF_TEST
@@ -1080,6 +1142,28 @@ int main(int argc,const char **argv) { @autoreleasepool {
     [provider updateWithId:ident request:FSBox(@"WallpaperUpdateRequestXPC",@"WallpaperUpdateRequest",modeUpdate) reply:^(NSError *error){}];
     FSPump(0.3);
     BOOL desktopPlays=!tunedSession.renderer.holdsStill && tunedSession.renderer.frameCount > stillFrames;
+    dispatch_source_cancel(provider.playbackTimer);
+    provider.playbackTimer = nil;
+    NSDictionary *savedPolicy = FSActivePlaybackPolicy;
+    FSActivePlaybackPolicy = @{@"pauseOnBattery":@YES};
+    NSMutableDictionary *liveRequest = [tunedSession.request mutableCopy];
+    liveRequest[@"isPreview"] = @NO;
+    tunedSession.request = liveRequest;
+    [provider applyPlaybackToSession:tunedSession environment:@{@"onBattery":@YES}];
+    NSUInteger powerFrames = tunedSession.renderer.frameCount;
+    double powerTime = tunedSession.renderer.playbackTime;
+    FSPump(0.25);
+    BOOL powerPaused = tunedSession.playbackSuspended && tunedSession.renderer.playbackRate == 0 &&
+        tunedSession.renderer.frameCount == powerFrames && fabs(tunedSession.renderer.playbackTime - powerTime) < 0.05;
+    tunedSession.suspended = YES;
+    [provider applyPlaybackToSession:tunedSession environment:@{@"onBattery":@NO}];
+    BOOL hostPauseRetained = tunedSession.playbackSuspended && tunedSession.renderer.playbackRate == 0;
+    tunedSession.suspended = NO;
+    [provider applyPlaybackToSession:tunedSession environment:@{@"onBattery":@NO}];
+    FSPump(0.3);
+    BOOL powerResumed = !tunedSession.playbackSuspended && tunedSession.renderer.playbackRate > 1 &&
+        tunedSession.renderer.frameCount > powerFrames && !tunedSession.renderer.holdsStill;
+    FSActivePlaybackPolicy = savedPolicy;
     [provider invalidateWithId:ident reply:^(NSError *error){}];
     BOOL sourceUntouched=videoBefore.length > 0 && [videoBefore isEqual:[NSData dataWithContentsOfURL:video]];
     NSDictionary *plainImage=@{@"version":@1,@"kind":@"image",@"fileIndex":@0,@"fit":@"fill",@"dimming":@0};
@@ -1114,8 +1198,8 @@ int main(int argc,const char **argv) { @autoreleasepool {
     BOOL fitDiffers=filled && fitted && ![filled[@"checksum"] isEqual:fitted[@"checksum"]] && fitSum < 30 && fillSum > 80;
     [provider invalidateWithId:ident reply:^(NSError *error){}];
     BOOL dimOK=bright.count > 2 && dark.count > 2 && [bright[2] intValue] > 100 && [dark[2] intValue] < [bright[2] intValue];
-    BOOL playbackOK=tunedAcquired && inTrim && moved && rate && suspendedHoldsMode && resumedSameMode && lockedStill && idleUsesLock && idleResumeStill && desktopPlays && sourceUntouched && dimOK && fitDiffers;
-    results[@"playback"]=@{@"ok":@(playbackOK),@"acquired":@(tunedAcquired),@"inTrim":@(inTrim),@"moved":@(moved),@"rate":@(rate),@"times":times,@"suspendedHoldsMode":@(suspendedHoldsMode),@"resumedSameMode":@(resumedSameMode),@"lockedStill":@(lockedStill),@"idleUsesLock":@(idleUsesLock),@"idleResumeStill":@(idleResumeStill),@"desktopPlays":@(desktopPlays),@"sourceUntouched":@(sourceUntouched),@"dimming":@(dimOK),@"fit":@(fitDiffers),@"bright":bright ?: @[],@"dark":dark ?: @[],@"fillSum":@(fillSum),@"fitSum":@(fitSum)};
+    BOOL playbackOK=powerPaused && hostPauseRetained && powerResumed && tunedAcquired && inTrim && moved && rate && suspendedHoldsMode && resumedSameMode && lockedStill && idleUsesLock && idleResumeStill && desktopPlays && sourceUntouched && dimOK && fitDiffers;
+    results[@"playback"]=@{@"ok":@(playbackOK),@"powerPaused":@(powerPaused),@"hostPauseRetained":@(hostPauseRetained),@"powerResumed":@(powerResumed),@"acquired":@(tunedAcquired),@"inTrim":@(inTrim),@"moved":@(moved),@"rate":@(rate),@"times":times,@"suspendedHoldsMode":@(suspendedHoldsMode),@"resumedSameMode":@(resumedSameMode),@"lockedStill":@(lockedStill),@"idleUsesLock":@(idleUsesLock),@"idleResumeStill":@(idleResumeStill),@"desktopPlays":@(desktopPlays),@"sourceUntouched":@(sourceUntouched),@"dimming":@(dimOK),@"fit":@(fitDiffers),@"bright":bright ?: @[],@"dark":dark ?: @[],@"fillSum":@(fillSum),@"fitSum":@(fitSum)};
     creation[@"destination"]=[@{@"size":@[@96,@64],@"scaleFactor":@1,@"colorSpace":creation[@"destination"][@"colorSpace"]} mutableCopy];
     creation[@"presentationMode"]=@{@"default":@{}};
     creation[@"activityState"]=@{@"active":@{}};
@@ -1216,7 +1300,8 @@ int main(int argc,const char **argv) { @autoreleasepool {
     NSURL *catalogRoot=[dir URLByAppendingPathComponent:@"library" isDirectory:YES];
     [[NSFileManager defaultManager] createDirectoryAtURL:[catalogRoot URLByAppendingPathComponent:@"Media"] withIntermediateDirectories:YES attributes:nil error:nil];
     NSURL *catalogFile=[catalogRoot URLByAppendingPathComponent:@"catalog.json"];
-    NSDictionary *catalog=@{@"version":@1,@"items":@[
+    NSDictionary *catalogPolicy = @{@"pauseOnBattery":@NO, @"pauseOnLowPower":@YES, @"lowPowerThreshold":@30, @"pauseOnFullscreen":@NO};
+    NSDictionary *catalog=@{@"version":@1,@"playbackPolicy":catalogPolicy,@"items":@[
         @{@"id":@"escape",@"title":@"Escape",@"kind":@"video",@"file":@"Media/../secret.mov",@"fit":@"fill"},
         @{@"id":@"plain",@"title":@"Plain",@"kind":@"image",@"file":@"Media/plain.png",@"fit":@"fill"},
         @{@"id":@"clip",@"title":@"Clip",@"kind":@"video",@"file":@"Media/clip.mov",@"fit":@"fit",@"speed":@1.5,@"dimming":@0.25,@"trimStart":@0.25,@"trimEnd":@0.75,@"still":@0.5,@"desktop":@"still",@"lockScreen":@"animated"},
@@ -1255,6 +1340,7 @@ int main(int argc,const char **argv) { @autoreleasepool {
         && [listed[1][@"contentBadge"][@"none"] isKindOfClass:NSDictionary.class]
         && [listed[2][@"contentBadge"][@"video"] isKindOfClass:NSDictionary.class]
         && [clipItem[@"contentBadge"][@"video"] isKindOfClass:NSDictionary.class];
+    BOOL policyPublished = [config[@"playbackPolicy"] isEqual:catalogPolicy] && [FSActivePlaybackPolicy isEqual:catalogPolicy];
     NSMutableDictionary *foreign=[catalog mutableCopy];
     foreign[@"root"]=@"/tmp/not-the-library";
     [[NSJSONSerialization dataWithJSONObject:foreign options:0 error:nil] writeToURL:catalogFile atomically:YES];
@@ -1262,6 +1348,7 @@ int main(int argc,const char **argv) { @autoreleasepool {
     foreign[@"version"]=@2; foreign[@"root"]=catalogRoot.path;
     [[NSJSONSerialization dataWithJSONObject:foreign options:0 error:nil] writeToURL:catalogFile atomically:YES];
     BOOL rejectedVersion=[FSSettingsModel()[@"desktop"][@"groups"][0][@"items"] count]==3;
+    BOOL policyRetained = [FSActivePlaybackPolicy isEqual:catalogPolicy];
     // A cached descriptor and host scope remain usable when the current catalog is incompatible or gone.
     BOOL cachedChoice = YES;
     creation[@"configuration"] = FSEncodeConfiguration(@{@"version":@1, @"kind":@"image", @"fileIndex":@0});
@@ -1277,7 +1364,7 @@ int main(int argc,const char **argv) { @autoreleasepool {
     recoveryOK = recoveryOK && cachedChoice;
     results[@"recovery"] = @{@"ok":@(recoveryOK), @"automaticMediaRecovery":@(automaticRecovery), @"activeVideoRecovery":@(activeVideoRecovery), @"cachedChoiceWithoutCatalog":@(cachedChoice), @"unsupportedConfigurationRejected":@(rejectedConfiguration)};
     unsetenv("FLUA_CATALOG");
-    results[@"catalog"]=@{@"ok":@(listedClip && rejectedRoot && rejectedVersion),@"listedClip":@(listedClip),@"rejectedRoot":@(rejectedRoot),@"rejectedVersion":@(rejectedVersion)};
+    results[@"catalog"]=@{@"ok":@(listedClip && rejectedRoot && rejectedVersion && policyPublished && policyRetained),@"policyPublished":@(policyPublished),@"policyRetained":@(policyRetained),@"listedClip":@(listedClip),@"rejectedRoot":@(rejectedRoot),@"rejectedVersion":@(rejectedVersion)};
     results[@"systemActivationPerformed"]=@NO;
     results[@"sandboxAuthorizationVerified"]=@NO;
     NSData *json=[NSJSONSerialization dataWithJSONObject:results options:NSJSONWritingPrettyPrinted error:nil];fwrite(json.bytes,1,json.length,stdout);puts("");

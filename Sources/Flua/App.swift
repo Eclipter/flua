@@ -1122,16 +1122,16 @@ struct SettingsView: View {
                 }.fluaMenuPicker()
                 Toggle("Pause behind fullscreen apps", isOn: $library.state.pauseOnFullscreen).tint(library.accentOverride)
                 Toggle("Pause while running on battery", isOn: $library.state.pauseOnBattery).tint(library.accentOverride)
-                Toggle("Pause in Low Power Mode", isOn: Binding(get: { library.state.pauseOnLowPower ?? false }, set: { library.state.pauseOnLowPower = $0; library.settingChanged() })).tint(library.accentOverride)
+                Toggle("Pause in Low Power Mode or on low battery", isOn: Binding(get: { library.state.pauseOnLowPower ?? false }, set: { library.state.pauseOnLowPower = $0; library.settingChanged() })).tint(library.accentOverride)
                 if library.state.pauseOnLowPower == true {
-                    Picker("Battery pause threshold", selection: Binding(get: { library.state.lowPowerThreshold }, set: { library.state.lowPowerThreshold = $0; library.settingChanged() })) {
+                    Picker("Pause on battery at or below", selection: Binding(get: { library.state.lowPowerThreshold }, set: { library.state.lowPowerThreshold = $0; library.settingChanged() })) {
                         Text("10%").tag(10)
                         Text("20%").tag(20)
                         Text("30%").tag(30)
                         Text("50%").tag(50)
                     }.fluaMenuPicker()
                 }
-                Text("Wallpaper playback also pauses when the display sleeps or the session locks.").font(.caption).foregroundStyle(.secondary)
+                Text("Power preferences apply to Desktop and Lock Screen playback. Fullscreen pause affects only the display showing the fullscreen app.").font(.caption).foregroundStyle(.secondary)
             }
             Section("Playlists") {
                 Toggle("Shuffle playlists", isOn: $library.state.shuffle).tint(library.accentOverride)

@@ -24,6 +24,31 @@ struct Wallpaper: Codable, Identifiable, Equatable {
     var dateAdded: Date?
 }
 
+struct PlaybackPolicy: Codable, Equatable {
+    var pauseOnBattery: Bool
+    var pauseOnLowPower: Bool
+    var lowPowerThreshold: Int
+    var pauseOnFullscreen: Bool
+
+    var clampedForExport: PlaybackPolicy {
+        PlaybackPolicy(pauseOnBattery: pauseOnBattery, pauseOnLowPower: pauseOnLowPower,
+                       lowPowerThreshold: min(100, max(0, lowPowerThreshold)), pauseOnFullscreen: pauseOnFullscreen)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case pauseOnBattery, pauseOnLowPower, lowPowerThreshold, pauseOnFullscreen
+    }
+
+    func encode(to encoder: Encoder) throws {
+        let policy = clampedForExport
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(policy.pauseOnBattery, forKey: .pauseOnBattery)
+        try c.encode(policy.pauseOnLowPower, forKey: .pauseOnLowPower)
+        try c.encode(policy.lowPowerThreshold, forKey: .lowPowerThreshold)
+        try c.encode(policy.pauseOnFullscreen, forKey: .pauseOnFullscreen)
+    }
+}
+
 struct VideoEdit: Codable, Equatable {
     var start: Double = 0
     var end: Double?
@@ -399,9 +424,11 @@ struct ProviderCatalog: Codable, Equatable {
         var still: Double?
         var desktop: WallpaperMode = .animated
         var lockScreen: WallpaperMode = .animated
+        var playbackPolicy: PlaybackPolicy?
     }
     var version = 1
     var items: [Item] = []
+    var playbackPolicy: PlaybackPolicy?
 }
 
 // shortcut: one mode per wallpaper per surface; conflicting displays publish animated until the host takes a choice per display.
@@ -416,14 +443,21 @@ func publishedSurfaceMode(_ surface: WallpaperSurface, wallpaper id: String, in 
 let builtInSceneKinds: Set<String> = ["aurora", "cosmos", "ocean", "ember"]
 
 func providerCatalog(from state: LibraryState) -> ProviderCatalog {
-    ProviderCatalog(items: state.wallpapers.compactMap { wallpaper in
+    let playbackPolicy = PlaybackPolicy(
+        pauseOnBattery: state.pauseOnBattery,
+        pauseOnLowPower: state.pauseOnLowPower ?? false,
+        lowPowerThreshold: state.lowPowerThreshold,
+        pauseOnFullscreen: state.pauseOnFullscreen
+    ).clampedForExport
+    return ProviderCatalog(items: state.wallpapers.compactMap { wallpaper in
         guard !state.isBlocked(wallpaper) else { return nil }
         // The provider draws these scenes, so a choice needs no media file. Still is the desktop thumbnail time.
         if builtInSceneKinds.contains(wallpaper.kind) {
             return .init(id: wallpaper.id, title: wallpaper.title, kind: wallpaper.kind, file: "",
                          fit: wallpaper.fit ? "fit" : "fill", speed: wallpaper.speed, dimming: wallpaper.dimming, still: 7,
                          desktop: publishedSurfaceMode(.desktop, wallpaper: wallpaper.id, in: state),
-                         lockScreen: publishedSurfaceMode(.lockScreen, wallpaper: wallpaper.id, in: state))
+                         lockScreen: publishedSurfaceMode(.lockScreen, wallpaper: wallpaper.id, in: state),
+                         playbackPolicy: playbackPolicy)
         }
         guard wallpaper.kind == "image" || wallpaper.kind == "video",
               let name = wallpaper.file, name == (name as NSString).lastPathComponent, name != ".", name != ".." else { return nil }
@@ -438,8 +472,9 @@ func providerCatalog(from state: LibraryState) -> ProviderCatalog {
                      fit: wallpaper.fit ? "fit" : "fill", speed: wallpaper.speed, dimming: wallpaper.dimming,
                      trimStart: trimStart, trimEnd: trimEnd, still: still,
                      desktop: publishedSurfaceMode(.desktop, wallpaper: wallpaper.id, in: state),
-                     lockScreen: publishedSurfaceMode(.lockScreen, wallpaper: wallpaper.id, in: state))
-    })
+                     lockScreen: publishedSurfaceMode(.lockScreen, wallpaper: wallpaper.id, in: state),
+                     playbackPolicy: playbackPolicy)
+    }, playbackPolicy: playbackPolicy)
 }
 
 final class LibraryDisk {
