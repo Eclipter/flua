@@ -827,18 +827,11 @@ struct SurfacePreview: NSViewRepresentable {
 struct InspectorView: View {
     @StateObject private var ui = ViewState()
     @EnvironmentObject var library: Library
-    @FocusState private var focusedTag: String?
     var body: some View {
-        GeometryReader { geometry in
-            ScrollViewReader { proxy in
-                // Apply the toolbar inset as padding to keep native hit testing aligned with the content.
-                ScrollView { content.padding(.top, geometry.safeAreaInsets.top) }
-                    .ignoresSafeArea(.container, edges: .top)
-                    .onChange(of: focusedTag) { _, tag in
-                        if let tag { proxy.scrollTo(tag, anchor: .center) }
-                    }
-            }
+        GeometryReader { _ in
+            ScrollView { content }
         }
+        .ignoresSafeArea(.container, edges: .top)
         .background(.ultraThinMaterial)
     }
     private var content: some View {
@@ -854,13 +847,16 @@ struct InspectorView: View {
                         trimSection(wallpaper: w, source: source)
                     }
                     setWallpapersSection(w)
-                }.padding(24)
+                }
+                .padding(.horizontal, 24)
+                .padding(.bottom, 24)
                 .onAppear { ui.draftTitle = w.title; ui.draftTags = w.tags; ui.draftCategory = w.metadata?.category ?? "" }
                 .onChange(of: w.id) { _, _ in ui.draftTitle = w.title; ui.draftTags = w.tags; ui.draftCategory = w.metadata?.category ?? "" }
             } else {
-                ContentUnavailableView("Select a wallpaper", systemImage: "sparkles").padding(.top, 100)
+                ContentUnavailableView("Select a wallpaper", systemImage: "sparkles")
             }
         }
+        .padding(.top, 24)
         .textFieldStyle(FluaGlassTextFieldStyle())
         .toggleStyle(.switch)
         .buttonStyle(FluaGlassButtonStyle())
@@ -910,20 +906,6 @@ struct InspectorView: View {
             Picker("Motion intensity", selection: classificationBinding(\.motion, w)) {
                 ForEach(LibraryChoices.motions, id: \.self) { Text($0).tag($0) }
             }.fluaMenuPicker()
-            let tags = normalizedTags(w.tags)
-            Grid(alignment: .leading) {
-                ForEach(Array(stride(from: 0, to: tags.count, by: 3)), id: \.self) { start in
-                    GridRow {
-                        ForEach(tags[start..<min(start + 3, tags.count)], id: \.self) { tag in
-                            Button(tag) { library.filterTag(tag) }
-                                .accessibilityLabel("Filter by " + tag)
-                                .help("Filter library by tag: " + tag)
-                                .frame(maxWidth: .infinity)
-                                .focused($focusedTag, equals: tag).id(tag)
-                        }
-                    }
-                }
-            }
         }
     }
 
@@ -1021,6 +1003,11 @@ struct InspectorView: View {
                     .disabled(library.nativeSetupBusy)
                     .accessibilityLabel("Set Wallpapers")
                     .fluaProminentButton()
+                    .background {
+                        if ProcessInfo.processInfo.arguments.contains("--smoke-test") {
+                            InspectorApplyTarget().allowsHitTesting(false)
+                        }
+                    }
                     .tint(library.accentOverride)
                 }
             }

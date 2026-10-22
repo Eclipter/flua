@@ -46,10 +46,14 @@ enum SmokeRunner {
             "Display Mode: Mirrored", "Display Mode: Per Display", "Configure: Lock Screen", "Mirror all displays",
             "Rendering mode: Animated", "Rendering mode: Still", "Mirror Desktop and Lock Screen",
             "Search", "Category filter", "Color filter", "Motion filter", "Resolution filter", "Aspect filter",
-            "Filter by ambient", "Filter by green", "Filter by nature", "Add favorite", "Wallpaper name", "Tags", "Category",
+            "Add favorite", "Wallpaper name", "Tags", "Category",
             "Color", "Motion intensity",
             "Speed", "Dim", "Previous in playlist", "Next in playlist", "Stop on selected displays", "Create playlist"
         ])
+        let inspectorNames = spokenNames(titled: "Flua Library Audit")
+        if inspectorNames.contains(where: { $0.hasPrefix("Filter by ") }) {
+            missing.append("Inspector must not show duplicate tag buttons")
+        }
         library.query = "no-match"
         library.filterTag("ambient")
         library.blockTags("test")
@@ -684,7 +688,7 @@ enum SmokeRunner {
                 && persistedBlockedTags == ["test"]
             library.unblockTag("test")
             library.filterTag("PORTABLE")
-            results["clickableTag"] = library.section == "all" && library.visible.contains { $0.id == edited.id } && library.filter.tags == ["portable"]
+            results["tagFiltering"] = library.section == "all" && library.visible.contains { $0.id == edited.id } && library.filter.tags == ["portable"]
             library.filter.colors = ["Purple"]
             results["combinedBrowsing"] = library.visible.count == 2
             library.selection = edited.id
@@ -822,7 +826,7 @@ enum SmokeRunner {
                 !window.isVisible || window.alphaValue == 0
             }
             if results["nonPlaybackWindowsHidden"] as? Bool != true { failures.append("nonPlaybackWindowsHidden") }
-            let required = ["fileDrop", "fileDropUndo", "blockedImportRevealed", "importRevealsAdded", "editorCancel", "editorSave", "playlistFileImport", "importUndo", "playlistExistingAdd", "inspectorSceneInteraction", "inspectorVideoInteraction", "explicitSystemAccent", "systemAccentDefault", "accentSelection", "unknownAccentFallback", "systemAccentReset", "importFacts", "rotatedFacts", "missingFacts", "legacyBackfill", "staleEditPreservesFacts", "unknownColorBackfill", "unknownColorRoundTrip", "blockedDiscover", "clickableTag", "combinedBrowsing", "clearFiltersPreservesBlockedTags", "clearFilters", "imageImport", "videoImport", "videoReady", "videoPlaying", "videoLooped", "videoPaused", "videoResumed", "liveAdjustmentPreservesTime", "liveAdjustmentSpeed", "stillHeld", "stillIgnoresResume", "stillPreservesSource", "sceneStillRetained", "desktopStill", "desktopStillSurvivesPause", "playlistPauseStatus", "playlistResumeStatus", "desktopStillPersisted", "desktopStillPreservesSource", "render_image", "render_aurora", "render_cosmos", "render_ocean", "render_ember", "systemWallpaperPreserved", "libraryAssignmentValidated", "nativeDescriptorValidation", "nativeDescriptorValidationRejectsMissing", "nativeCatalogMismatchRejected", "backgroundLaunch", "videoPreviewWindowVisible", "scenePreviewWindowVisible", "scenePreviewReshownWindowVisible", "playlistStart", "playlistNext", "libraryStop", "libraryRoundTrip", "discoverWindow", "windowSnapshot", "videoInformation", "trimmedPlayback", "trimmedExport", "thumbnailExport", "rejectInvalidTrim", "preserveSourceOnExport", "packageRoundTrip", "editorPersistence", "editorWindow", "silentExport"]
+            let required = ["fileDrop", "fileDropUndo", "blockedImportRevealed", "importRevealsAdded", "editorCancel", "editorSave", "playlistFileImport", "importUndo", "playlistExistingAdd", "inspectorSceneInteraction", "inspectorVideoInteraction", "explicitSystemAccent", "systemAccentDefault", "accentSelection", "unknownAccentFallback", "systemAccentReset", "importFacts", "rotatedFacts", "missingFacts", "legacyBackfill", "staleEditPreservesFacts", "unknownColorBackfill", "unknownColorRoundTrip", "blockedDiscover", "tagFiltering", "combinedBrowsing", "clearFiltersPreservesBlockedTags", "clearFilters", "imageImport", "videoImport", "videoReady", "videoPlaying", "videoLooped", "videoPaused", "videoResumed", "liveAdjustmentPreservesTime", "liveAdjustmentSpeed", "stillHeld", "stillIgnoresResume", "stillPreservesSource", "sceneStillRetained", "desktopStill", "desktopStillSurvivesPause", "playlistPauseStatus", "playlistResumeStatus", "desktopStillPersisted", "desktopStillPreservesSource", "render_image", "render_aurora", "render_cosmos", "render_ocean", "render_ember", "systemWallpaperPreserved", "libraryAssignmentValidated", "nativeDescriptorValidation", "nativeDescriptorValidationRejectsMissing", "nativeCatalogMismatchRejected", "backgroundLaunch", "videoPreviewWindowVisible", "scenePreviewWindowVisible", "scenePreviewReshownWindowVisible", "playlistStart", "playlistNext", "libraryStop", "libraryRoundTrip", "discoverWindow", "windowSnapshot", "videoInformation", "trimmedPlayback", "trimmedExport", "thumbnailExport", "rejectInvalidTrim", "preserveSourceOnExport", "packageRoundTrip", "editorPersistence", "editorWindow", "silentExport"]
             for key in required + ["compactWindow"] where results[key] as? Bool != true { failures.append(key) }
             for (key, value) in results where key.hasPrefix("surfaceControls") && value as? Bool != true { failures.append(key) }
         } catch { failures.append(String(reflecting: error)) }
@@ -931,22 +935,22 @@ enum SmokeRunner {
         findInspector(root)
         guard let inspector else { return false }
         var controls: [NSControl] = []
+        var applyTarget: NSView?
         func collect(_ view: NSView) {
             if let control = view as? NSControl { controls.append(control) }
+            if view.identifier?.rawValue == "FluaInspectorApplyTarget" { applyTarget = view }
             for child in view.subviews { collect(child) }
         }
         collect(inspector)
-        let buttons = controls.compactMap({ $0 as? NSButton })
-        // Apply follows the metadata and playback controls; SwiftUI exposes no native button title.
-        guard let button = buttons.last else { return false }
+        guard let button = applyTarget else { return false }
         let slider = controls.compactMap({ $0 as? NSSlider }).first
-        let testControls: [NSControl] = [button] + (slider != nil ? [slider!] : [])
+        let testControls: [NSView] = [button] + (slider != nil ? [slider!] : [])
         for control in testControls {
             control.scrollToVisible(control.bounds)
             await pause(0.1)
             let center = NSPoint(x: control.bounds.midX, y: control.bounds.midY)
             guard let hit = root.hitTest(parent.convert(center, from: control)),
-                  hit === control || hit.isDescendant(of: control) else { return false }
+                  control === button || hit === control || hit.isDescendant(of: control) else { return false }
         }
         button.scrollToVisible(button.bounds)
         await pause(0.1)
@@ -959,10 +963,6 @@ enum SmokeRunner {
         NSApp.postEvent(up, atStart: true)
         window.sendEvent(down)
         await pause(0.5)
-        if library.state.displays.values.allSatisfy({ $0.desktop.wallpaperID != selected.id }) {
-            button.performClick(nil)
-            await pause(0.3)
-        }
         return library.error == nil && !library.state.displays.isEmpty
             && library.state.displays.values.allSatisfy { $0.desktop.wallpaperID == selected.id }
     }
@@ -1102,4 +1102,14 @@ enum SmokeRunner {
         }
         guard writer.status == .completed else { throw writer.error ?? LibraryError.unreadableMedia("video finalize") }
     }
+}
+
+// SwiftUI glass buttons do not expose an NSButton for pointer-based smoke verification.
+struct InspectorApplyTarget: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        view.identifier = NSUserInterfaceItemIdentifier("FluaInspectorApplyTarget")
+        return view
+    }
+    func updateNSView(_ view: NSView, context: Context) {}
 }

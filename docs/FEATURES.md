@@ -32,7 +32,7 @@ Fullscreen policy changes in an already active native fullscreen Space passed wi
 
 ## Library behavior
 
-The right inspector shows the selected wallpaper's title above its live preview, followed by editable details and playback settings.
+The right inspector uses a 24-point top margin and shows the selected wallpaper's title above its live preview, followed by editable details and playback settings. Tags appear only in the editable text field, without duplicate tag buttons.
 
 Global **Add Wallpaper…** accepts multiple files and supported packages without filling the current playlist. File drops use the same importer. Successful imports reset browsing filters, reveal the batch and offer Undo. Clear filters appears when filters or search are active, or sorting differs from Name. It clears filters and search and resets sorting to Name. Undo removes entries from the library and playlists while retaining source and copied media. Added wallpapers with blocked tags remain temporarily visible until the import confirmation is dismissed. Playlist **Add Wallpapers…** offers existing items and **Add Files…**.
 
