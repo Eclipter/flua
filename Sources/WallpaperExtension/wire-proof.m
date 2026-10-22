@@ -71,16 +71,20 @@ static id Box(NSString *name, NSString *key, id value) {
     reply(wrapper ?: self.catalogURL, nil);
 }
 - (void)updateSettingsViewModels:(id)models reply:(void (^)(NSError *))reply {
-    NSArray *items = FSInspectSettings(models)[@"screenSaver"][@"groups"][0][@"items"];
-    NSDictionary *clip = items.count >= 4 ? items[3] : nil;
-    self.refreshed = [clip[@"localizedName"] isEqual:self.expectedTitle ?: @"Clip"] &&
-                     [clip[@"contentBadge"][@"video"] isKindOfClass:NSDictionary.class] &&
-                     [clip[@"choice"][@"id"][@"descriptor"][@"files"] count] == 1;
-    if (!self.refreshed)
-        self.failure = @"Catalog refresh omitted the library video";
-    if (self.pending)
-        dispatch_semaphore_signal(self.pending);
-    reply(nil);
+    // Serialize notifications with the main-thread expectation changes.
+    dispatch_async(dispatch_get_main_queue(), ^{
+        NSArray *items = FSInspectSettings(models)[@"screenSaver"][@"groups"][0][@"items"];
+        NSDictionary *clip = items.count >= 4 ? items[3] : nil;
+        if ([clip[@"localizedName"] isEqual:self.expectedTitle ?: @"Clip"]) {
+            self.refreshed = [clip[@"contentBadge"][@"video"] isKindOfClass:NSDictionary.class] &&
+                             [clip[@"choice"][@"id"][@"descriptor"][@"files"] count] == 1;
+            if (!self.refreshed)
+                self.failure = @"Catalog refresh omitted the library video";
+            if (self.pending)
+                dispatch_semaphore_signal(self.pending);
+        }
+        reply(nil);
+    });
 }
 @end
 @interface Listener : NSObject <NSXPCListenerDelegate>
@@ -231,7 +235,7 @@ int main(void) {
                                     }];
             complete = Wait(pending);
         }
-        BOOL catalogRefresh = NO, atomicRefresh = YES, missingCatalogRecovery = NO;
+        BOOL catalogRefresh = NO, atomicRefresh = YES, missingCatalogRecovery = NO, staleRefreshIgnored = YES;
         if (complete && downloaded) {
             NSURL *root = [NSURL fileURLWithPath:[NSTemporaryDirectory() stringByAppendingPathComponent:[[NSUUID UUID] UUIDString]] isDirectory:YES];
             [[NSFileManager defaultManager] createDirectoryAtURL:root withIntermediateDirectories:YES attributes:nil error:nil];
@@ -247,10 +251,17 @@ int main(void) {
                 catalogHost.expectedTitle = title;
                 catalogHost.refreshed = NO;
                 catalogHost.pending = dispatch_semaphore_create(0);
+                // A previous catalog push can arrive after the next expectation is armed.
+                dispatch_semaphore_t staleReply = dispatch_semaphore_create(0);
+                [catalogHost updateSettingsViewModels:Box(@"WallpaperSettingsViewModelsXPC", @"WallpaperSettingsViewModels", FSSettingsModel())
+                                               reply:^(NSError *error) { dispatch_semaphore_signal(staleReply); }];
+                staleRefreshIgnored = Wait(staleReply) && !catalogHost.refreshed &&
+                    dispatch_semaphore_wait(catalogHost.pending, DISPATCH_TIME_NOW) != 0 && staleRefreshIgnored;
                 NSDictionary *edited = @{@"version":@1, @"items":@[@{@"id":@"clip", @"title":title, @"kind":@"video", @"file":@"Media/clip.mov"}]};
                 [[NSJSONSerialization dataWithJSONObject:edited options:0 error:nil] writeToURL:catalogHost.catalogURL atomically:YES];
                 atomicRefresh = Wait(catalogHost.pending) && catalogHost.refreshed && atomicRefresh;
             }
+            if (!staleRefreshIgnored && failure.length == 0) failure = @"Stale catalog update satisfied a newer expectation";
             if (!atomicRefresh && failure.length == 0) failure = @"Atomic catalog replacement was not refreshed";
             catalogHost.expectedTitle = @"Clip";
             catalogHost.refreshed = NO;
@@ -266,7 +277,7 @@ int main(void) {
         }
         [client invalidate];
         [listener invalidate];
-        BOOL ok = complete && acquired && updated && snapshotted && catalog && invalidated && downloaded && catalogRefresh && atomicRefresh && missingCatalogRecovery;
+        BOOL ok = complete && acquired && updated && snapshotted && catalog && invalidated && downloaded && catalogRefresh && atomicRefresh && missingCatalogRecovery && staleRefreshIgnored;
         if (!complete && failure.length == 0)
             failure = @"Timed out";
         NSDictionary *result = @{
@@ -278,6 +289,7 @@ int main(void) {
             @"downloadStatusRoundtrip" : @(downloaded),
             @"catalogRefresh" : @(catalogRefresh),
             @"atomicCatalogRefresh" : @(atomicRefresh),
+            @"staleCatalogRefreshIgnored" : @(staleRefreshIgnored),
             @"missingCatalogRecovery" : @(missingCatalogRecovery),
             @"invalidateRoundtrip" : @(invalidated),
             @"failure" : failure,
