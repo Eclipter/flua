@@ -9,6 +9,13 @@ import Foundation
         precondition(!NativeWallpaper.available)
         let plugins = NativeWallpaper.pluginPaths(in: "+    local.flua.desktop.wallpaper(0.1)\tUUID\t2026-10-17 17:34:16 +0000\t/tmp/Other.app/Contents/Extensions/FluaWallpaperExtension.appex\nnot a plugin\n")
         precondition(plugins == [URL(fileURLWithPath: "/tmp/Other.app/Contents/Extensions/FluaWallpaperExtension.appex").resolvingSymlinksInPath().path])
+        let desktopSpace = "01A02D9D-E47A-49BD-B318-40AB354F7BE1"
+        let fullscreenSpace = "C14AF1A4-DEF2-D13C-9ADA-DC0C8ACEF575"
+        precondition(NativeWallpaper.spaceIDs(in: [
+            ["Spaces": [["uuid": desktopSpace], ["uuid": fullscreenSpace], ["uuid": desktopSpace], ["uuid": "bad"], ["uuid": 7]]],
+            ["Spaces": [["uuid": "E0A8918C-AC46-4E34-954D-4B17B65FF17E"]]],
+            ["Spaces": "invalid"], ["uuid": "EB62FE8A-A020-4084-BD38-F48844D9C499"]
+        ]) == [desktopSpace, fullscreenSpace, "E0A8918C-AC46-4E34-954D-4B17B65FF17E"].sorted())
         print("PASS: wallpaper-service PID parsing rejects missing, invalid and unsafe process IDs; the test process has no wallpaper extension")
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root.appendingPathComponent("Media"), withIntermediateDirectories: true)
@@ -34,6 +41,8 @@ import Foundation
         let source = root.appendingPathComponent("Media/video.mov")
         let sourceData = Data("source must stay intact".utf8)
         try sourceData.write(to: source)
+        let imageSource = root.appendingPathComponent("Media/image.png")
+        try Data("image source".utf8).write(to: imageSource)
         var item = ProviderCatalog.Item(id: "clip", title: "Clip", kind: "video", file: "Media/video.mov", fit: "fit", speed: 1.5, dimming: 0.2, trimStart: 1, trimEnd: 3, still: 2)
         item.desktop = .still
         item.playbackPolicy = PlaybackPolicy(pauseOnBattery: true, pauseOnLowPower: true,
@@ -49,6 +58,40 @@ import Foundation
         precondition(descriptorPolicy["lowPowerThreshold"] as? Int == 0)
         precondition(descriptorPolicy["pauseOnFullscreen"] as? Bool == false)
         precondition((choice["Files"] as? [[String: String]])?.first?["relative"] == source.resolvingSymlinksInPath().absoluteString)
+        var imageItem = item
+        imageItem.id = "image"
+        imageItem.kind = "image"
+        imageItem.file = "Media/image.png"
+        imageItem.speed = 0.4
+        imageItem.desktop = .animated
+        imageItem.lockScreen = .still
+        let imageChoice = try NativeWallpaperStore.choice(imageItem, root: root, provider: "local.flua.desktop.wallpaper")
+        let paired = try NativeWallpaperStore.pairedChoice(desktop: choice, lockScreen: imageChoice)
+        let pairedConfiguration = try JSONSerialization.jsonObject(with: paired["Configuration"] as! Data) as! [String: Any]
+        let pairedSurfaces = pairedConfiguration["surfaces"] as! [String: [String: Any]]
+        precondition(pairedConfiguration["version"] as? Int == 2)
+        precondition((paired["Files"] as? [[String: String]])?.count == 2)
+        precondition(pairedSurfaces["desktop"]?["kind"] as? String == "video")
+        precondition(pairedSurfaces["desktop"]?["fileIndex"] as? Int == 0)
+        precondition(pairedSurfaces["lockScreen"]?["kind"] as? String == "image")
+        precondition(pairedSurfaces["lockScreen"]?["fileIndex"] as? Int == 1)
+        precondition(NSDictionary(dictionary: pairedConfiguration["playbackPolicy"] as! [String: Any]).isEqual(to: pairedSurfaces["desktop"]!["playbackPolicy"] as! [String: Any]))
+        let sharedPair = try NativeWallpaperStore.pairedChoice(desktop: choice, lockScreen: choice)
+        let sharedConfiguration = try JSONSerialization.jsonObject(with: sharedPair["Configuration"] as! Data) as! [String: Any]
+        let sharedSurfaces = sharedConfiguration["surfaces"] as! [String: [String: Any]]
+        precondition((sharedPair["Files"] as? [[String: String]])?.count == 1)
+        precondition(sharedSurfaces["desktop"]?["fileIndex"] as? Int == 0)
+        precondition(sharedSurfaces["lockScreen"]?["fileIndex"] as? Int == 0)
+        var invalidIndexChoice = choice
+        var invalidIndexConfiguration = configuration
+        invalidIndexConfiguration["fileIndex"] = 9
+        invalidIndexChoice["Configuration"] = try JSONSerialization.data(withJSONObject: invalidIndexConfiguration)
+        do { _ = try NativeWallpaperStore.pairedChoice(desktop: invalidIndexChoice, lockScreen: imageChoice); preconditionFailure("Accepted an invalid file index") }
+        catch is NativeWallpaperError {}
+        var otherProviderChoice = imageChoice
+        otherProviderChoice["Provider"] = "other.provider"
+        do { _ = try NativeWallpaperStore.pairedChoice(desktop: choice, lockScreen: otherProviderChoice); preconditionFailure("Paired different providers") }
+        catch is NativeWallpaperError {}
         let preserved = try Data(contentsOf: source)
         precondition(preserved == sourceData)
         let assignments = ["display": NativeWallpaperStore.Assignment(desktop: choice, lockScreen: choice)]
@@ -160,6 +203,75 @@ import Foundation
         var idleChoice = choice
         idleChoice["Provider"] = "local.flua.idle"
         let applicationAssignments = ["display": NativeWallpaperStore.Assignment(desktop: choice, lockScreen: idleChoice)]
+        func spaceChoiceProvider(_ assignment: Any?, surface: String) -> String? {
+            guard let assignment = assignment as? [String: Any],
+                  let settings = assignment[surface] as? [String: Any],
+                  let content = settings["Content"] as? [String: Any],
+                  let choices = content["Choices"] as? [[String: Any]] else { return nil }
+            return choices.first?["Provider"] as? String
+        }
+        var inheritedOtherDisplay = old
+        replaceChoice(["Provider": "other.desktop"], surface: "Desktop", in: &inheritedOtherDisplay)
+        replaceChoice(["Provider": "other.idle"], surface: "Idle", in: &inheritedOtherDisplay)
+        var sparseSpaceStore = try decoded(original)
+        sparseSpaceStore["Spaces"] = [String: Any]()
+        var sparseDisplays = sparseSpaceStore["Displays"] as! [String: Any]
+        sparseDisplays["other-display"] = inheritedOtherDisplay
+        sparseSpaceStore["Displays"] = sparseDisplays
+        let sparseSpaceSource = try encode(sparseSpaceStore)
+        let seededSpaces = try NativeWallpaperStore.applying(applicationAssignments, mirrored: false,
+            to: sparseSpaceSource, spaceIDs: [desktopSpace, fullscreenSpace])
+        precondition(NativeWallpaperStore.matches(applicationAssignments, mirrored: false, in: seededSpaces))
+        let seededPreservingReplacement = try NativeWallpaperStore.replacing(applicationAssignments, displays: ["display"],
+            provider: "local.flua.desktop.wallpaper", mirrored: false, in: sparseSpaceSource, baseline: nil,
+            clearingUnassigned: false, spaceIDs: [desktopSpace, fullscreenSpace])
+        precondition(NativeWallpaperStore.matches(applicationAssignments, mirrored: false, in: seededPreservingReplacement))
+        let seededClearingReplacement = try NativeWallpaperStore.replacing(applicationAssignments, displays: ["display"],
+            provider: "local.flua.desktop.wallpaper", mirrored: false, in: sparseSpaceSource, baseline: nil,
+            clearingUnassigned: true, spaceIDs: [desktopSpace, fullscreenSpace])
+        precondition(NativeWallpaperStore.matches(applicationAssignments, mirrored: false, in: seededClearingReplacement))
+        let seededSpaceStore = try decoded(seededSpaces)
+        let seededSpaceValues = seededSpaceStore["Spaces"] as! [String: Any]
+        precondition(Set(seededSpaceValues.keys) == Set([desktopSpace, fullscreenSpace]))
+        for id in [desktopSpace, fullscreenSpace] {
+            let space = seededSpaceValues[id] as! [String: Any]
+            precondition(NSDictionary(dictionary: space["Default"] as! [String: Any]).isEqual(to: old))
+            let overrides = space["Displays"] as! [String: Any]
+            precondition(spaceChoiceProvider(overrides["display"], surface: "Desktop") == "local.flua.desktop.wallpaper")
+            precondition(spaceChoiceProvider(overrides["display"], surface: "Idle") == "local.flua.idle")
+            precondition(NSDictionary(dictionary: overrides["other-display"] as! [String: Any]).isEqual(to: inheritedOtherDisplay))
+        }
+        var existingSpaceStore = sparseSpaceStore
+        existingSpaceStore["Spaces"] = ["existing-space": ["Default": old, "Displays": sparseDisplays,
+            "Keep": "existing space metadata"]]
+        let existingSpaceResult = try NativeWallpaperStore.applying(applicationAssignments, mirrored: false,
+            to: encode(existingSpaceStore), spaceIDs: ["existing-space", desktopSpace])
+        let existingSpaceValues = try decoded(existingSpaceResult)["Spaces"] as! [String: Any]
+        let existingSpace = existingSpaceValues["existing-space"] as! [String: Any]
+        precondition(existingSpace["Keep"] as? String == "existing space metadata")
+        precondition(NSDictionary(dictionary: existingSpace["Default"] as! [String: Any]).isEqual(to: old))
+        precondition(existingSpaceValues[desktopSpace] != nil)
+        let mirroredSeeded = try NativeWallpaperStore.applying(applicationAssignments, mirrored: true,
+            to: sparseSpaceSource, spaceIDs: [desktopSpace, fullscreenSpace])
+        precondition(NativeWallpaperStore.matches(applicationAssignments, mirrored: true, in: mirroredSeeded))
+        let mirroredSeededSpaces = try decoded(mirroredSeeded)["Spaces"] as! [String: Any]
+        for id in [desktopSpace, fullscreenSpace] {
+            let space = mirroredSeededSpaces[id] as! [String: Any]
+            precondition(spaceChoiceProvider(space["Default"], surface: "Desktop") == "local.flua.desktop.wallpaper")
+            precondition(spaceChoiceProvider(space["Default"], surface: "Idle") == "local.flua.idle")
+        }
+        var incompleteSeededStore = try decoded(seededSpaces)
+        var incompleteSeededSpaces = incompleteSeededStore["Spaces"] as! [String: Any]
+        var incompleteSeededSpace = incompleteSeededSpaces[fullscreenSpace] as! [String: Any]
+        var incompleteOverrides = incompleteSeededSpace["Displays"] as! [String: Any]
+        var incompleteTarget = incompleteOverrides["display"] as! [String: Any]
+        incompleteTarget.removeValue(forKey: "Idle")
+        incompleteOverrides["display"] = incompleteTarget
+        incompleteSeededSpace["Displays"] = incompleteOverrides
+        incompleteSeededSpaces[fullscreenSpace] = incompleteSeededSpace
+        incompleteSeededStore["Spaces"] = incompleteSeededSpaces
+        let incompleteSeededData = try encode(incompleteSeededStore)
+        precondition(!NativeWallpaperStore.matches(applicationAssignments, mirrored: false, in: incompleteSeededData))
         var applicationDefault = old
         for surface in ["Desktop", "Idle"] {
             var settings = applicationDefault[surface] as! [String: Any]
@@ -182,6 +294,154 @@ import Foundation
         }
         applicationBase["Spaces"] = applicationSpaces
         applicationBase["Displays"] = ["display": old, "untargeted": old]
+
+        func existingFluaChoice(_ label: String) throws -> [String: Any] {
+            var value = choice
+            value["Provider"] = "local.flua.desktop.wallpaper"
+            var configuration = try JSONSerialization.jsonObject(with: value["Configuration"] as! Data) as! [String: Any]
+            configuration["regressionChoice"] = label
+            value["Configuration"] = try JSONSerialization.data(withJSONObject: configuration, options: [.sortedKeys])
+            return value
+        }
+        let existingDesktopChoice = try existingFluaChoice("existing.desktop")
+        let existingIdleChoice = try existingFluaChoice("existing.idle")
+        var replacementDesktopChoice = choice
+        replacementDesktopChoice["Provider"] = "replacement.desktop"
+        var replacementIdleChoice = choice
+        replacementIdleChoice["Provider"] = "replacement.idle"
+        let partialAssignments = [
+            "A": NativeWallpaperStore.Assignment(desktop: existingDesktopChoice, lockScreen: existingIdleChoice),
+            "B": NativeWallpaperStore.Assignment(desktop: existingIdleChoice, lockScreen: existingDesktopChoice)
+        ]
+        let surfacePreservationStore: [String: Any] = [
+            "SystemDefault": applicationDefault,
+            "AllSpacesAndDisplays": "$null",
+            "Displays": ["A": old, "B": old, "untargeted": old],
+            "Spaces": [
+                "space-2": ["Default": applicationDefault, "Displays": ["A": old, "B": old, "untargeted": old]],
+                "space-3": ["Default": applicationDefault, "Displays": ["A": old, "B": old, "untargeted": old]]
+            ]
+        ]
+        let surfacePreservationApplied = try NativeWallpaperStore.applying(partialAssignments, mirrored: false, to: encode(surfacePreservationStore))
+        func provider(_ assignment: Any?, surface: String) -> String? {
+            guard let assignment = assignment as? [String: Any],
+                  let settings = assignment[surface] as? [String: Any],
+                  let content = settings["Content"] as? [String: Any],
+                  let choices = content["Choices"] as? [[String: Any]] else { return nil }
+            guard let choice = choices.first, let provider = choice["Provider"] as? String else { return nil }
+            if provider != "local.flua.desktop.wallpaper" { return provider }
+            guard let configuration = choice["Configuration"] as? Data,
+                  let value = try? JSONSerialization.jsonObject(with: configuration) as? [String: Any] else { return provider }
+            return value["regressionChoice"] as? String ?? provider
+        }
+        func assertPartialReplacement(_ data: Data, changedSurface: String, replacement: String) throws {
+            let value = try decoded(data)
+            let systemDefault = value["SystemDefault"] as! [String: Any]
+            precondition(NSDictionary(dictionary: systemDefault).isEqual(to: applicationDefault))
+            precondition(value["AllSpacesAndDisplays"] as? String == "$null")
+            let displays = value["Displays"] as! [String: Any]
+            let expectedA = changedSurface == "Desktop" ? replacement : "existing.desktop"
+            let expectedIdleA = changedSurface == "Idle" ? replacement : "existing.idle"
+            precondition(provider(displays["A"], surface: "Desktop") == expectedA)
+            precondition(provider(displays["A"], surface: "Idle") == expectedIdleA)
+            precondition(provider(displays["B"], surface: "Desktop") == "existing.idle")
+            precondition(provider(displays["B"], surface: "Idle") == "existing.desktop")
+            precondition(NSDictionary(dictionary: displays["untargeted"] as! [String: Any]).isEqual(to: old))
+            let spaces = value["Spaces"] as! [String: Any]
+            for id in ["space-2", "space-3"] {
+                let space = spaces[id] as! [String: Any]
+                precondition(NSDictionary(dictionary: space["Default"] as! [String: Any]).isEqual(to: applicationDefault))
+                let overrides = space["Displays"] as! [String: Any]
+                precondition(provider(overrides["A"], surface: "Desktop") == expectedA)
+                precondition(provider(overrides["A"], surface: "Idle") == expectedIdleA)
+                precondition(provider(overrides["B"], surface: "Desktop") == "existing.idle")
+                precondition(provider(overrides["B"], surface: "Idle") == "existing.desktop")
+                precondition(NSDictionary(dictionary: overrides["untargeted"] as! [String: Any]).isEqual(to: old))
+            }
+        }
+        let desktopOnlyReplacement = try NativeWallpaperStore.replacing(
+            ["A": NativeWallpaperStore.Assignment(desktop: replacementDesktopChoice)], displays: ["A"],
+            provider: "local.flua.desktop.wallpaper", mirrored: false, in: surfacePreservationApplied, baseline: nil,
+            clearingUnassigned: false)
+        try assertPartialReplacement(desktopOnlyReplacement, changedSurface: "Desktop", replacement: "replacement.desktop")
+        let clearingReplacement = try NativeWallpaperStore.replacing(
+            ["A": NativeWallpaperStore.Assignment(desktop: replacementDesktopChoice)], displays: ["A"],
+            provider: "local.flua.desktop.wallpaper", mirrored: false, in: surfacePreservationApplied, baseline: nil,
+            clearingUnassigned: true)
+        let clearedIdle = try decoded(clearingReplacement)
+        let clearedDisplayA = (clearedIdle["Displays"] as! [String: Any])["A"]
+        precondition(isDefaultSurface((clearedDisplayA as? [String: Any])?["Idle"]))
+        let lockScreenOnlyReplacement = try NativeWallpaperStore.replacing(
+            ["A": NativeWallpaperStore.Assignment(lockScreen: replacementIdleChoice)], displays: ["A"],
+            provider: "local.flua.desktop.wallpaper", mirrored: false, in: surfacePreservationApplied, baseline: nil,
+            clearingUnassigned: false)
+        try assertPartialReplacement(lockScreenOnlyReplacement, changedSurface: "Idle", replacement: "replacement.idle")
+
+        let mirroredExisting = NativeWallpaperStore.Assignment(desktop: existingDesktopChoice, lockScreen: existingIdleChoice)
+        let mirroredPartialApplied = try NativeWallpaperStore.applying(["A": mirroredExisting, "B": mirroredExisting],
+            mirrored: true, to: encode(surfacePreservationStore))
+        let mirroredPartialReplacement = try NativeWallpaperStore.replacing([
+            "A": NativeWallpaperStore.Assignment(desktop: replacementDesktopChoice),
+            "B": NativeWallpaperStore.Assignment(desktop: replacementDesktopChoice)
+        ], displays: ["A", "B"], provider: "local.flua.desktop.wallpaper", mirrored: true,
+            in: mirroredPartialApplied, baseline: nil, clearingUnassigned: false)
+        let mirroredPartialValue = try decoded(mirroredPartialReplacement)
+        for key in ["SystemDefault", "AllSpacesAndDisplays"] {
+            let defaults = mirroredPartialValue[key] as! [String: Any]
+            precondition(provider(defaults, surface: "Desktop") == "replacement.desktop")
+            precondition(provider(defaults, surface: "Idle") == "existing.idle")
+        }
+        let mirroredDisplays = mirroredPartialValue["Displays"] as! [String: Any]
+        for id in ["A", "B"] {
+            precondition(provider(mirroredDisplays[id], surface: "Desktop") == "replacement.desktop")
+            precondition(provider(mirroredDisplays[id], surface: "Idle") == "existing.idle")
+        }
+        precondition(NSDictionary(dictionary: mirroredDisplays["untargeted"] as! [String: Any]).isEqual(to: old))
+        let mirroredSpaces = mirroredPartialValue["Spaces"] as! [String: Any]
+        for id in ["space-2", "space-3"] {
+            let space = mirroredSpaces[id] as! [String: Any]
+            for key in ["Default"] {
+                precondition(provider(space[key], surface: "Desktop") == "replacement.desktop")
+                precondition(provider(space[key], surface: "Idle") == "existing.idle")
+            }
+            let overrides = space["Displays"] as! [String: Any]
+            for display in ["A", "B"] {
+                precondition(provider(overrides[display], surface: "Desktop") == "replacement.desktop")
+                precondition(provider(overrides[display], surface: "Idle") == "existing.idle")
+            }
+            precondition(NSDictionary(dictionary: overrides["untargeted"] as! [String: Any]).isEqual(to: old))
+        }
+
+        var scopedState = LibraryState.initial
+        scopedState.assign("aurora", display: "A", surface: .desktop)
+        scopedState.setMode(.still, display: "A", surface: .desktop)
+        scopedState.assign("ocean", display: "A", surface: .lockScreen)
+        let desktopScoped = try NativeWallpaperStore.assignments(from: scopedState, displays: ["A"], root: root,
+            provider: "local.flua.desktop.wallpaper", surface: .desktop)["A"]!
+        let lockScreenScoped = try NativeWallpaperStore.assignments(from: scopedState, displays: ["A"], root: root,
+            provider: "local.flua.desktop.wallpaper", surface: .lockScreen)["A"]!
+        precondition(desktopScoped.desktop != nil && desktopScoped.lockScreen != nil)
+        precondition(lockScreenScoped.desktop != nil && lockScreenScoped.lockScreen != nil)
+        precondition(NSDictionary(dictionary: desktopScoped.desktop!).isEqual(to: desktopScoped.lockScreen!))
+        precondition(NSDictionary(dictionary: lockScreenScoped.desktop!).isEqual(to: lockScreenScoped.lockScreen!))
+        scopedState.setSurfacesLinked(true, display: "A")
+        let linkedDesktopScoped = try NativeWallpaperStore.assignments(from: scopedState, displays: ["A"], root: root,
+            provider: "local.flua.desktop.wallpaper", surface: .desktop)["A"]!
+        let linkedLockScreenScoped = try NativeWallpaperStore.assignments(from: scopedState, displays: ["A"], root: root,
+            provider: "local.flua.desktop.wallpaper", surface: .lockScreen)["A"]!
+        precondition(linkedDesktopScoped.desktop != nil && linkedDesktopScoped.lockScreen != nil)
+        precondition(linkedLockScreenScoped.desktop != nil && linkedLockScreenScoped.lockScreen != nil)
+        precondition(NSDictionary(dictionary: linkedDesktopScoped.desktop!).isEqual(to: linkedDesktopScoped.lockScreen!))
+        precondition(NSDictionary(dictionary: linkedLockScreenScoped.desktop!).isEqual(to: linkedLockScreenScoped.lockScreen!))
+        var desktopOnlyState = LibraryState.initial
+        desktopOnlyState.assign("aurora", display: "A")
+        let desktopOnlyScoped = try NativeWallpaperStore.assignments(from: desktopOnlyState, displays: ["A"], root: root,
+            provider: "local.flua.desktop.wallpaper", surface: .desktop)["A"]!
+        let desktopOnlyConfiguration = try JSONSerialization.jsonObject(with: desktopOnlyScoped.desktop!["Configuration"] as! Data) as! [String: Any]
+        precondition(desktopOnlyConfiguration["version"] as? Int == 1)
+        precondition(desktopOnlyScoped.lockScreen == nil)
+        print("PASS: surface-scoped native Apply preserves untargeted choices, defaults and other displays across Spaces")
+
         let applicationExpected = try NativeWallpaperStore.applying(applicationAssignments, mirrored: false,
             to: encode(applicationBase), now: Date(timeIntervalSince1970: 100))
         func propagated(_ surfaces: [String], systemDefault: Bool, spaceIDs: [String]) throws -> Data {
@@ -472,6 +732,46 @@ import Foundation
         precondition(refreshedConfig["speed"] as? Double == 0.75 && refreshedConfig["dimming"] as? Double == 0.6)
         precondition(refreshedConfig["still"] as? Double == 1.25 && refreshedConfig["trim"] == nil)
         precondition(refreshedConfig["modes"] as? [String: String] == configuration["modes"] as? [String: String])
+        var richPair = paired
+        var richPairConfiguration = pairedConfiguration
+        var richPairSurfaces = pairedSurfaces
+        var richDesktop = richPairSurfaces["desktop"]!
+        richDesktop["futureSetting"] = "keep desktop metadata"
+        richPairSurfaces["desktop"] = richDesktop
+        var richLockScreen = richPairSurfaces["lockScreen"]!
+        richLockScreen["futureSetting"] = "keep lock metadata"
+        richPairSurfaces["lockScreen"] = richLockScreen
+        richPairConfiguration["surfaces"] = richPairSurfaces
+        richPairConfiguration["futurePairSetting"] = "keep pair metadata"
+        richPair["Configuration"] = try JSONSerialization.data(withJSONObject: richPairConfiguration, options: [.sortedKeys])
+        let pairStore = try NativeWallpaperStore.applying(
+            ["display": NativeWallpaperStore.Assignment(desktop: richPair, lockScreen: richPair)], mirrored: false, to: original)
+        let refreshedPairStore = try NativeWallpaperStore.refreshing(replacement, provider: "local.flua.desktop.wallpaper", in: pairStore)
+        let refreshedPairValue = try PropertyListSerialization.propertyList(from: refreshedPairStore, format: nil) as! [String: Any]
+        let refreshedPairAssignment = (refreshedPairValue["Displays"] as! [String: Any])["display"] as! [String: Any]
+        let refreshedPairChoice = (((refreshedPairAssignment["Desktop"] as! [String: Any])["Content"] as! [String: Any])["Choices"] as! [[String: Any]])[0]
+        let refreshedPairConfig = try JSONSerialization.jsonObject(with: refreshedPairChoice["Configuration"] as! Data) as! [String: Any]
+        let refreshedPairSurfaces = refreshedPairConfig["surfaces"] as! [String: [String: Any]]
+        precondition(refreshedPairConfig["futurePairSetting"] as? String == "keep pair metadata")
+        precondition(refreshedPairSurfaces["desktop"]?["speed"] as? Double == 0.75)
+        precondition(refreshedPairSurfaces["desktop"]?["fileIndex"] as? Int == 0)
+        precondition(refreshedPairSurfaces["desktop"]?["modes"] as? [String: String] == ["desktop": "still", "lockScreen": "animated"])
+        precondition(refreshedPairSurfaces["desktop"]?["futureSetting"] as? String == "keep desktop metadata")
+        precondition(NSDictionary(dictionary: refreshedPairSurfaces["lockScreen"]!).isEqual(to: richLockScreen))
+        var updatedImageItem = imageItem
+        updatedImageItem.speed = 0.9
+        let updatedImageChoice = try NativeWallpaperStore.choice(updatedImageItem, root: root, provider: "local.flua.desktop.wallpaper")
+        let refreshedLockPairStore = try NativeWallpaperStore.refreshing(updatedImageChoice, provider: "local.flua.desktop.wallpaper", in: refreshedPairStore)
+        let refreshedLockPairValue = try PropertyListSerialization.propertyList(from: refreshedLockPairStore, format: nil) as! [String: Any]
+        let refreshedLockPairAssignment = (refreshedLockPairValue["Displays"] as! [String: Any])["display"] as! [String: Any]
+        let refreshedLockPairChoice = (((refreshedLockPairAssignment["Desktop"] as! [String: Any])["Content"] as! [String: Any])["Choices"] as! [[String: Any]])[0]
+        let refreshedLockPairConfig = try JSONSerialization.jsonObject(with: refreshedLockPairChoice["Configuration"] as! Data) as! [String: Any]
+        let refreshedLockPairSurfaces = refreshedLockPairConfig["surfaces"] as! [String: [String: Any]]
+        precondition(refreshedLockPairSurfaces["desktop"]?["speed"] as? Double == 0.75)
+        precondition(refreshedLockPairSurfaces["lockScreen"]?["speed"] as? Double == 0.9)
+        precondition(refreshedLockPairSurfaces["lockScreen"]?["fileIndex"] as? Int == 1)
+        precondition(refreshedLockPairSurfaces["lockScreen"]?["modes"] as? [String: String] == ["desktop": "animated", "lockScreen": "still"])
+        precondition(refreshedLockPairSurfaces["lockScreen"]?["futureSetting"] as? String == "keep lock metadata")
         let unchanged = try NativeWallpaperStore.refreshing(replacement, provider: "local.flua.desktop.wallpaper", in: refreshed)
         precondition(unchanged == refreshed)
         let unrelated = try NativeWallpaperStore.refreshing(replacement, provider: "another-provider", in: updated)
@@ -556,10 +856,31 @@ import Foundation
         }
         let desktopConfig = try config(resolved["A"]!.desktop)
         let lockConfig = try config(resolved["A"]!.lockScreen)
-        precondition(desktopConfig["kind"] as? String == "aurora")
-        precondition(desktopConfig["modes"] as? [String: String] == ["desktop": "still", "lockScreen": "still"])
-        precondition(lockConfig["kind"] as? String == "ocean")
+        precondition(desktopConfig["version"] as? Int == 2)
+        let resolvedSurfaces = desktopConfig["surfaces"] as! [String: [String: Any]]
+        precondition(resolvedSurfaces["desktop"]?["kind"] as? String == "aurora")
+        precondition(resolvedSurfaces["desktop"]?["modes"] as? [String: String] == ["desktop": "still", "lockScreen": "still"])
+        precondition(resolvedSurfaces["lockScreen"]?["kind"] as? String == "ocean")
+        precondition(NSDictionary(dictionary: desktopConfig).isEqual(to: lockConfig))
         precondition(NSDictionary(dictionary: resolved["B"]!.desktop!).isEqual(to: resolved["B"]!.lockScreen!))
+        var mediaState = LibraryState.initial
+        mediaState.wallpapers.append(Wallpaper(id: "video-choice", title: "Video", kind: "video", file: "video.mov"))
+        mediaState.wallpapers.append(Wallpaper(id: "image-choice", title: "Image", kind: "image", file: "image.png"))
+        mediaState.assign("video-choice", display: "A")
+        mediaState.setMode(.still, display: "A", surface: .desktop)
+        mediaState.assign("image-choice", display: "A", surface: .lockScreen)
+        mediaState.assign("image-choice", display: "B")
+        mediaState.setSurfacesLinked(true, display: "B")
+        let mediaAssignments = try NativeWallpaperStore.assignments(from: mediaState, displays: ["A", "B"], root: root, provider: "test")
+        let mediaA = try config(mediaAssignments["A"]!.desktop)
+        let mediaB = try config(mediaAssignments["B"]!.desktop)
+        let mediaASurfaces = mediaA["surfaces"] as! [String: [String: Any]]
+        let mediaBSurfaces = mediaB["surfaces"] as! [String: [String: Any]]
+        precondition(mediaASurfaces["desktop"]?["kind"] as? String == "video")
+        precondition(mediaASurfaces["desktop"]?["modes"] as? [String: String] == ["desktop": "still", "lockScreen": "still"])
+        precondition(mediaASurfaces["lockScreen"]?["kind"] as? String == "image")
+        precondition(mediaBSurfaces["desktop"]?["kind"] as? String == "image")
+        precondition(NSDictionary(dictionary: mediaAssignments["B"]!.desktop!).isEqual(to: mediaAssignments["B"]!.lockScreen!))
         let perDisplay = try NativeWallpaperStore.applying(resolved, mirrored: false, to: original)
         precondition(NativeWallpaperStore.matches(resolved, mirrored: false, in: perDisplay))
         let perStore = try PropertyListSerialization.propertyList(from: perDisplay, format: nil) as! [String: Any]

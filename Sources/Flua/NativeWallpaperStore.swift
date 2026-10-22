@@ -63,7 +63,7 @@ enum NativeWallpaperStore {
         var lockScreen: [String: Any]?
     }
 
-    static func assignments(from state: LibraryState, displays: [String], root: URL, provider: String) throws -> [String: Assignment] {
+    static func assignments(from state: LibraryState, displays: [String], root: URL, provider: String, surface: WallpaperSurface? = nil) throws -> [String: Assignment] {
         let catalog = providerCatalog(from: state)
         var result: [String: Assignment] = [:]
         for display in displays {
@@ -77,14 +77,49 @@ enum NativeWallpaperStore {
                 item.lockScreen = selection.mode
                 return try choice(item, root: root, provider: provider)
             }
-            let assignment = try Assignment(desktop: resolve(saved.desktop), lockScreen: resolve(saved.lockScreen))
+            let desktop = try resolve(saved.desktop)
+            let lockScreen = try resolve(saved.lockScreen)
+            let assignment: Assignment
+            // macOS reuses Desktop sessions on lock, so each session needs both sources.
+            if let desktop, let lockScreen {
+                let paired = try pairedChoice(desktop: desktop, lockScreen: lockScreen)
+                assignment = Assignment(desktop: paired, lockScreen: paired)
+            } else {
+                assignment = Assignment(desktop: surface == .lockScreen ? nil : desktop,
+                                        lockScreen: surface == .desktop ? nil : lockScreen)
+            }
             if assignment.desktop != nil || assignment.lockScreen != nil { result[display] = assignment }
         }
         guard !result.isEmpty else { throw NativeWallpaperError("Save a wallpaper choice for the targeted displays first.") }
         return result
     }
 
-    static func applying(_ assignments: [String: Assignment], mirrored: Bool, to data: Data, now: Date = Date()) throws -> Data {
+    static func pairedChoice(desktop: [String: Any], lockScreen: [String: Any]) throws -> [String: Any] {
+        guard let provider = desktop["Provider"] as? String, lockScreen["Provider"] as? String == provider else { throw unsupported() }
+        var files: [[String: String]] = []
+        func configuration(_ choice: [String: Any]) throws -> [String: Any] {
+            guard let data = choice["Configuration"] as? Data,
+                  var value = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  value["version"] as? Int == 1,
+                  let sourceFiles = choice["Files"] as? [[String: String]] else { throw unsupported() }
+            if let index = value["fileIndex"] as? Int {
+                guard sourceFiles.indices.contains(index) else { throw unsupported() }
+                let file = sourceFiles[index]
+                if !files.contains(file) { files.append(file) }
+                value["fileIndex"] = files.firstIndex(of: file)!
+            }
+            return value
+        }
+        let desktopConfiguration = try configuration(desktop)
+        let lockConfiguration = try configuration(lockScreen)
+        var paired: [String: Any] = ["version": 2, "surfaces": ["desktop": desktopConfiguration, "lockScreen": lockConfiguration]]
+        paired["playbackPolicy"] = desktopConfiguration["playbackPolicy"]
+        return ["Provider": provider, "Files": files,
+                "Configuration": try JSONSerialization.data(withJSONObject: paired, options: [.sortedKeys])]
+    }
+
+    static func applying(_ assignments: [String: Assignment], mirrored: Bool, to data: Data,
+                         spaceIDs: [String] = [], now: Date = Date()) throws -> Data {
         var store = try decode(data)
         guard let systemDefault = store["SystemDefault"] as? [String: Any],
               (store["AllSpacesAndDisplays"] == nil || store["AllSpacesAndDisplays"] as? String == "$null" || store["AllSpacesAndDisplays"] is [String: Any]),
@@ -125,6 +160,10 @@ enum NativeWallpaperStore {
         let fallback = global.isEmpty ? systemDefault : global
         guard let fallbackType = fallback["Type"] as? String,
               ["individual", "linked", "desktop", "idle"].contains(fallbackType) else { throw unsupported() }
+        let inheritedDisplays = displays
+        for id in spaceIDs where spaces[id] == nil {
+            spaces[id] = ["Default": fallback, "Displays": inheritedDisplays]
+        }
         // Resolve inheritance before writing overrides so untargeted displays keep their choices.
         for (id, assignment) in assignments {
             guard displays[id] == nil || displays[id] is [String: Any] else { throw unsupported() }
@@ -158,11 +197,16 @@ enum NativeWallpaperStore {
     }
 
     static func replacing(_ assignments: [String: Assignment], displays: [String], provider: String,
-                         mirrored: Bool, in data: Data, baseline: Data?) throws -> Data {
+                         mirrored: Bool, in data: Data, baseline: Data?, clearingUnassigned: Bool = true,
+                         spaceIDs: [String] = []) throws -> Data {
+        if !clearingUnassigned {
+            guard !assignments.isEmpty else { return data }
+            return try applying(assignments, mirrored: mirrored, to: data, spaceIDs: spaceIDs)
+        }
         let restored = try stopping(displays: displays, provider: provider, in: data, baseline: baseline,
                                     mirrored: mirrored)
         guard !assignments.isEmpty else { return restored }
-        return try applying(assignments, mirrored: mirrored, to: restored)
+        return try applying(assignments, mirrored: mirrored, to: restored, spaceIDs: spaceIDs)
     }
 
     static func matches(_ assignments: [String: Assignment], mirrored: Bool, in data: Data) -> Bool {
@@ -357,6 +401,35 @@ enum NativeWallpaperStore {
         func refresh(_ value: Any) throws -> Any {
             if let values = value as? [Any] { return try values.map(refresh) }
             guard var dictionary = value as? [String: Any] else { return value }
+            if dictionary["Provider"] as? String == provider,
+               let oldData = dictionary["Configuration"] as? Data,
+               var old = try? JSONSerialization.jsonObject(with: oldData) as? [String: Any],
+               old["version"] as? Int == 2,
+               var surfaces = old["surfaces"] as? [String: [String: Any]],
+               let files = dictionary["Files"] as? [[String: String]],
+               let replacementFiles = replacement["Files"] as? [[String: String]] {
+                var changed = false
+                for key in ["desktop", "lockScreen"] {
+                    guard var configuration = surfaces[key], configuration["kind"] as? String == updated["kind"] as? String else { continue }
+                    let sourceFiles: [[String: String]]
+                    if let index = configuration["fileIndex"] as? Int {
+                        guard files.indices.contains(index) else { throw unsupported() }
+                        sourceFiles = [files[index]]
+                    } else { sourceFiles = [] }
+                    guard sourceFiles == replacementFiles else { continue }
+                    let previous = configuration
+                    for field in ["fit", "speed", "dimming", "trim", "still"] { configuration[field] = updated[field] }
+                    if !NSDictionary(dictionary: previous).isEqual(to: configuration) {
+                        surfaces[key] = configuration
+                        changed = true
+                    }
+                }
+                if changed {
+                    old["surfaces"] = surfaces
+                    dictionary["Configuration"] = try JSONSerialization.data(withJSONObject: old, options: [.sortedKeys])
+                }
+                return dictionary
+            }
             if dictionary["Provider"] as? String == provider,
                let oldData = dictionary["Configuration"] as? Data,
                let old = try? JSONSerialization.jsonObject(with: oldData) as? [String: Any],

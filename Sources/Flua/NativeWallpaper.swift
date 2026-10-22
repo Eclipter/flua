@@ -26,7 +26,7 @@ enum NativeWallpaper {
     }
     static var explanation: String {
         if !available { return "Wallpaper playback needs the wallpaper extension inside Flua.app on macOS 27." }
-        return "Apply the saved Desktop and Lock Screen choices and modes for the targeted displays. Saved choices and mode changes sync to displays with active native playback. Native playback continues after Flua quits. Unassigned surfaces keep their system wallpaper. Applying briefly reloads the macOS wallpaper service."
+        return "Set Wallpapers applies the selected wallpaper to the configured display and surface. Mirrored displays and linked surfaces update together. Inspector changes remain in preview until you press Set Wallpapers. Native playback continues after Flua quits. Distinct Desktop and Lock Screen content requires both wallpapers to be assigned in Flua. Mixed Apple and Flua content is not supported. Applying briefly reloads the macOS wallpaper service."
     }
     static func pluginPaths(in listing: String) -> [String] {
         listing.split(separator: "\n").compactMap { line in
@@ -49,11 +49,13 @@ enum NativeWallpaper {
             throw NativeWallpaperError("macOS did not register this copy of Flua. Keep the app in a permanent folder and retry setup.")
         }
     }
-    static func apply(_ assignments: [String: NativeWallpaperStore.Assignment], targeting displays: [String], mirrored: Bool, root: URL, reloadUnchanged: Bool = true) throws {
+    static func apply(_ assignments: [String: NativeWallpaperStore.Assignment], targeting displays: [String], mirrored: Bool, root: URL, reloadUnchanged: Bool = true, clearingUnassigned: Bool = false) throws {
         guard !assignments.isEmpty else {
+            guard clearingUnassigned else { return }
             _ = try stop(displays: displays, mirrored: mirrored, root: root)
             return
         }
+        let spaceIDs = mirrored ? [] : try currentSpaceIDs()
         let baselineURL = root.appendingPathComponent("NativeWallpaperBaseline.plist")
         if !reloadUnchanged {
             let store = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/com.apple.wallpaper/Store/Index.plist")
@@ -65,7 +67,7 @@ enum NativeWallpaper {
             let current = try Data(contentsOf: store)
             let baseline = readBaseline(at: baselineURL)
             let expected = try NativeWallpaperStore.replacing(assignments, displays: displays, provider: identifier,
-                mirrored: mirrored, in: current, baseline: baseline)
+                mirrored: mirrored, in: current, baseline: baseline, clearingUnassigned: clearingUnassigned, spaceIDs: spaceIDs)
             if NativeWallpaperStore.applicationMatches(assignments, mirrored: mirrored, expected: expected, in: current) {
                 let elected = try run("/usr/bin/pluginkit", ["-m", "-v", "-i", identifier], allowedStatuses: [0, 1])
                 if pluginPaths(in: elected).contains(extensionURL.resolvingSymlinksInPath().path) { return }
@@ -75,11 +77,40 @@ enum NativeWallpaper {
         try updateStore(root: root, baselineDisplays: displays, transform: { current in
             let baseline = readBaseline(at: baselineURL)
             return try NativeWallpaperStore.replacing(assignments, displays: displays, provider: identifier,
-                mirrored: mirrored, in: current, baseline: baseline)
+                mirrored: mirrored, in: current, baseline: baseline, clearingUnassigned: clearingUnassigned, spaceIDs: spaceIDs)
         }, verify: { actual, expected in
             NativeWallpaperStore.applicationMatches(assignments, mirrored: mirrored, expected: expected, in: actual)
         })
     }
+    static func spaceIDs(in displays: [[String: Any]]) -> [String] {
+        Array(Set(displays.flatMap { display in
+            (display["Spaces"] as? [[String: Any]] ?? []).compactMap { space -> String? in
+                guard let id = space["uuid"] as? String, UUID(uuidString: id) != nil else { return nil }
+                return id
+            }
+        })).sorted()
+    }
+
+    private static func currentSpaceIDs() throws -> [String] {
+        guard let framework = dlopen("/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics", RTLD_LAZY) else {
+            throw NativeWallpaperError("macOS display Spaces are unavailable. Your wallpaper was not changed.")
+        }
+        defer { dlclose(framework) }
+        guard let mainConnection = dlsym(framework, "CGSMainConnectionID"),
+              let managedSpaces = dlsym(framework, "CGSCopyManagedDisplaySpaces") else {
+            throw NativeWallpaperError("macOS display Spaces are unavailable. Your wallpaper was not changed.")
+        }
+        typealias Connection = @convention(c) () -> UInt32
+        typealias ManagedSpaces = @convention(c) (UInt32) -> Unmanaged<CFArray>?
+        let connection = unsafeBitCast(mainConnection, to: Connection.self)()
+        let spaces = unsafeBitCast(managedSpaces, to: ManagedSpaces.self)(connection)?.takeRetainedValue()
+        let ids = spaceIDs(in: spaces as? [[String: Any]] ?? [])
+        guard !ids.isEmpty else {
+            throw NativeWallpaperError("macOS display Spaces could not be read. Your wallpaper was not changed.")
+        }
+        return ids
+    }
+
     static func stop(displays: [String], mirrored: Bool, root: URL) throws -> Bool {
         guard available else { throw NativeWallpaperError(explanation) }
         let url = root.appendingPathComponent("NativeWallpaperBaseline.plist")

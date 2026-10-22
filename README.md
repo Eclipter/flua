@@ -31,6 +31,8 @@
 | Curate your own local wallpaper library | ✅ |
 | Online wallpaper catalog | ❌ |
 
+Distinct Desktop and Lock Screen content uses a pair of wallpapers assigned in Flua. A one-display host check confirmed switching between the built-in cosmos Desktop and ember Still Lock Screen scenes. File-media pairs, mixed-provider pairs and multi-display behavior are not verified.
+
 ## Installation
 
 Run in Terminal to install the latest release:
@@ -43,7 +45,7 @@ curl -fsSL https://raw.githubusercontent.com/Eclipter/flua/main/install.sh | bas
 
 1. Use **Add Wallpaper…** to add images, videos or supported packages, or choose a built-in wallpaper.
 2. Click a card to select it. Preview and settings appear in the right inspector when the window is at least 1000 points wide. Adjust playback or use **Edit Video…** to trim and choose a cover, then **Save Changes** or **Cancel**.
-3. Click **Set Wallpaper**. Use **Stop** to restore the previous system wallpapers.
+3. Choose a display mode and target surface in the sidebar, then click **Set Wallpapers** to apply the selected wallpaper to that display and surface. Per Display targets the selected display; Mirrored targets every connected display. Sidebar changes stay in preview until you press the button. Use **Stop** to restore the previous system wallpapers.
 
 ## Building from source
 

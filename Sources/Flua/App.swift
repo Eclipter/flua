@@ -650,7 +650,7 @@ struct LibraryView: View {
                 Button("Set Wallpaper") { library.selection = w.id; library.applySelected() }
                 Button(w.favorite ? "Remove from Favorites" : "Add to Favorites") { library.favorite(w) }
                 if w.kind == "video", let source = library.disk.url(for: w) {
-                    Button("Edit Video…") { VideoEditorWindow.open(wallpaper: w, source: source, library: library) }
+                    Button("Edit Video…") { VideoEditorWindow.open(wallpaper: library.state.item(w.id) ?? w, source: source, library: library) }
                 }
                 if w.file != nil { Button("Export Wallpaper…") { library.choosePackageExport(w) } }
                 Menu("Add to Playlist") {
@@ -886,16 +886,16 @@ struct InspectorView: View {
             TextField("Wallpaper name", text: $ui.draftTitle)
                 .accessibilityLabel("Wallpaper name")
                 .onSubmit {
-                    var v = library.selected ?? w
+                    var v = library.state.item(w.id) ?? w
                     if !ui.draftTitle.trimmingCharacters(in: .whitespaces).isEmpty { v.title = ui.draftTitle; library.edit(v) }
                 }
             TextField("Tags, separated by commas", text: $ui.draftTags)
                 .accessibilityLabel("Tags")
-                .onSubmit { var v = library.selected ?? w; v.tags = ui.draftTags; library.edit(v) }
+                .onSubmit { var v = library.state.item(w.id) ?? w; v.tags = ui.draftTags; library.edit(v) }
             TextField("Category", text: $ui.draftCategory)
                 .accessibilityLabel("Category")
                 .onSubmit {
-                    var value = library.selected ?? w
+                    var value = library.state.item(w.id) ?? w
                     if value.metadata == nil { value.metadata = SceneMetadata() }
                     value.metadata?.category = ui.draftCategory.trimmingCharacters(in: .whitespacesAndNewlines)
                     library.edit(value)
@@ -982,7 +982,7 @@ struct InspectorView: View {
     private func trimSection(wallpaper w: Wallpaper, source: URL) -> some View {
         fluaGlassGroup {
             VStack(alignment: .leading, spacing: 8) {
-                Button { VideoEditorWindow.open(wallpaper: w, source: source, library: library) } label: {
+                Button { VideoEditorWindow.open(wallpaper: library.state.item(w.id) ?? w, source: source, library: library) } label: {
                     Label("Trim range and choose cover", systemImage: "slider.horizontal.3").frame(maxWidth: .infinity)
                 }.fluaGlassButton()
             }
@@ -1011,7 +1011,7 @@ struct InspectorView: View {
                     .tint(library.accentOverride)
                 }
             }
-            Text("Applies directly to macOS. Continues playing when Flua quits.")
+            Text("Applies the selected wallpaper to the configured display and surface. Mirrored displays and linked surfaces update together. Continues playing when Flua quits.")
                 .font(.caption).foregroundStyle(.secondary)
         }
     }
@@ -1024,7 +1024,7 @@ struct InspectorView: View {
         })
     }
     private func binding<T>(_ key: WritableKeyPath<Wallpaper, T>, _ original: Wallpaper) -> Binding<T> {
-        Binding(get: { (library.state.item(original.id) ?? original)[keyPath: key] }, set: { newValue in var v = library.state.item(original.id) ?? original; v[keyPath: key] = newValue; library.edit(v) })
+        Binding(get: { (library.previewWallpaper(original.id) ?? original)[keyPath: key] }, set: { newValue in var v = library.previewWallpaper(original.id) ?? original; v[keyPath: key] = newValue; library.editConfiguration(v) })
     }
 }
 

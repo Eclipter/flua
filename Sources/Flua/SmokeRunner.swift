@@ -629,12 +629,18 @@ enum SmokeRunner {
                 let key = displayID(screen)
                 library.state.assign("ember", display: key, surface: .lockScreen)
                 library.state.setMode(.still, display: key, surface: .lockScreen)
-                let lockScreen = library.state.displays[key]?.lockScreen
                 library.selection = video.id
                 library.applySelected()
-                results["desktopApplyPreservesLockScreen"] = library.state.displays.values.allSatisfy {
-                    $0.desktop.wallpaperID == video.id && $0.lockScreen == lockScreen
-                }
+                results["applySelectedSurfaceOnly"] = library.state.displays[key]?.desktop.wallpaperID == video.id
+                    && library.state.displays[key]?.lockScreen?.wallpaperID == "ember"
+                    && library.state.displays[key]?.lockScreen?.mode == .still
+                library.surface = .lockScreen
+                library.applySelected()
+                results["applyLockScreenOnly"] = library.state.displays[key]?.desktop.wallpaperID == video.id
+                    && library.state.displays[key]?.lockScreen?.wallpaperID == video.id
+                    && library.state.displays[key]?.lockScreen?.mode == .still
+                library.surface = .desktop
+                let lockScreen = library.state.displays[key]?.lockScreen
                 library.updatePlaylist("ambient", shuffle: false)
                 library.startPlaylist("ambient")
                 library.advancePlaylists(force: true)
@@ -653,30 +659,57 @@ enum SmokeRunner {
                 let key = displayID(screen)
                 library.selection = "aurora"
                 library.applySelected()
+                let saved = library.state.displays
                 library.surface = .lockScreen
                 library.selection = "ember"
-                library.saveSelectedSurface()
                 library.setSurfaceMode(.still)
-                results["surfaceControlsIndependent"] = library.state.displays[key]?.desktop.wallpaperID == "aurora"
-                    && library.state.displays[key]?.lockScreen?.wallpaperID == "ember"
-                    && library.state.displays[key]?.lockScreen?.mode == .still
+                results["surfaceControlsDraftOnly"] = try library.state.displays == saved
+                    && library.disk.load().displays == saved && library.surfaceMode == .still
+                library.surface = .desktop
+                library.applySelected()
+                results["surfaceControlsApplyHiddenMode"] = library.state.displays[key]?.desktop.wallpaperID == "ember"
+                    && library.state.displays[key]?.lockScreen?.wallpaperID == nil
+                library.surface = .lockScreen
                 library.setSurfacesLinked(true)
                 results["surfaceControlsLinkCopiesDesktop"] = library.surfacesLinked
-                    && library.state.displays[key]?.lockScreen == library.state.displays[key]?.desktop
-                // Linked removes Lock Screen and normalizes the active selection to the Desktop.
+                    && library.targetAssignments.allSatisfy { $0.lockScreen == $0.desktop }
                 results["configurePickerLinkedNormalizesToDesktop"] = library.surface == .desktop
                 library.setSurfaceMode(.still)
-                results["surfaceControlsLinkedMode"] = library.state.displays[key]?.desktop.mode == .still
+                results["surfaceControlsLinkedMode"] = library.surfaceMode == .still
                 library.setSurfacesLinked(false)
                 library.surface = .lockScreen
                 library.setSurfaceMode(.animated)
-                results["surfaceControlsUnlinkPreservesDesktop"] = library.state.displays[key]?.desktop.mode == .still
-                    && library.state.displays[key]?.lockScreen?.mode == .animated
-                    && !library.surfacesLinked
+                results["surfaceControlsUnlinkPreservesDesktop"] = library.targetAssignments.allSatisfy {
+                    $0.desktop.mode == .still && $0.lockScreen?.mode == .animated && !$0.surfacesLinked
+                }
+                library.applySelected()
                 results["surfaceControlsPersisted"] = try library.disk.load().displays == library.state.displays
                 library.surface = .desktop
                 library.state.displays.removeAll()
                 library.save()
+            }
+            let draftValidation = try Library(root: out.appendingPathComponent("ConfigurationDraftValidation"), systemPlaybackEnabled: false)
+            draftValidation.tick?.invalidate()
+            if let screen = draftValidation.screens.first {
+                let key = displayID(screen)
+                draftValidation.state.displayMode = "perDisplay"
+                draftValidation.display = key
+                draftValidation.updatePlaylist("ambient", shuffle: false)
+                draftValidation.startPlaylist("ambient")
+                draftValidation.surface = .lockScreen
+                draftValidation.setSurfaceMode(.still)
+                draftValidation.advancePlaylists(force: true)
+                let advanced = draftValidation.state.displays[key]?.desktop
+                results["configurationDraftPreviewUsesLivePlaylist"] = draftValidation.surfaceSummary(.desktop).contains("Quiet tides")
+                draftValidation.selection = "cosmos"
+                draftValidation.applySelected()
+                results["configurationDraftPreservesPlaylistProgress"] = draftValidation.state.displays[key]?.desktop == advanced
+                draftValidation.setSurfaceMode(.animated)
+                draftValidation.remove(draftValidation.state.item("ocean")!)
+                draftValidation.selection = "ember"
+                draftValidation.applySelected()
+                results["configurationDraftPreservesRemoval"] = draftValidation.state.displays[key]?.desktop.wallpaperID == nil
+                    && draftValidation.state.displays[key]?.lockScreen?.wallpaperID == "ember"
             }
             library.selection = edited.id
             library.section = "discover"
@@ -826,7 +859,7 @@ enum SmokeRunner {
                 !window.isVisible || window.alphaValue == 0
             }
             if results["nonPlaybackWindowsHidden"] as? Bool != true { failures.append("nonPlaybackWindowsHidden") }
-            let required = ["fileDrop", "fileDropUndo", "blockedImportRevealed", "importRevealsAdded", "editorCancel", "editorSave", "playlistFileImport", "importUndo", "playlistExistingAdd", "inspectorSceneInteraction", "inspectorVideoInteraction", "explicitSystemAccent", "systemAccentDefault", "accentSelection", "unknownAccentFallback", "systemAccentReset", "importFacts", "rotatedFacts", "missingFacts", "legacyBackfill", "staleEditPreservesFacts", "unknownColorBackfill", "unknownColorRoundTrip", "blockedDiscover", "tagFiltering", "combinedBrowsing", "clearFiltersPreservesBlockedTags", "clearFilters", "imageImport", "videoImport", "videoReady", "videoPlaying", "videoLooped", "videoPaused", "videoResumed", "liveAdjustmentPreservesTime", "liveAdjustmentSpeed", "stillHeld", "stillIgnoresResume", "stillPreservesSource", "sceneStillRetained", "desktopStill", "desktopStillSurvivesPause", "playlistPauseStatus", "playlistResumeStatus", "desktopStillPersisted", "desktopStillPreservesSource", "render_image", "render_aurora", "render_cosmos", "render_ocean", "render_ember", "systemWallpaperPreserved", "libraryAssignmentValidated", "nativeDescriptorValidation", "nativeDescriptorValidationRejectsMissing", "nativeCatalogMismatchRejected", "backgroundLaunch", "videoPreviewWindowVisible", "scenePreviewWindowVisible", "scenePreviewReshownWindowVisible", "playlistStart", "playlistNext", "libraryStop", "libraryRoundTrip", "discoverWindow", "windowSnapshot", "videoInformation", "trimmedPlayback", "trimmedExport", "thumbnailExport", "rejectInvalidTrim", "preserveSourceOnExport", "packageRoundTrip", "editorPersistence", "editorWindow", "silentExport"]
+            let required = [ "configurationDraftPreviewUsesLivePlaylist", "configurationDraftPreservesPlaylistProgress", "configurationDraftPreservesRemoval", "applySelectedSurfaceOnly", "applyLockScreenOnly", "surfaceControlsApplyHiddenMode", "configurePickerLinkedNormalizesToDesktop", "fileDrop", "fileDropUndo", "blockedImportRevealed", "importRevealsAdded", "editorCancel", "editorSave", "playlistFileImport", "importUndo", "playlistExistingAdd", "inspectorSceneInteraction", "inspectorVideoInteraction", "explicitSystemAccent", "systemAccentDefault", "accentSelection", "unknownAccentFallback", "systemAccentReset", "importFacts", "rotatedFacts", "missingFacts", "legacyBackfill", "staleEditPreservesFacts", "unknownColorBackfill", "unknownColorRoundTrip", "blockedDiscover", "tagFiltering", "combinedBrowsing", "clearFiltersPreservesBlockedTags", "clearFilters", "imageImport", "videoImport", "videoReady", "videoPlaying", "videoLooped", "videoPaused", "videoResumed", "liveAdjustmentPreservesTime", "liveAdjustmentSpeed", "stillHeld", "stillIgnoresResume", "stillPreservesSource", "sceneStillRetained", "desktopStill", "desktopStillSurvivesPause", "playlistPauseStatus", "playlistResumeStatus", "desktopStillPersisted", "desktopStillPreservesSource", "render_image", "render_aurora", "render_cosmos", "render_ocean", "render_ember", "systemWallpaperPreserved", "libraryAssignmentValidated", "nativeDescriptorValidation", "nativeDescriptorValidationRejectsMissing", "nativeCatalogMismatchRejected", "backgroundLaunch", "videoPreviewWindowVisible", "scenePreviewWindowVisible", "scenePreviewReshownWindowVisible", "playlistStart", "playlistNext", "libraryStop", "libraryRoundTrip", "discoverWindow", "windowSnapshot", "videoInformation", "trimmedPlayback", "trimmedExport", "thumbnailExport", "rejectInvalidTrim", "preserveSourceOnExport", "packageRoundTrip", "editorPersistence", "editorWindow", "silentExport"]
             for key in required + ["compactWindow"] where results[key] as? Bool != true { failures.append(key) }
             for (key, value) in results where key.hasPrefix("surfaceControls") && value as? Bool != true { failures.append(key) }
         } catch { failures.append(String(reflecting: error)) }

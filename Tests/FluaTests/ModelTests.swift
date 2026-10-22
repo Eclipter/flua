@@ -2,6 +2,41 @@ import Foundation
 
 @main struct ModelTests {
     static func main() throws {
+        var live = LibraryState.initial
+        live.displayMode = "perDisplay"
+        let initialTime = Date(timeIntervalSince1970: 10)
+        live.assign("aurora", display: "first", playlistID: "ambient", now: initialTime)
+        live.assign("ember", display: "second")
+        var configuration = ConfigurationDraft()
+        configuration.changes.append(.surfaceMode(.still, displays: ["first"], surface: .lockScreen))
+        live.shuffle = false
+        _ = live.advance(display: "first", now: Date(timeIntervalSince1970: 20), force: true)
+        let advanced = live.displays["first"]!.desktop
+        let preview = configuration.applying(to: live)
+        precondition(preview.displays["first"]?.desktop == advanced, "draft preview rewound playlist progress")
+        precondition(preview.displays["first"]?.lockScreen?.mode == .still)
+        live.removePlaylist("ambient")
+        precondition(configuration.applying(to: live).displays["first"]?.desktop.playlistID == nil)
+        live.remove("ocean")
+        let removedPreview = configuration.applying(to: live)
+        precondition(removedPreview.displays["first"]?.desktop.wallpaperID == nil, "draft restored a removed wallpaper")
+        precondition(removedPreview.displays["second"] == live.displays["second"])
+
+        live.assign("cosmos", display: "first")
+        configuration.changes.append(.displayMode("mirrored", displays: ["first", "second"], preferredSource: "first"))
+        live.assign("ember", display: "first", now: Date(timeIntervalSince1970: 30))
+        let mirrored = configuration.applying(to: live)
+        precondition(mirrored.displays["second"] == mirrored.displays["first"])
+        precondition(mirrored.displays["second"]?.desktop == live.displays["first"]?.desktop)
+        configuration.changes.append(.surfacesLinked(true, displays: ["first", "second"]))
+        configuration.changes.append(.surfaceMode(.still, displays: ["first", "second"], surface: .lockScreen))
+        configuration.changes.append(.surfacesLinked(false, displays: ["first", "second"]))
+        configuration.changes.append(.surfaceMode(.animated, displays: ["first", "second"], surface: .lockScreen))
+        let unlinked = configuration.applying(to: live)
+        precondition(unlinked.displays["first"]?.desktop.mode == .still)
+        precondition(unlinked.displays["first"]?.lockScreen?.mode == .animated)
+        precondition(unlinked.displays["first"]?.surfacesLinked == false)
+        print("PASS: configuration drafts preserve live assignments, removal, playlist progress, mirroring, and edit order")
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("FluaTests-" + UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: dir) }
         let support = dir.appendingPathComponent("ApplicationSupport", isDirectory: true)
@@ -34,11 +69,14 @@ import Foundation
         precondition(state.displayMode == "mirrored")
         precondition(state.accentColor == nil)
         precondition(state.nativePlayback.isEmpty)
+        precondition(state.nativeCleanupDisplays.isEmpty)
         var nativeState = state
         nativeState.nativePlayback = ["active": true, "stopped": false, "disconnected": true]
+        nativeState.nativeCleanupDisplays = ["removed-display"]
         try disk.save(nativeState)
         let nativeRoundTrip = try disk.load()
         precondition(nativeRoundTrip.nativePlayback == nativeState.nativePlayback)
+        precondition(nativeRoundTrip.nativeCleanupDisplays == nativeState.nativeCleanupDisplays)
         precondition(nativeRoundTrip.nativeRestorationDisplays(connected: ["active", "stopped", "legacy"]) == ["active"])
         precondition(nativeRoundTrip.nativeRestorationDisplays(connected: ["active", "disconnected", "stopped", "legacy"], previouslyConnected: ["active"]) == ["disconnected"])
         precondition(nativeRoundTrip.nativeRestorationDisplays(connected: ["active"], previouslyConnected: ["active"]) == [])
@@ -65,9 +103,12 @@ import Foundation
         precondition(removedNativeAssignment.nativeAssignmentChanges(from: nativeAssignments.displays, displays: ["active"]) == ["active"])
         var legacy = try JSONSerialization.jsonObject(with: JSONEncoder().encode(nativeState)) as! [String: Any]
         legacy.removeValue(forKey: "nativePlayback")
+        legacy.removeValue(forKey: "nativeCleanupDisplays")
         let legacyNativeState = try JSONDecoder().decode(LibraryState.self, from: JSONSerialization.data(withJSONObject: legacy))
-        precondition(legacyNativeState.nativePlayback.isEmpty && legacyNativeState.wallpapers == state.wallpapers)
-        print("PASS: native playback intent retains active, stopped and disconnected displays and defaults safely for legacy libraries")
+        precondition(legacyNativeState.nativePlayback.isEmpty && legacyNativeState.nativeCleanupDisplays.isEmpty
+            && legacyNativeState.wallpapers == state.wallpapers)
+        print("PASS: native playback and cleanup intent persist and default safely for legacy libraries")
+
         var accentState = state
         accentState.accentColor = "Purple"
         try disk.save(accentState)

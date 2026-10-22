@@ -189,6 +189,32 @@ extension DisplayAssignment {
     }
 }
 
+// Replay configuration edits against live assignments so playback and removal remain current.
+struct ConfigurationDraft {
+    enum Change {
+        case displayMode(String, displays: [String], preferredSource: String?)
+        case surfaceMode(WallpaperMode, displays: [String], surface: WallpaperSurface)
+        case surfacesLinked(Bool, displays: [String])
+    }
+    var changes: [Change] = []
+
+    func applying(to state: LibraryState) -> LibraryState {
+        var result = state
+        for change in changes {
+            switch change {
+            case let .displayMode(mode, displays, preferredSource):
+                result.displayMode = mode
+                if mode == "mirrored" { _ = result.synchronizeMirrored(displayIDs: displays, preferredSource: preferredSource) }
+            case let .surfaceMode(mode, displays, surface):
+                for id in displays { result.setMode(mode, display: id, surface: surface) }
+            case let .surfacesLinked(linked, displays):
+                for id in displays { result.setSurfacesLinked(linked, display: id) }
+            }
+        }
+        return result
+    }
+}
+
 struct LibraryState: Codable {
     var wallpapers: [Wallpaper] = []
     var playlists: [Playlist] = []
@@ -203,6 +229,7 @@ struct LibraryState: Codable {
     var displayMode: String?
     var accentColor: String?
     var nativePlayback: [String: Bool] = [:]
+    var nativeCleanupDisplays: Set<String> = []
     var blockedTags: [String] = []
     var showInMenuBar: Bool?
     var hideFromDock: Bool?
@@ -252,7 +279,7 @@ struct LibraryState: Codable {
 
     private enum CodingKeys: String, CodingKey {
         case wallpapers, playlists, displays, interval, shuffle, pauseOnBattery, pauseOnLowPower
-        case lowPowerThreshold, pauseOnFullscreen, paused, displayMode, blockedTags, accentColor, nativePlayback
+        case lowPowerThreshold, pauseOnFullscreen, paused, displayMode, blockedTags, accentColor, nativePlayback, nativeCleanupDisplays
         case showInMenuBar, hideFromDock
     }
 
@@ -270,6 +297,7 @@ struct LibraryState: Codable {
         paused = try c.decode(Bool.self, forKey: .paused)
         displayMode = try c.decodeIfPresent(String.self, forKey: .displayMode)
         nativePlayback = try c.decodeIfPresent([String: Bool].self, forKey: .nativePlayback) ?? [:]
+        nativeCleanupDisplays = try c.decodeIfPresent(Set<String>.self, forKey: .nativeCleanupDisplays) ?? []
         accentColor = try c.decodeIfPresent(String.self, forKey: .accentColor)
         blockedTags = normalizedTags((try c.decodeIfPresent([String].self, forKey: .blockedTags) ?? []).joined(separator: ","))
         showInMenuBar = try c.decodeIfPresent(Bool.self, forKey: .showInMenuBar)

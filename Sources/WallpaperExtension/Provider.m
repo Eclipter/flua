@@ -345,6 +345,7 @@ NSDictionary *FSInspectSettings(id settings) { return FSJSON(settings, @"Wallpap
 @property NSString *mode;
 @property FSMediaRenderer *renderer;
 @property NSDictionary *configuration;
+@property NSDictionary *renderConfiguration;
 @property NSArray *fileWrappers;
 @property BOOL needsRecovery;
 @property BOOL suspended;
@@ -402,10 +403,49 @@ NSDictionary *FSInspectSettings(id settings) { return FSJSON(settings, @"Wallpap
     dispatch_source_set_event_handler(self.playbackTimer, ^{ [host refreshPlayback]; });
     dispatch_resume(self.playbackTimer);
 }
+- (NSDictionary *)renderConfiguration:(NSDictionary *)configuration presentation:(NSString *)presentation {
+    if (!configuration.count || [configuration[@"version"] integerValue] == 1) return configuration;
+    if ([configuration[@"version"] integerValue] != 2) return nil;
+    NSDictionary *surfaces = [configuration[@"surfaces"] isKindOfClass:NSDictionary.class] ? configuration[@"surfaces"] : nil;
+    NSDictionary *selected = [presentation isEqual:@"locked"] || [presentation isEqual:@"idle"] ? surfaces[@"lockScreen"] : surfaces[@"desktop"];
+    return [selected isKindOfClass:NSDictionary.class] ? selected : nil;
+}
+- (BOOL)validConfiguration:(NSDictionary *)configuration wrappers:(NSArray *)wrappers {
+    if (!configuration.count) return YES;
+    NSInteger version = [configuration[@"version"] integerValue];
+    NSDictionary *surfaces = [configuration[@"surfaces"] isKindOfClass:NSDictionary.class] ? configuration[@"surfaces"] : nil;
+    NSArray *contents = version == 2 ? @[surfaces[@"desktop"] ?: NSNull.null, surfaces[@"lockScreen"] ?: NSNull.null] : @[configuration];
+    if (version != 1 && version != 2) return NO;
+    if (version == 2) {
+        SEL urlSelector = NSSelectorFromString(@"url");
+        for (id wrapper in wrappers) {
+            if (![wrapper respondsToSelector:urlSelector]) return NO;
+            NSURL *url = ((id (*)(id, SEL))objc_msgSend)(wrapper, urlSelector);
+            if (![url isKindOfClass:NSURL.class] || !url.isFileURL) return NO;
+        }
+    }
+    for (id content in contents) {
+        if (![content isKindOfClass:NSDictionary.class]) return NO;
+        if (version == 2 && [content[@"version"] integerValue] != 1) return NO;
+        NSString *kind = content[@"kind"];
+        if (![kind isKindOfClass:NSString.class] ||
+            (![kind isEqual:@"image"] && ![kind isEqual:@"video"] && !FSIsSceneKind(kind))) return NO;
+        if ([kind isEqual:@"image"] || [kind isEqual:@"video"]) {
+            if ([content[@"source"] isEqual:@"bundle"]) continue;
+            id index = content[@"fileIndex"];
+            if (![index isKindOfClass:NSNumber.class] || [index doubleValue] != [index integerValue] ||
+                [index integerValue] < 0 || (version == 2 && [index integerValue] >= (NSInteger)wrappers.count)) return NO;
+        }
+        if (content[@"source"] && ![content[@"source"] isEqual:@"bundle"]) return NO;
+    }
+    NSDictionary *policy = version == 2 ? configuration[@"playbackPolicy"] : nil;
+    return !policy || [policy isKindOfClass:NSDictionary.class];
+}
 - (void)recoverSessions {
     for (FSSession *session in self.sessions.allValues) {
         if ((!session.needsRecovery && !session.renderer.playbackFailed) || session.playbackSuspended) continue;
-        NSMutableDictionary *configuration = [session.configuration mutableCopy];
+        NSMutableDictionary *configuration = [[self renderConfiguration:session.configuration presentation:session.mode] mutableCopy];
+        if (!configuration) continue;
         configuration[@"presentation"] = session.mode;
         BOOL alreadyShowingFallback = session.needsRecovery;
         NSError *mediaError;
@@ -427,8 +467,11 @@ NSDictionary *FSInspectSettings(id settings) { return FSJSON(settings, @"Wallpap
         ((void (*)(id, SEL, id))objc_msgSend)(session.context, NSSelectorFromString(@"setLayer:"), renderer.layer);
         [session.renderer dispose];
         session.renderer = renderer;
+        session.renderConfiguration = [self renderConfiguration:session.configuration presentation:session.mode];
         session.root = renderer.layer;
         session.needsRecovery = !recovered;
+        NSLog(@"Flua recovered media kind=%@ locked=%d idle=%d", configuration[@"kind"],
+              [session.mode isEqual:@"locked"], [session.mode isEqual:@"idle"]);
         [CATransaction flush];
         if (recovered) NSLog(@"Flua recovered original media session");
     }
@@ -540,13 +583,18 @@ NSDictionary *FSInspectSettings(id settings) { return FSJSON(settings, @"Wallpap
         NSData *configurationData = [[NSData alloc] initWithBase64EncodedString:payload[@"configuration"] ?: @"" options:0];
         NSDictionary *configuration = configurationData.length ? [NSJSONSerialization JSONObjectWithData:configurationData options:0 error:nil] : @{};
         if (![configuration isKindOfClass:NSDictionary.class]) { reply(nil,FSError(@"Invalid Flua configuration JSON")); return; }
-        if (configuration.count && [configuration[@"version"] integerValue] != 1) { reply(nil,FSError(@"Unsupported Flua configuration version")); return; }
-        NSMutableDictionary *renderConfig = [configuration mutableCopy];
+        NSArray *wrappers = captured.objects[@"files"] ?: @[];
+        if (![self validConfiguration:configuration wrappers:wrappers]) {
+            reply(nil, FSError(@"Invalid or incomplete Flua surface configuration")); return;
+        }
+        NSMutableDictionary *renderConfig = [[self renderConfiguration:configuration
+            presentation:[payload[@"presentationMode"] allKeys].firstObject ?: @"default"] mutableCopy];
+        if (!renderConfig) { reply(nil, FSError(@"Missing Flua surface configuration")); return; }
         renderConfig[@"presentation"] = [payload[@"presentationMode"] allKeys].firstObject ?: @"default";
         NSError *mediaError;
-        FSMediaRenderer *renderer = [[FSMediaRenderer alloc] initWithWidth:(NSUInteger)w height:(NSUInteger)h configuration:renderConfig fileWrappers:captured.objects[@"files"] ?: @[] error:&mediaError];
+        FSMediaRenderer *renderer = [[FSMediaRenderer alloc] initWithWidth:(NSUInteger)w height:(NSUInteger)h configuration:renderConfig fileWrappers:wrappers error:&mediaError];
         BOOL needsRecovery = renderer == nil;
-        if (!renderer && ([configuration[@"kind"] isEqual:@"image"] || [configuration[@"kind"] isEqual:@"video"])) {
+        if (!renderer && ([renderConfig[@"kind"] isEqual:@"image"] || [renderConfig[@"kind"] isEqual:@"video"])) {
             // Keep cached choices usable without changing their saved descriptor or reading alternate files.
             NSLog(@"Flua media unavailable; showing static fallback. Retrying original host files: %@", mediaError.localizedDescription);
             renderer = [[FSMediaRenderer alloc] initWithWidth:(NSUInteger)w height:(NSUInteger)h
@@ -557,10 +605,11 @@ NSDictionary *FSInspectSettings(id settings) { return FSJSON(settings, @"Wallpap
         s.request = payload;
         s.displayID = [payload[@"destination"][@"directDisplayID"] isKindOfClass:NSNumber.class] ? payload[@"destination"][@"directDisplayID"] : nil;
         s.configuration = configuration;
-        s.fileWrappers = captured.objects[@"files"] ?: @[];
+        s.mode = [payload[@"presentationMode"] allKeys].firstObject ?: @"default";
+        s.renderConfiguration = [self renderConfiguration:configuration presentation:s.mode];
+        s.fileWrappers = wrappers;
         s.needsRecovery = needsRecovery;
         s.suspended = payload[@"activityState"][@"suspended"] != nil;
-        s.mode = [payload[@"presentationMode"] allKeys].firstObject ?: @"default";
         s.renderer = renderer;
         s.root = renderer.layer;
         [self applyPlaybackToSession:s environment:FSPlaybackEnvironment()];
@@ -581,8 +630,8 @@ NSDictionary *FSInspectSettings(id settings) { return FSJSON(settings, @"Wallpap
         self.sessions[[self key:ident]] = s;
         [self startRecovery];
         [self startPlaybackMonitoring];
-        NSLog(@"Flua acquired locked=%d idle=%d preview=%d context=%u frames=%lu scopedFiles=%lu activeScopes=%lu display=%@",
-              [s.mode isEqual:@"locked"], [s.mode isEqual:@"idle"], [payload[@"isPreview"] boolValue], cid, (unsigned long)renderer.frameCount,
+        NSLog(@"Flua acquired kind=%@ locked=%d idle=%d preview=%d context=%u frames=%lu scopedFiles=%lu activeScopes=%lu display=%@",
+              renderConfig[@"kind"], [s.mode isEqual:@"locked"], [s.mode isEqual:@"idle"], [payload[@"isPreview"] boolValue], cid, (unsigned long)renderer.frameCount,
               (unsigned long)renderer.scopedFileCount, (unsigned long)renderer.activeScopeCount, s.displayID);
         reply(box, nil);
         // The host can reuse a cached choice after relaunch without requesting settings again.
@@ -608,7 +657,36 @@ NSDictionary *FSInspectSettings(id settings) { return FSJSON(settings, @"Wallpap
         reply(FSError(@"Unknown session or update"));
         return;
     }
-    s.mode = [p[@"presentationMode"] allKeys].firstObject ?: @"default";
+    NSString *nextMode = [p[@"presentationMode"] allKeys].firstObject ?: @"default";
+    NSDictionary *nextConfiguration = [self renderConfiguration:s.configuration presentation:nextMode];
+    if (!nextConfiguration) { reply(FSError(@"Missing Flua surface configuration")); return; }
+    if (![s.renderConfiguration isEqualToDictionary:nextConfiguration]) {
+        NSMutableDictionary *renderConfig = [nextConfiguration mutableCopy];
+        renderConfig[@"presentation"] = nextMode;
+        NSError *mediaError;
+        FSMediaRenderer *renderer = [[FSMediaRenderer alloc] initWithWidth:(NSUInteger)s.root.bounds.size.width
+            height:(NSUInteger)s.root.bounds.size.height configuration:renderConfig
+            fileWrappers:s.fileWrappers error:&mediaError];
+        BOOL recovered = renderer != nil;
+        if (!renderer && ([nextConfiguration[@"kind"] isEqual:@"image"] || [nextConfiguration[@"kind"] isEqual:@"video"])) {
+            NSLog(@"Flua surface unavailable; showing static fallback. Retrying original host files: %@",
+                  mediaError.localizedDescription ?: @"unknown error");
+            renderer = [[FSMediaRenderer alloc] initWithWidth:(NSUInteger)s.root.bounds.size.width
+                height:(NSUInteger)s.root.bounds.size.height configuration:@{@"kind":@"gradient", @"presentation":nextMode}
+                fileWrappers:@[] error:&mediaError];
+        }
+        if (!renderer) { reply(mediaError ?: FSError(@"Cannot switch Flua surface content")); return; }
+        renderer.layer.speed = s.playbackSuspended ? 0 : 1;
+        [renderer setPlaybackSuspended:s.playbackSuspended];
+        ((void (*)(id, SEL, id))objc_msgSend)(s.context, NSSelectorFromString(@"setLayer:"), renderer.layer);
+        FSMediaRenderer *previous = s.renderer;
+        s.renderer = renderer;
+        s.root = renderer.layer;
+        s.renderConfiguration = nextConfiguration;
+        s.needsRecovery = !recovered;
+        [previous dispose];
+    }
+    s.mode = nextMode;
     BOOL suspended = p[@"activityState"][@"suspended"] != nil;
     s.suspended = suspended;
     [s.renderer setPresentation:s.mode];
@@ -616,8 +694,8 @@ NSDictionary *FSInspectSettings(id settings) { return FSJSON(settings, @"Wallpap
         s.displayID = [p[@"destination"][@"directDisplayID"] isKindOfClass:NSNumber.class] ? p[@"destination"][@"directDisplayID"] : nil;
     }
     [self applyPlaybackToSession:s environment:FSPlaybackEnvironment()];
-    NSLog(@"Flua updated locked=%d idle=%d suspended=%d frames=%lu loops=%ld",
-          [s.mode isEqual:@"locked"], [s.mode isEqual:@"idle"], suspended,
+    NSLog(@"Flua updated kind=%@ locked=%d idle=%d suspended=%d frames=%lu loops=%ld",
+          s.renderConfiguration[@"kind"], [s.mode isEqual:@"locked"], [s.mode isEqual:@"idle"], suspended,
           (unsigned long)s.renderer.frameCount, (long)s.renderer.loopCount);
     reply(nil);
 }
@@ -982,6 +1060,103 @@ int main(int argc,const char **argv) { @autoreleasepool {
         BOOL success=acquired && wrappers && before && after && paused && resumed && disposed && (![kind isEqual:@"video"] || (motion && loops>=1));
         results[kind]=@{@"ok":@(success),@"acquired":@(acquired),@"nonemptyScopedFiles":@(wrappers),@"motion":@(motion),@"suspendedStable":@(paused),@"resumed":@(resumed),@"loopCount":@(loops),@"frames":@(finalFrames),@"disposed":@(disposed),@"error":errorText,@"snapshot":after ?: @{}};
     }
+    NSURL *stillFile = [dir URLByAppendingPathComponent:@"FluaStill.png"];
+    NSURL *motionFile = [dir URLByAppendingPathComponent:@"FluaMotion.mov"];
+    NSDictionary *desktopContent = @{@"version":@1, @"kind":@"image", @"fileIndex":@0,
+        @"modes":@{@"desktop":@"animated", @"lockScreen":@"animated"}};
+    NSDictionary *lockContent = @{@"version":@1, @"kind":@"video", @"fileIndex":@1,
+        @"modes":@{@"desktop":@"animated", @"lockScreen":@"animated"}};
+    NSDictionary *paired = @{@"version":@2, @"surfaces":@{@"desktop":desktopContent, @"lockScreen":lockContent},
+        @"playbackPolicy":@{@"pauseOnBattery":@NO}};
+    creation[@"configuration"] = FSEncodeConfiguration(paired);
+    creation[@"presentationMode"] = @{@"default":@{}};
+    creation[@"activityState"] = @{@"active":@{}};
+    __block BOOL pairedAcquired = NO;
+    [provider acquireWithId:ident request:FSCreateRequest(creation, @[stillFile, motionFile]) reply:^(id remote, NSError *error) {
+        pairedAcquired = remote != nil && error == nil;
+    }];
+    FSSession *pairedSession = provider.sessions.allValues.firstObject;
+    FSMediaRenderer *desktopRenderer = pairedSession.renderer;
+    id pairedContext = pairedSession.context;
+    __block NSDictionary *desktopSnapshot;
+    [provider snapshotWithId:ident reply:^(id snapshot, NSError *error) { desktopSnapshot = FSInspectSnapshot(snapshot); }];
+    BOOL pairedWrappers = pairedAcquired && pairedSession.fileWrappers.count == 2 &&
+        desktopRenderer.scopedFileCount == 2 && desktopRenderer.activeScopeCount == 2 &&
+        [pairedSession.renderConfiguration[@"kind"] isEqual:@"image"];
+    NSMutableDictionary *pairedUpdate = [creation mutableCopy];
+    [pairedUpdate removeObjectForKey:@"configuration"];
+    [pairedUpdate removeObjectForKey:@"isPreview"];
+    pairedUpdate[@"presentationMode"] = @{@"locked":@{}};
+    [provider updateWithId:ident request:FSBox(@"WallpaperUpdateRequestXPC", @"WallpaperUpdateRequest", pairedUpdate) reply:^(NSError *error) {}];
+    FSMediaRenderer *lockRenderer = pairedSession.renderer;
+    FSPump(0.25);
+    __block NSDictionary *lockSnapshot;
+    [provider snapshotWithId:ident reply:^(id snapshot, NSError *error) { lockSnapshot = FSInspectSnapshot(snapshot); }];
+    BOOL switchedToLock = lockRenderer != desktopRenderer && pairedSession.context == pairedContext &&
+        [pairedSession.renderConfiguration[@"kind"] isEqual:@"video"] && lockRenderer.scopedFileCount == 2 &&
+        lockRenderer.activeScopeCount == 2 && desktopRenderer.activeScopeCount == 0 &&
+        ![desktopSnapshot[@"checksum"] isEqual:lockSnapshot[@"checksum"]];
+    pairedUpdate[@"presentationMode"] = @{@"idle":@{}};
+    [provider updateWithId:ident request:FSBox(@"WallpaperUpdateRequestXPC", @"WallpaperUpdateRequest", pairedUpdate) reply:^(NSError *error) {}];
+    BOOL idleKeepsLock = pairedSession.renderer == lockRenderer && [pairedSession.mode isEqual:@"idle"];
+    pairedUpdate[@"activityState"] = @{@"suspended":@{}};
+    [provider updateWithId:ident request:FSBox(@"WallpaperUpdateRequestXPC", @"WallpaperUpdateRequest", pairedUpdate) reply:^(NSError *error) {}];
+    NSUInteger pairedPausedFrames = lockRenderer.frameCount;
+    FSPump(0.2);
+    BOOL pairedSuspension = pairedPausedFrames == lockRenderer.frameCount;
+    pairedUpdate[@"activityState"] = @{@"active":@{}};
+    [provider updateWithId:ident request:FSBox(@"WallpaperUpdateRequestXPC", @"WallpaperUpdateRequest", pairedUpdate) reply:^(NSError *error) {}];
+    pairedUpdate[@"presentationMode"] = @{@"default":@{}};
+    [provider updateWithId:ident request:FSBox(@"WallpaperUpdateRequestXPC", @"WallpaperUpdateRequest", pairedUpdate) reply:^(NSError *error) {}];
+    FSMediaRenderer *desktopAgain = pairedSession.renderer;
+    __block NSDictionary *desktopAgainSnapshot;
+    [provider snapshotWithId:ident reply:^(id snapshot, NSError *error) { desktopAgainSnapshot = FSInspectSnapshot(snapshot); }];
+    BOOL switchedBack = desktopAgain != lockRenderer && [pairedSession.renderConfiguration[@"kind"] isEqual:@"image"] &&
+        [desktopAgainSnapshot[@"checksum"] isEqual:desktopSnapshot[@"checksum"]] && lockRenderer.activeScopeCount == 0;
+    [provider invalidateWithId:ident reply:^(NSError *error) {}];
+    BOOL pairedDisposed = provider.sessions.count == 0 && desktopRenderer.activeScopeCount == 0 &&
+        lockRenderer.activeScopeCount == 0 && desktopAgain.scopedFileCount == 0 && desktopAgain.activeScopeCount == 0;
+    NSDictionary *incompletePair = @{@"version":@2, @"surfaces":@{@"desktop":desktopContent}};
+    creation[@"configuration"] = FSEncodeConfiguration(incompletePair);
+    __block BOOL rejectedIncompletePair = NO;
+    [provider acquireWithId:ident request:FSCreateRequest(creation, @[stillFile, motionFile]) reply:^(id remote, NSError *error) {
+        rejectedIncompletePair = remote == nil && error != nil;
+    }];
+    BOOL surfaceSwitchOK = pairedWrappers && switchedToLock && idleKeepsLock && switchedBack && pairedSuspension &&
+        pairedDisposed && rejectedIncompletePair && provider.sessions.count == 0;
+    results[@"surfaceSwitch"] = @{@"ok":@(surfaceSwitchOK), @"pairedWrappers":@(pairedWrappers),
+        @"switchedToLock":@(switchedToLock), @"idleKeepsLock":@(idleKeepsLock), @"switchedBack":@(switchedBack),
+        @"suspendedStable":@(pairedSuspension), @"disposedScopes":@(pairedDisposed), @"rejectedIncompletePair":@(rejectedIncompletePair)};
+    NSURL *missingAlternate = [dir URLByAppendingPathComponent:@"recover-alternate.mov"];
+    [NSFileManager.defaultManager removeItemAtURL:missingAlternate error:nil];
+    creation[@"configuration"] = FSEncodeConfiguration(paired);
+    creation[@"presentationMode"] = @{@"default":@{}};
+    __block BOOL alternateAcquired = NO;
+    [provider acquireWithId:ident request:FSCreateRequest(creation, @[stillFile, missingAlternate]) reply:^(id remote, NSError *error) {
+        alternateAcquired = remote != nil && error == nil;
+    }];
+    FSSession *alternateSession = provider.sessions.allValues.firstObject;
+    FSMediaRenderer *desktopBeforeRecovery = alternateSession.renderer;
+    pairedUpdate[@"presentationMode"] = @{@"locked":@{}};
+    pairedUpdate[@"activityState"] = @{@"active":@{}};
+    [provider updateWithId:ident request:FSBox(@"WallpaperUpdateRequestXPC", @"WallpaperUpdateRequest", pairedUpdate) reply:^(NSError *error) {}];
+    BOOL alternateFallback = alternateAcquired && alternateSession.needsRecovery &&
+        alternateSession.renderer != desktopBeforeRecovery && [alternateSession.mode isEqual:@"locked"] &&
+        [alternateSession.renderConfiguration[@"kind"] isEqual:@"video"] && desktopBeforeRecovery.activeScopeCount == 0;
+    NSData *motionData = [NSData dataWithContentsOfURL:motionFile];
+    [motionData writeToURL:missingAlternate atomically:YES];
+    [provider recoverSessions];
+    BOOL alternateRecovered = !alternateSession.needsRecovery && [alternateSession.mode isEqual:@"locked"] &&
+        [alternateSession.renderConfiguration[@"kind"] isEqual:@"video"] && alternateSession.renderer.scopedFileCount == 2 &&
+        alternateSession.renderer.activeScopeCount == 2;
+    FSMediaRenderer *alternateRenderer = alternateSession.renderer;
+    [provider invalidateWithId:ident reply:^(NSError *error) {}];
+    BOOL alternateDisposed = provider.sessions.count == 0 && alternateRenderer.scopedFileCount == 0 &&
+        alternateRenderer.activeScopeCount == 0;
+    [NSFileManager.defaultManager removeItemAtURL:missingAlternate error:nil];
+    BOOL alternateRecoveryOK = alternateFallback && alternateRecovered && alternateDisposed;
+    results[@"surfaceRecovery"] = @{@"ok":@(alternateRecoveryOK), @"fallbackUsesSelectedSurface":@(alternateFallback),
+        @"recoveredSelectedSurface":@(alternateRecovered), @"disposedScopes":@(alternateDisposed)};
     BOOL recoveryOK = freshProviderReacquire;
     NSURL *broken = [dir URLByAppendingPathComponent:@"broken-media"];
     [@"invalid media" writeToURL:broken atomically:YES encoding:NSUTF8StringEncoding error:nil];
@@ -1368,6 +1543,6 @@ int main(int argc,const char **argv) { @autoreleasepool {
     results[@"systemActivationPerformed"]=@NO;
     results[@"sandboxAuthorizationVerified"]=@NO;
     NSData *json=[NSJSONSerialization dataWithJSONObject:results options:NSJSONWritingPrettyPrinted error:nil];fwrite(json.bytes,1,json.length,stdout);puts("");
-    return recoveryOK && [results[@"image"][@"ok"] boolValue] && [results[@"video"][@"ok"] boolValue] && [results[@"playback"][@"ok"] boolValue] && [results[@"scene"][@"ok"] boolValue] && [results[@"catalog"][@"ok"] boolValue] ? 0:2;
+    return recoveryOK && surfaceSwitchOK && alternateRecoveryOK && [results[@"image"][@"ok"] boolValue] && [results[@"video"][@"ok"] boolValue] && [results[@"playback"][@"ok"] boolValue] && [results[@"scene"][@"ok"] boolValue] && [results[@"catalog"][@"ok"] boolValue] ? 0:2;
 } }
 #endif
