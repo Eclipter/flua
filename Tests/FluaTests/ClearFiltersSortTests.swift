@@ -46,6 +46,25 @@ extension Bundle {
 
         let displayIDs = library.screens.map(displayID)
         precondition(!displayIDs.isEmpty, "configuration apply regression requires a connected display")
+        let launchRoot = root.appendingPathComponent("PlaylistLaunch", isDirectory: true)
+        let launchDisk = try LibraryDisk(root: launchRoot)
+        var launchState = LibraryState.initial
+        launchState.displayMode = "perDisplay"
+        let launchPlaylist = Playlist(name: "Launch playlist", items: ["aurora", "cosmos"], interval: 1)
+        launchState.playlists.append(launchPlaylist)
+        launchState.assign("aurora", display: displayIDs[0], playlistID: launchPlaylist.id, now: Date(timeIntervalSince1970: 0))
+        launchState.nativePlayback[displayIDs[0]] = true
+        try launchDisk.save(launchState)
+        let launched = try Library(root: launchRoot, systemPlaybackEnabled: false)
+        launched.tick?.invalidate()
+        launched.advancePlaylists(force: false)
+        precondition(launched.state.displays == launchState.displays, "launch advanced an overdue saved playlist")
+        launched.advancePlaylists(force: true)
+        precondition(launched.state.displays[displayIDs[0]]?.desktop.wallpaperID == "cosmos")
+        launched.state.assign("cosmos", display: displayIDs[0], playlistID: launchPlaylist.id, now: Date(timeIntervalSince1970: 0))
+        launched.advancePlaylists(force: false)
+        precondition(launched.state.displays[displayIDs[0]]?.desktop.wallpaperID == "aurora", "explicit playback did not resume automatic advancement")
+        print("PASS: opening a library preserves overdue playlists until explicit playback resumes advancement")
         let selectedID = library.selected!.id
         library.display = displayIDs[0]
         library.applySelected()

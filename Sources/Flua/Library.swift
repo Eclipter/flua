@@ -29,6 +29,7 @@ final class Library: ObservableObject {
     private var screenObserver: NSObjectProtocol?
     private var saveBlocked = false
     private var nativeRefreshTask: Task<Void, Never>?
+    private var automaticPlaylistPlaybackEnabled = false
     private var stoppedNativeDisplays = Set<String>()
     private var pendingNativeAssignmentDisplays = Set<String>()
     private var pendingNativeEdits = Set<String>()
@@ -63,7 +64,6 @@ final class Library: ObservableObject {
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             if self.restoreAssignments() { self.save() }
-            self.restoreNativeAssignments()
             self.makeThumbnails()
             self.backfillMetadata()
         }
@@ -202,7 +202,7 @@ final class Library: ObservableObject {
         return state.displays != previousDisplays
     }
     @MainActor func advancePlaylists(force: Bool, backwards: Bool = false, allDisplays: Bool = false) {
-        guard !nativeSetupBusy, !state.paused || force else { return }
+        guard !nativeSetupBusy, force || automaticPlaylistPlaybackEnabled, !state.paused || force else { return }
         if !force && screens.allSatisfy({ stoppedNativeDisplays.contains(displayID($0)) }) { return }
         // Mutating a @Published value notifies the whole window even when advancement returns nil.
         var next = state
@@ -324,6 +324,7 @@ final class Library: ObservableObject {
         }
         // Isolated smoke runs validate real descriptors without touching the system wallpaper store.
         guard systemPlaybackEnabled else {
+            automaticPlaylistPlaybackEnabled = true
             activity = "Validated saved wallpaper choices. System playback is disabled for verification."
             return
         }
@@ -352,6 +353,7 @@ final class Library: ObservableObject {
         return try NativeWallpaperStore.assignments(from: state, displays: displays, root: disk.root, provider: NativeWallpaper.identifier, surface: surface)
     }
     private func rememberNativeAssignments(_ assignments: [String: NativeWallpaperStore.Assignment], displays: [String]) {
+        automaticPlaylistPlaybackEnabled = true
         for id in displays {
             let active = assignments[id] != nil
             state.nativePlayback[id] = active

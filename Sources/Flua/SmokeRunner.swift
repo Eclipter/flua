@@ -370,6 +370,7 @@ enum SmokeRunner {
                         idle.assign("aurora", display: key, playlistID: playlist.id)
                     }
                     library.state = idle
+                    library.applySavedNativeAssignments()
                     var publications = 0
                     let observation = library.$state.dropFirst().sink { _ in publications += 1 }
                     library.advancePlaylists(force: false)
@@ -378,6 +379,28 @@ enum SmokeRunner {
                     if publications != 0 { failures.append("idlePlaylistDoesNotPublish_" + mode) }
                 }
                 library.state = original
+                // A missing saved choice catches launch-time Apply before any system mutation.
+                let launchDisk = library.disk
+                let beforeLaunch = try launchDisk.load()
+                var launchState = LibraryState.initial
+                launchState.displayMode = "perDisplay"
+                launchState.assign("aurora", display: key)
+                launchState.wallpapers.removeAll { $0.id == "aurora" }
+                launchState.nativePlayback[key] = true
+                try launchDisk.save(launchState)
+                let launched = try Library(root: launchDisk.root)
+                launched.tick?.invalidate()
+                await pause(0.2)
+                results["launchDoesNotApplySavedWallpaper"] = NativeWallpaper.available
+                    && NativeWallpaper.catalogURL.resolvingSymlinksInPath() == launchDisk.catalog.resolvingSymlinksInPath()
+                    && launched.error == nil
+                    && !launched.nativeSetupBusy
+                    && launched.state.nativePlayback[key] == true
+                    && launched.state.displays[key]?.desktop.wallpaperID == "aurora"
+                try launchDisk.save(beforeLaunch)
+                if results["launchDoesNotApplySavedWallpaper"] as? Bool != true {
+                    failures.append("launchDoesNotApplySavedWallpaper")
+                }
                 let root = out.appendingPathComponent("LaunchRestoration", isDirectory: true)
                 let disk = try LibraryDisk(root: root)
                 var saved = LibraryState.initial
