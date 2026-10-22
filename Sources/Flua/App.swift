@@ -1112,8 +1112,9 @@ struct SettingsView: View {
                 }.fluaMenuPicker()
                 Toggle("Pause behind fullscreen apps", isOn: $library.state.pauseOnFullscreen).tint(library.accentOverride)
                 Toggle("Pause while running on battery", isOn: $library.state.pauseOnBattery).tint(library.accentOverride)
-                Toggle("Pause in Low Power Mode or on low battery", isOn: Binding(get: { library.state.pauseOnLowPower ?? false }, set: { library.state.pauseOnLowPower = $0; library.settingChanged() })).tint(library.accentOverride)
-                if library.state.pauseOnLowPower == true {
+                Toggle("Pause in Low Power Mode", isOn: Binding(get: { library.state.pauseOnLowPower ?? false }, set: { library.state.pauseOnLowPower = $0; library.settingChanged() })).tint(library.accentOverride)
+                Toggle("Pause when battery is low", isOn: Binding(get: { library.state.pauseOnLowBattery }, set: { library.state.pauseOnLowBattery = $0; library.settingChanged() })).tint(library.accentOverride)
+                if library.state.pauseOnLowBattery {
                     Picker("Pause on battery at or below", selection: Binding(get: { library.state.lowPowerThreshold }, set: { library.state.lowPowerThreshold = $0; library.settingChanged() })) {
                         Text("10%").tag(10)
                         Text("20%").tag(20)

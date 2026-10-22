@@ -104,6 +104,28 @@ enum SmokeRunner {
         settings.orderBack(nil)
         await pause(0.4)
         missing += missingNames("Flua Settings Audit", ["Accent color", "Blocked tags", "Block", "Unblock test", "Show in menu bar", "Hide from Dock"])
+        let settingsAX = AXUIElementCreateApplication(ProcessInfo.processInfo.processIdentifier)
+        var settingsWindowsRef: CFTypeRef?
+        AXUIElementCopyAttributeValue(settingsAX, kAXWindowsAttribute as CFString, &settingsWindowsRef)
+        let settingsWindow = (settingsWindowsRef as? [AXUIElement])?.first { ax($0, kAXTitleAttribute) == settings.title }
+        var powerControlsPassed = true
+        for (name, lowPower, lowBattery) in [("Pause in Low Power Mode", false, true),
+                                             ("Pause when battery is low", false, false),
+                                             ("Pause in Low Power Mode", true, false),
+                                             ("Pause when battery is low", true, true)] {
+            if let settingsWindow, let checkbox = findCheckbox(settingsWindow, name, 0) {
+                powerControlsPassed = AXUIElementPerformAction(checkbox, kAXPressAction as CFString) == .success && powerControlsPassed
+            } else {
+                powerControlsPassed = false
+            }
+            await pause(0.2)
+            let saved = try? library.disk.load()
+            powerControlsPassed = powerControlsPassed && saved?.pauseOnLowPower == lowPower && saved?.pauseOnLowBattery == lowBattery
+            powerControlsPassed = powerControlsPassed && checkboxValue(settings.title, named: "Pause in Low Power Mode") == lowPower
+                && checkboxValue(settings.title, named: "Pause when battery is low") == lowBattery
+            captureView(settings, to: destination.deletingLastPathComponent().appendingPathComponent("Flua-settings-power-\(lowPower)-\(lowBattery).png"))
+        }
+        if !powerControlsPassed { missing.append("Independent Low Power Mode and low battery controls") }
         let menuShown = checkboxValue("Flua Settings Audit", named: "Show in menu bar") == true
         let dockHidden = checkboxValue("Flua Settings Audit", named: "Hide from Dock") == false
         let dockEnabled = checkboxEnabled("Flua Settings Audit", named: "Hide from Dock") == true
@@ -243,7 +265,7 @@ enum SmokeRunner {
     }
     private static func findCheckbox(_ element: AXUIElement, _ name: String, _ depth: Int) -> AXUIElement? {
         if depth > 16 { return nil }
-        if ax(element, kAXRoleAttribute) == "AXCheckBox" {
+        if ["AXCheckBox", "AXSwitch"].contains(ax(element, kAXRoleAttribute)) {
             let label = ax(element, kAXDescriptionAttribute) + " " + ax(element, kAXTitleAttribute) + " " + ax(element, kAXTitleUIElementAttribute)
             if label.contains(name) { return element }
         }

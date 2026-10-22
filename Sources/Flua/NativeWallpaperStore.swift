@@ -32,6 +32,7 @@ enum NativeWallpaperStore {
             configuration["playbackPolicy"] = [
                 "pauseOnBattery": policy.pauseOnBattery,
                 "pauseOnLowPower": policy.pauseOnLowPower,
+                "pauseOnLowBattery": policy.pauseOnLowBattery,
                 "lowPowerThreshold": policy.lowPowerThreshold,
                 "pauseOnFullscreen": policy.pauseOnFullscreen
             ]

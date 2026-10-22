@@ -154,6 +154,27 @@ import Foundation
         let encodedLP = try JSONEncoder().encode(lowPowerTestState)
         let decodedLP = try JSONDecoder().decode(LibraryState.self, from: encodedLP)
         precondition(decodedLP.lowPowerThreshold == 30)
+        precondition(LibraryState.initial.pauseOnLowBattery)
+        for lowPower in [false, true] {
+            for lowBattery in [false, true] {
+                var independent = LibraryState.initial
+                independent.pauseOnLowPower = lowPower
+                independent.pauseOnLowBattery = lowBattery
+                let restored = try JSONDecoder().decode(LibraryState.self, from: JSONEncoder().encode(independent))
+                precondition(restored.pauseOnLowPower == lowPower && restored.pauseOnLowBattery == lowBattery)
+                let policy = providerCatalog(from: restored).playbackPolicy!
+                precondition(policy.pauseOnLowPower == lowPower && policy.pauseOnLowBattery == lowBattery)
+                var legacy = try JSONSerialization.jsonObject(with: JSONEncoder().encode(independent)) as! [String: Any]
+                legacy.removeValue(forKey: "pauseOnLowBattery")
+                let migrated = try JSONDecoder().decode(LibraryState.self, from: JSONSerialization.data(withJSONObject: legacy))
+                precondition(migrated.pauseOnLowBattery == lowPower)
+                var legacyPolicy = try JSONSerialization.jsonObject(with: JSONEncoder().encode(policy)) as! [String: Any]
+                legacyPolicy.removeValue(forKey: "pauseOnLowBattery")
+                let migratedPolicy = try JSONDecoder().decode(PlaybackPolicy.self, from: JSONSerialization.data(withJSONObject: legacyPolicy))
+                precondition(migratedPolicy.pauseOnLowBattery == lowPower)
+            }
+        }
+        print("PASS: low power and low battery preferences persist independently and preserve legacy behavior")
         precondition(resolvedDisplayMode(nil) == "perDisplay")
         precondition(initialDisplaySelection(mode: "perDisplay", displayIDs: ["display-A"]) == "display-A")
         precondition(initialDisplaySelection(mode: nil, displayIDs: ["display-A"]) == "display-A")

@@ -95,11 +95,11 @@ static BOOL FSPlaybackShouldPauseForDisplayUUID(NSDictionary *policy, NSDictiona
     BOOL onBattery = FSBoolean(environment[@"onBattery"], NO);
     if (FSBoolean(policy[@"pauseOnBattery"], NO) && onBattery) return YES;
 
-    if (FSBoolean(policy[@"pauseOnLowPower"], NO)) {
-        if (FSBoolean(environment[@"lowPower"], NO)) return YES;
-        NSNumber *percent = onBattery ? FSBatteryPercent(environment) : nil;
-        if (percent && percent.doubleValue <= FSLowPowerThreshold(policy[@"lowPowerThreshold"])) return YES;
-    }
+    if (FSBoolean(policy[@"pauseOnLowPower"], NO) && FSBoolean(environment[@"lowPower"], NO)) return YES;
+
+    BOOL pauseOnLowBattery = FSBoolean(policy[@"pauseOnLowBattery"], FSBoolean(policy[@"pauseOnLowPower"], NO));
+    NSNumber *percent = onBattery && pauseOnLowBattery ? FSBatteryPercent(environment) : nil;
+    if (percent && percent.doubleValue <= FSLowPowerThreshold(policy[@"lowPowerThreshold"])) return YES;
 
     return FSBoolean(policy[@"pauseOnFullscreen"], YES)
         && [presentation isEqualToString:@"default"]
@@ -176,6 +176,7 @@ BOOL FSPlaybackPolicySelfTest(void) {
     NSDictionary *allPolicies = @{
         @"pauseOnBattery" : @YES,
         @"pauseOnLowPower" : @YES,
+        @"pauseOnLowBattery" : @YES,
         @"pauseOnFullscreen" : @YES,
         @"lowPowerThreshold" : @20
     };
@@ -198,15 +199,25 @@ BOOL FSPlaybackPolicySelfTest(void) {
     if (FSPlaybackShouldPause(@{@"pauseOnBattery" : @YES, @"pauseOnLowPower" : @YES}, acPower, nil, @"default", NO, NO)) return NO;
     if (!FSPlaybackShouldPause(@{@"pauseOnLowPower" : @YES}, @{@"onBattery" : @NO, @"lowPower" : @YES}, nil, @"default", NO, NO)) return NO;
     if (!FSPlaybackShouldPause(allPolicies, batteryAtThreshold, nil, @"default", NO, NO)) return NO;
-    if (!FSPlaybackShouldPause(@{@"pauseOnLowPower" : @YES}, batteryAtThreshold, nil, @"default", NO, NO)) return NO;
-    if (FSPlaybackShouldPause(@{@"pauseOnLowPower" : @YES}, @{@"onBattery" : @YES, @"lowPower" : @NO, @"batteryPercent" : @20.01}, nil, @"default", NO, NO)) return NO;
-    if (!FSPlaybackShouldPause(@{@"pauseOnLowPower" : @YES}, @{@"onBattery" : @YES, @"lowPower" : @NO, @"batteryPercent" : @19}, nil, @"default", NO, NO)) return NO;
-    if (FSPlaybackShouldPause(@{@"pauseOnLowPower" : @YES}, @{@"onBattery" : @YES, @"lowPower" : @NO, @"batteryPercent" : @"19"}, nil, @"default", NO, NO)) return NO;
-    if (FSPlaybackShouldPause(@{@"pauseOnLowPower" : @YES}, @{@"onBattery" : @YES, @"lowPower" : @NO, @"batteryPercent" : @101}, nil, @"default", NO, NO)) return NO;
-    if (!FSPlaybackShouldPause(@{@"pauseOnLowPower" : @YES, @"lowPowerThreshold" : @-1},
+    if (!FSPlaybackShouldPause(@{@"pauseOnLowBattery" : @YES}, batteryAtThreshold, nil, @"default", NO, NO)) return NO;
+    if (FSPlaybackShouldPause(@{@"pauseOnLowBattery" : @YES}, @{@"onBattery" : @YES, @"lowPower" : @NO, @"batteryPercent" : @20.01}, nil, @"default", NO, NO)) return NO;
+    if (!FSPlaybackShouldPause(@{@"pauseOnLowBattery" : @YES}, @{@"onBattery" : @YES, @"lowPower" : @NO, @"batteryPercent" : @19}, nil, @"default", NO, NO)) return NO;
+    if (FSPlaybackShouldPause(@{@"pauseOnLowBattery" : @YES}, @{@"onBattery" : @YES, @"lowPower" : @NO, @"batteryPercent" : @"19"}, nil, @"default", NO, NO)) return NO;
+    if (FSPlaybackShouldPause(@{@"pauseOnLowBattery" : @YES}, @{@"onBattery" : @YES, @"lowPower" : @NO, @"batteryPercent" : @101}, nil, @"default", NO, NO)) return NO;
+    if (!FSPlaybackShouldPause(@{@"pauseOnLowBattery" : @YES, @"lowPowerThreshold" : @-1},
                                @{@"onBattery" : @YES, @"lowPower" : @NO, @"batteryPercent" : @0}, nil, @"default", NO, NO)) return NO;
-    if (!FSPlaybackShouldPause(@{@"pauseOnLowPower" : @YES, @"lowPowerThreshold" : @101},
+    if (!FSPlaybackShouldPause(@{@"pauseOnLowBattery" : @YES, @"lowPowerThreshold" : @101},
                                @{@"onBattery" : @YES, @"lowPower" : @NO, @"batteryPercent" : @100}, nil, @"default", NO, NO)) return NO;
+    if (FSPlaybackShouldPause(@{@"pauseOnLowPower" : @YES, @"pauseOnLowBattery" : @NO}, batteryAtThreshold, nil, @"default", NO, NO)) return NO;
+    if (!FSPlaybackShouldPause(@{@"pauseOnLowPower" : @NO, @"pauseOnLowBattery" : @YES}, batteryAtThreshold, nil, @"default", NO, NO)) return NO;
+    if (FSPlaybackShouldPause(@{@"pauseOnLowPower" : @NO, @"pauseOnLowBattery" : @NO},
+                              @{@"onBattery" : @NO, @"lowPower" : @YES, @"batteryPercent" : @0}, nil, @"default", NO, NO)) return NO;
+    if (FSPlaybackShouldPause(@{@"pauseOnLowPower" : @NO, @"pauseOnLowBattery" : @YES},
+                              @{@"onBattery" : @YES, @"lowPower" : @YES, @"batteryPercent" : @20.01}, nil, @"default", NO, NO)) return NO;
+    if (!FSPlaybackShouldPause(@{@"pauseOnLowPower" : @YES, @"pauseOnLowBattery" : @YES},
+                               @{@"onBattery" : @YES, @"lowPower" : @YES, @"batteryPercent" : @20.01}, nil, @"default", NO, NO)) return NO;
+    if (!FSPlaybackShouldPause(@{@"pauseOnLowPower" : @YES}, batteryAtThreshold, nil, @"default", NO, NO)) return NO;
+    if (!FSPlaybackShouldPause(@{@"pauseOnLowPower" : @YES}, @{@"onBattery" : @NO, @"lowPower" : @YES}, nil, @"default", NO, NO)) return NO;
     if (FSPlaybackShouldPause(@{@"pauseOnBattery" : @YES}, @{@"onBattery" : @1}, nil, @"default", NO, NO)) return NO;
     if (FSPlaybackShouldPause(@{@"pauseOnBattery" : @1}, batteryAtThreshold, nil, @"default", NO, NO)) return NO;
     if (!FSPlaybackShouldPauseForDisplayUUID(@{@"pauseOnFullscreen" : @YES},

@@ -45,7 +45,7 @@ import Foundation
         try Data("image source".utf8).write(to: imageSource)
         var item = ProviderCatalog.Item(id: "clip", title: "Clip", kind: "video", file: "Media/video.mov", fit: "fit", speed: 1.5, dimming: 0.2, trimStart: 1, trimEnd: 3, still: 2)
         item.desktop = .still
-        item.playbackPolicy = PlaybackPolicy(pauseOnBattery: true, pauseOnLowPower: true,
+        item.playbackPolicy = PlaybackPolicy(pauseOnBattery: true, pauseOnLowPower: true, pauseOnLowBattery: true,
                                              lowPowerThreshold: -5, pauseOnFullscreen: false)
         let choice = try NativeWallpaperStore.choice(item, root: root, provider: "local.flua.desktop.wallpaper")
         let configuration = try JSONSerialization.jsonObject(with: choice["Configuration"] as! Data) as! [String: Any]
@@ -55,6 +55,7 @@ import Foundation
         let descriptorPolicy = configuration["playbackPolicy"] as! [String: Any]
         precondition(descriptorPolicy["pauseOnBattery"] as? Bool == true)
         precondition(descriptorPolicy["pauseOnLowPower"] as? Bool == true)
+        precondition(descriptorPolicy["pauseOnLowBattery"] as? Bool == true)
         precondition(descriptorPolicy["lowPowerThreshold"] as? Int == 0)
         precondition(descriptorPolicy["pauseOnFullscreen"] as? Bool == false)
         precondition((choice["Files"] as? [[String: String]])?.first?["relative"] == source.resolvingSymlinksInPath().absoluteString)

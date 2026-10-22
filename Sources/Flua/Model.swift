@@ -27,16 +27,35 @@ struct Wallpaper: Codable, Identifiable, Equatable {
 struct PlaybackPolicy: Codable, Equatable {
     var pauseOnBattery: Bool
     var pauseOnLowPower: Bool
+    var pauseOnLowBattery: Bool = false
     var lowPowerThreshold: Int
     var pauseOnFullscreen: Bool
 
     var clampedForExport: PlaybackPolicy {
         PlaybackPolicy(pauseOnBattery: pauseOnBattery, pauseOnLowPower: pauseOnLowPower,
-                       lowPowerThreshold: min(100, max(0, lowPowerThreshold)), pauseOnFullscreen: pauseOnFullscreen)
+                       pauseOnLowBattery: pauseOnLowBattery, lowPowerThreshold: min(100, max(0, lowPowerThreshold)), pauseOnFullscreen: pauseOnFullscreen)
     }
 
     private enum CodingKeys: String, CodingKey {
-        case pauseOnBattery, pauseOnLowPower, lowPowerThreshold, pauseOnFullscreen
+        case pauseOnBattery, pauseOnLowPower, pauseOnLowBattery, lowPowerThreshold, pauseOnFullscreen
+    }
+
+    init(pauseOnBattery: Bool, pauseOnLowPower: Bool, pauseOnLowBattery: Bool = false,
+         lowPowerThreshold: Int, pauseOnFullscreen: Bool) {
+        self.pauseOnBattery = pauseOnBattery
+        self.pauseOnLowPower = pauseOnLowPower
+        self.pauseOnLowBattery = pauseOnLowBattery
+        self.lowPowerThreshold = lowPowerThreshold
+        self.pauseOnFullscreen = pauseOnFullscreen
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        pauseOnBattery = try c.decode(Bool.self, forKey: .pauseOnBattery)
+        pauseOnLowPower = try c.decode(Bool.self, forKey: .pauseOnLowPower)
+        pauseOnLowBattery = try c.decodeIfPresent(Bool.self, forKey: .pauseOnLowBattery) ?? pauseOnLowPower
+        lowPowerThreshold = try c.decode(Int.self, forKey: .lowPowerThreshold)
+        pauseOnFullscreen = try c.decode(Bool.self, forKey: .pauseOnFullscreen)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -44,6 +63,7 @@ struct PlaybackPolicy: Codable, Equatable {
         var c = encoder.container(keyedBy: CodingKeys.self)
         try c.encode(policy.pauseOnBattery, forKey: .pauseOnBattery)
         try c.encode(policy.pauseOnLowPower, forKey: .pauseOnLowPower)
+        try c.encode(policy.pauseOnLowBattery, forKey: .pauseOnLowBattery)
         try c.encode(policy.lowPowerThreshold, forKey: .lowPowerThreshold)
         try c.encode(policy.pauseOnFullscreen, forKey: .pauseOnFullscreen)
     }
@@ -223,6 +243,7 @@ struct LibraryState: Codable {
     var shuffle: Bool = true
     var pauseOnBattery: Bool = false
     var pauseOnLowPower: Bool?
+    var pauseOnLowBattery: Bool = false
     var lowPowerThreshold: Int = 20
     var pauseOnFullscreen: Bool = true
     var paused: Bool = false
@@ -278,7 +299,7 @@ struct LibraryState: Codable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case wallpapers, playlists, displays, interval, shuffle, pauseOnBattery, pauseOnLowPower
+        case wallpapers, playlists, displays, interval, shuffle, pauseOnBattery, pauseOnLowPower, pauseOnLowBattery
         case lowPowerThreshold, pauseOnFullscreen, paused, displayMode, blockedTags, accentColor, nativePlayback, nativeCleanupDisplays
         case showInMenuBar, hideFromDock
     }
@@ -292,6 +313,7 @@ struct LibraryState: Codable {
         shuffle = try c.decode(Bool.self, forKey: .shuffle)
         pauseOnBattery = try c.decode(Bool.self, forKey: .pauseOnBattery)
         pauseOnLowPower = try c.decodeIfPresent(Bool.self, forKey: .pauseOnLowPower)
+        pauseOnLowBattery = try c.decodeIfPresent(Bool.self, forKey: .pauseOnLowBattery) ?? (pauseOnLowPower ?? false)
         lowPowerThreshold = try c.decodeIfPresent(Int.self, forKey: .lowPowerThreshold) ?? 20
         pauseOnFullscreen = try c.decode(Bool.self, forKey: .pauseOnFullscreen)
         paused = try c.decode(Bool.self, forKey: .paused)
@@ -317,6 +339,7 @@ struct LibraryState: Codable {
         s.interval = 3600
         s.shuffle = true
         s.pauseOnLowPower = true
+        s.pauseOnLowBattery = true
         return s
     }
     func item(_ id: String?) -> Wallpaper? { wallpapers.first { $0.id == id } }
@@ -474,6 +497,7 @@ func providerCatalog(from state: LibraryState) -> ProviderCatalog {
     let playbackPolicy = PlaybackPolicy(
         pauseOnBattery: state.pauseOnBattery,
         pauseOnLowPower: state.pauseOnLowPower ?? false,
+        pauseOnLowBattery: state.pauseOnLowBattery,
         lowPowerThreshold: state.lowPowerThreshold,
         pauseOnFullscreen: state.pauseOnFullscreen
     ).clampedForExport
