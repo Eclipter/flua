@@ -16,10 +16,13 @@ enum NativeWallpaper {
             FileManager.default.isExecutableFile(atPath: guardURL.path)
     }
     static var guardURL: URL { Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/FluaWallpaperGuard") }
-    static var catalogURL: URL {
+    static var boundCatalogURL: URL? {
         let info = NSDictionary(contentsOf: extensionURL.appendingPathComponent("Contents/Info.plist"))
-        if let path = info?["FLUACatalogPath"] as? String { return URL(fileURLWithPath: path) }
-        return FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/Flua/catalog.json")
+        guard let path = info?["FLUACatalogPath"] as? String, !path.isEmpty else { return nil }
+        return URL(fileURLWithPath: path)
+    }
+    static var catalogURL: URL {
+        boundCatalogURL ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/Flua/catalog.json")
     }
     static var explanation: String {
         if !available { return "Wallpaper playback needs the wallpaper extension inside Flua.app on macOS 27." }

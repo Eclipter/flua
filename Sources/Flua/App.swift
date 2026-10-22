@@ -335,7 +335,7 @@ enum AppContext {
                 root = URL(fileURLWithPath: args[i + 1], isDirectory: true)
             } else {
                 let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-                root = LibraryPaths.resolve(applicationSupport: support)
+                root = LibraryPaths.resolve(applicationSupport: support, boundCatalog: NativeWallpaper.boundCatalogURL)
             }
             return try Library(root: root, systemPlaybackEnabled: !args.contains("--smoke-test"))
         }

@@ -28,7 +28,7 @@
 - Preserve backward compatibility for persisted Codable data. Existing libraries must continue to load without migration-related data loss.
 - Treat file paths, manifests, and ZIP contents as untrusted input. Keep path-containment and archive validation at import boundaries.
 - Never use a developer's real `~/Library/Application Support/Flua/` data for tests. Use a new disposable directory with `--data-dir`.
-- When testing native wallpaper application or provider setup with a disposable `--data-dir`, rebuild the app bundle with `FLUA_CATALOG_PATH` set to that directory's `catalog.json` (and `FLUA_WALLPAPER_IDENTIFIER` if testing provider registration). Otherwise, applying native wallpapers in the app will be blocked with *"This build uses a different library"*.
+- When testing native wallpaper application or provider setup with a disposable `--data-dir`, rebuild the app bundle with `FLUA_CATALOG_PATH` set to that directory's `catalog.json` (and `FLUA_WALLPAPER_IDENTIFIER` if testing provider registration). Otherwise, applying native wallpapers in the app will be blocked with *"This build uses a different library"*. A build with `FLUA_CATALOG_PATH` opens that catalog’s library when `--data-dir` is omitted.
 - Preserve source media during import, editing and export. Replacing an existing export destination is allowed with explicit user consent, such as confirmation in the save dialog. Never replace files silently.
 - Keep UI and user-facing documentation in English, matching the existing application.
 - Follow `.editorconfig`: four spaces in Swift, tabs in `Makefile`, LF endings, and a final newline.
