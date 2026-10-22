@@ -3,6 +3,22 @@ import Foundation
 enum NativeWallpaperStore {
     static let maximumSize = 16 * 1024 * 1024
 
+    private static func defaultSurface() throws -> [String: Any] {
+        let options = try PropertyListSerialization.data(fromPropertyList: ["values": [String: String]()], format: .binary, options: 0)
+        let choice: [String: Any] = ["Provider": "default", "Files": [[String: String]](), "Configuration": Data()]
+        let now = Date()
+        return ["Content": ["Choices": [choice], "Shuffle": "$null", "EncodedOptionValues": options], "LastSet": now, "LastUse": now]
+    }
+
+    private static func isRestorableSurface(_ value: [String: Any]?, provider: String) -> Bool {
+        guard let content = value?["Content"] as? [String: Any],
+              let choices = content["Choices"] as? [[String: Any]], !choices.isEmpty else { return false }
+        return choices.allSatisfy { choice in
+            guard let candidate = choice["Provider"] as? String, !candidate.isEmpty else { return false }
+            return candidate != provider
+        }
+    }
+
     static func choice(_ item: ProviderCatalog.Item, root: URL, provider: String) throws -> [String: Any] {
         guard item.kind == "image" || item.kind == "video" || builtInSceneKinds.contains(item.kind) else {
             throw NativeWallpaperError("Choose an available image, video or scene.")
@@ -144,7 +160,7 @@ enum NativeWallpaperStore {
     static func replacing(_ assignments: [String: Assignment], displays: [String], provider: String,
                          mirrored: Bool, in data: Data, baseline: Data?) throws -> Data {
         let restored = try stopping(displays: displays, provider: provider, in: data, baseline: baseline,
-                                    mirrored: mirrored, allowMissingBaseline: baseline == nil)
+                                    mirrored: mirrored)
         guard !assignments.isEmpty else { return restored }
         return try applying(assignments, mirrored: mirrored, to: restored)
     }
@@ -213,15 +229,10 @@ enum NativeWallpaperStore {
         return stopMatches(reconciled, in: actual)
     }
 
-    static func shouldCaptureBaseline(_ baseline: Data?, provider: String, in data: Data) throws -> Bool {
-        guard baseline == nil else { return true }
-        return try !containsProvider(provider, in: data)
-    }
-
     static func stopping(displays targets: [String], provider: String, in data: Data, baseline: Data?, captureBaseline: Bool = false,
-                         mirrored: Bool = false, allowMissingBaseline: Bool = false) throws -> Data {
+                         mirrored: Bool = false) throws -> Data {
         var store = try decode(data)
-        let saved = try baseline.map(decode)
+        let saved = baseline.flatMap { try? decode($0) }
         func fallback(_ store: [String: Any]) throws -> [String: Any] {
             guard store["AllSpacesAndDisplays"] == nil || store["AllSpacesAndDisplays"] as? String == "$null" || store["AllSpacesAndDisplays"] is [String: Any] else { throw unsupported() }
             let global = store["AllSpacesAndDisplays"] as? [String: Any] ?? [:]
@@ -230,6 +241,7 @@ enum NativeWallpaperStore {
             return value
         }
         let inherited = try fallback(store)
+        let macOSDefaultSurface = try Self.defaultSurface()
         guard var displays = store["Displays"] as? [String: Any], var spaces = store["Spaces"] as? [String: Any] else { throw unsupported() }
         func surface(_ key: String, in value: [String: Any]) -> [String: Any]? {
             value[value["Type"] as? String == "linked" ? "Linked" : key] as? [String: Any]
@@ -238,18 +250,27 @@ enum NativeWallpaperStore {
             guard let content = value?["Content"] as? [String: Any], let choices = content["Choices"] as? [[String: Any]] else { return false }
             return choices.contains { $0["Provider"] as? String == provider }
         }
+        func restoredSurface(_ key: String, current: [String: Any], previous: [String: Any]?) -> [String: Any] {
+            guard var content = current["Content"] as? [String: Any],
+                  let choices = content["Choices"] as? [[String: Any]] else { return macOSDefaultSurface }
+            let foreign = choices.filter { $0["Provider"] as? String != provider }
+            if !foreign.isEmpty {
+                content["Choices"] = foreign
+                var result = current
+                result["Content"] = content
+                return result
+            }
+            if let previous, let replacement = surface(key, in: previous),
+               Self.isRestorableSurface(replacement, provider: provider) {
+                return replacement
+            }
+            return macOSDefaultSurface
+        }
         func restore(_ current: [String: Any], from previous: [String: Any]?) throws -> [String: Any] {
             guard let type = current["Type"] as? String, ["individual", "linked", "desktop", "idle"].contains(type) else { throw unsupported() }
             var result = current
             for key in ["Desktop", "Idle"] where owned(surface(key, in: current)) {
-                let content = surface(key, in: current)?["Content"] as? [String: Any]
-                guard let active = content?["Choices"] as? [[String: Any]], active.allSatisfy({ $0["Provider"] as? String == provider }) else { throw unsupported() }
-                guard let previous, let replacement = surface(key, in: previous), !owned(replacement),
-                      let content = replacement["Content"] as? [String: Any],
-                      let choices = content["Choices"] as? [[String: Any]], !choices.isEmpty else {
-                    if allowMissingBaseline && previous == nil { return current }
-                    throw NativeWallpaperError("The previous system wallpaper is unavailable. Choose another wallpaper in System Settings, then apply Flua again to establish a restoration baseline.")
-                }
+                let replacement = restoredSurface(key, current: surface(key, in: current) ?? [:], previous: previous)
                 if result["Type"] as? String == "linked" {
                     result["Desktop"] = result["Linked"]
                     result["Idle"] = result["Linked"]
@@ -260,7 +281,7 @@ enum NativeWallpaperStore {
             }
             return result
         }
-        let savedFallback = try saved.map(fallback)
+        let savedFallback = saved.flatMap { try? fallback($0) }
         var changed = false
         var targetIDs = Set(targets)
         if captureBaseline {
@@ -294,8 +315,8 @@ enum NativeWallpaperStore {
         if captureBaseline || mirrored || hasProvider {
             for key in ["SystemDefault", "AllSpacesAndDisplays"] {
                 if let current = store[key] as? [String: Any], !current.isEmpty {
-                    let previous = saved?[key] as? [String: Any] ?? [:]
-                    store[key] = try restore(current, from: previous.isEmpty ? savedFallback : previous)
+                    let previous = saved?[key] as? [String: Any]
+                    store[key] = try restore(current, from: previous?.isEmpty == true ? savedFallback : previous ?? savedFallback)
                 }
             }
             for (id, value) in spaces {
@@ -321,13 +342,7 @@ enum NativeWallpaperStore {
     }
 
     static func stopMatches(_ expected: Data, in actual: Data) -> Bool {
-        func normalized(_ value: Any) -> Any {
-            if let values = value as? [Any] { return values.map(normalized) }
-            guard let dictionary = value as? [String: Any] else { return value }
-            return dictionary.filter { $0.key != "LastSet" && $0.key != "LastUse" }.mapValues(normalized)
-        }
-        guard let expected = try? decode(expected), let actual = try? decode(actual) else { return false }
-        return NSDictionary(dictionary: normalized(expected) as! [String: Any]).isEqual(to: normalized(actual) as! [String: Any])
+        storesMatch(expected, actual)
     }
 
     static func refreshing(_ replacement: [String: Any], provider: String, in data: Data) throws -> Data {
@@ -395,62 +410,111 @@ enum NativeWallpaperStore {
         return dictionary["Provider"] as? String == provider || dictionary.values.contains { contains(provider, in: $0) }
     }
 
-    static func restoring(_ baseline: Data, provider: String, in data: Data) throws -> Data {
-        let original = try decode(baseline)
+    static func restoring(_ baseline: Data?, provider: String, in data: Data) throws -> Data {
         let current = try decode(data)
-        guard !(try containsProvider(provider, in: baseline)) else {
-            throw NativeWallpaperError("The saved baseline still uses Flua. Choose another wallpaper in System Settings before removing the provider.")
+        let original = baseline.flatMap { try? decode($0) }
+        let macOSDefaultSurface = try Self.defaultSurface()
+        let defaultAssignment: [String: Any] = ["Type": "individual", "Desktop": macOSDefaultSurface, "Idle": macOSDefaultSurface]
+        func validAssignment(_ value: [String: Any]?) -> [String: Any]? {
+            guard let value, let type = value["Type"] as? String,
+                  ["individual", "linked", "desktop", "idle"].contains(type) else { return nil }
+            return value
         }
-        let global = original["AllSpacesAndDisplays"] as? [String: Any] ?? [:]
-        guard let inherited = global.isEmpty ? original["SystemDefault"] as? [String: Any] : global else { throw unsupported() }
+        let global = original?["AllSpacesAndDisplays"] as? [String: Any] ?? [:]
+        let inherited = validAssignment(global.isEmpty ? original?["SystemDefault"] as? [String: Any] : global) ?? defaultAssignment
         func restore(_ value: Any, from saved: Any?, inherited: [String: Any]) throws -> Any {
             guard var dictionary = value as? [String: Any] else { throw unsupported() }
-            let saved = saved as? [String: Any]
             if dictionary["Type"] != nil {
-                let saved = saved ?? inherited
+                let saved = validAssignment(saved as? [String: Any]) ?? inherited
                 let affected = ["Desktop", "Idle", "Linked"].filter { surface in
                     guard let settings = dictionary[surface] else { return false }
                     return contains(provider, in: settings)
                 }
                 guard !affected.isEmpty else { return dictionary }
                 guard let currentType = dictionary["Type"] as? String,
-                      ["individual", "linked", "desktop", "idle"].contains(currentType),
-                      let type = saved["Type"] as? String,
-                      ["individual", "linked", "desktop", "idle"].contains(type) else {
-                    throw NativeWallpaperError("The original wallpaper for a display or Space is unavailable. Choose another wallpaper in System Settings before removing the provider.")
+                      ["individual", "linked", "desktop", "idle"].contains(currentType) else { throw unsupported() }
+                func replacement(_ surface: String) -> [String: Any] {
+                    let key = saved["Type"] as? String == "linked" ? "Linked" : surface
+                    guard let settings = saved[key] as? [String: Any],
+                          Self.isRestorableSurface(settings, provider: provider) else { return macOSDefaultSurface }
+                    return settings
                 }
+                var mixed = false
                 for surface in affected {
                     if let settings = dictionary[surface] as? [String: Any],
-                       let content = settings["Content"] as? [String: Any],
-                       let choices = content["Choices"] as? [[String: Any]],
-                       choices.contains(where: { $0["Provider"] as? String != provider }) {
-                        throw NativeWallpaperError("A wallpaper surface mixes Flua with another provider. Choose another wallpaper in System Settings before removing Flua.")
+                       var content = settings["Content"] as? [String: Any],
+                       let choices = content["Choices"] as? [[String: Any]] {
+                        let foreign = choices.filter { $0["Provider"] as? String != provider }
+                        if !foreign.isEmpty {
+                            content["Choices"] = foreign
+                            var cleaned = settings
+                            cleaned["Content"] = content
+                            dictionary[surface] = cleaned
+                            mixed = true
+                        }
                     }
                 }
-                if affected.contains("Linked") || (affected.contains("Desktop") && affected.contains("Idle")) {
-                    for key in ["Type", "Desktop", "Idle", "Linked"] { dictionary[key] = saved[key] }
-                } else {
-                    for surface in affected {
-                        guard let settings = saved["Type"] as? String == "linked" ? saved["Linked"] : saved[surface] else { throw unsupported() }
-                        dictionary[surface] = settings
+                if mixed {
+                    for surface in affected where contains(provider, in: dictionary[surface] ?? [:]) {
+                        dictionary[surface] = replacement(surface)
                     }
+                    return dictionary
+                }
+                if affected.contains("Linked") || (affected.contains("Desktop") && affected.contains("Idle")) {
+                    let source = validAssignment(saved) ?? defaultAssignment
+                    if source["Type"] as? String == "linked",
+                       let linked = source["Linked"] as? [String: Any],
+                       Self.isRestorableSurface(linked, provider: provider) {
+                        dictionary["Type"] = source["Type"]
+                        for surface in ["Desktop", "Idle", "Linked"] {
+                            if let value = source[surface] as? [String: Any], Self.isRestorableSurface(value, provider: provider) {
+                                dictionary[surface] = value
+                            } else {
+                                dictionary.removeValue(forKey: surface)
+                            }
+                        }
+                    } else {
+                        dictionary["Type"] = source["Type"]
+                        for surface in ["Desktop", "Idle"] {
+                            if let settings = source[surface] as? [String: Any],
+                               Self.isRestorableSurface(settings, provider: provider) {
+                                dictionary[surface] = settings
+                            } else if affected.contains(surface) || affected.contains("Linked") {
+                                dictionary[surface] = macOSDefaultSurface
+                            } else {
+                                dictionary.removeValue(forKey: surface)
+                            }
+                        }
+                        if let linked = source["Linked"] as? [String: Any],
+                           Self.isRestorableSurface(linked, provider: provider) {
+                            dictionary["Linked"] = linked
+                        } else {
+                            dictionary.removeValue(forKey: "Linked")
+                        }
+                        if source["Type"] as? String == "linked" { dictionary["Type"] = "individual" }
+                    }
+                } else {
+                    for surface in affected { dictionary[surface] = replacement(surface) }
                 }
                 return dictionary
             }
-            let fallback = saved?["Default"] as? [String: Any] ?? inherited
-            for (key, child) in dictionary { dictionary[key] = try restore(child, from: saved?[key], inherited: fallback) }
+            let savedDictionary = saved as? [String: Any]
+            let fallback = validAssignment(savedDictionary?["Default"] as? [String: Any]) ?? inherited
+            for (key, child) in dictionary { dictionary[key] = try restore(child, from: savedDictionary?[key], inherited: fallback) }
             return dictionary
         }
         var result = current
         for key in ["SystemDefault", "AllSpacesAndDisplays", "Displays", "Spaces"] {
             if key == "AllSpacesAndDisplays", current[key] == nil || current[key] as? String == "$null" { continue }
             guard let value = current[key],
-                  original[key] is [String: Any] || (key == "AllSpacesAndDisplays" && (original[key] == nil || original[key] as? String == "$null")) else { throw unsupported() }
-            let fallback = key == "AllSpacesAndDisplays" && (original[key] as? [String: Any])?.isEmpty == true
-                ? original["SystemDefault"] : original[key]
+                  key != "SystemDefault" || validAssignment(value as? [String: Any]) != nil,
+                  key != "Displays" || value is [String: Any], key != "Spaces" || value is [String: Any] else { throw unsupported() }
+            let savedValue = original?[key]
+            let fallback = key == "AllSpacesAndDisplays" && (savedValue as? [String: Any])?.isEmpty == true
+                ? original?["SystemDefault"] : savedValue
             let restored = try restore(value, from: fallback, inherited: inherited)
             if key == "AllSpacesAndDisplays", contains(provider, in: value),
-               (original[key] as? [String: Any])?.isEmpty == true,
+               (original?["AllSpacesAndDisplays"] as? [String: Any])?.isEmpty == true,
                let restored = restored as? [String: Any], let fallback = fallback as? [String: Any],
                NSDictionary(dictionary: restored).isEqual(to: fallback) {
                 result[key] = [String: Any]()
@@ -462,16 +526,21 @@ enum NativeWallpaperStore {
     }
 
     static func restorationMatches(_ expected: Data, in actual: Data) -> Bool {
-        func normalized(_ value: Any) -> Any {
-            if let values = value as? [Any] { return values.map(normalized) }
-            guard var dictionary = value as? [String: Any] else { return value }
-            dictionary.removeValue(forKey: "LastSet")
-            dictionary.removeValue(forKey: "LastUse")
-            for (key, child) in dictionary { dictionary[key] = normalized(child) }
-            return dictionary
-        }
+        storesMatch(expected, actual)
+    }
+
+    private static func storesMatch(_ expected: Data, _ actual: Data) -> Bool {
         guard let expected = try? decode(expected), let actual = try? decode(actual) else { return false }
-        return NSDictionary(dictionary: normalized(expected) as! [String: Any]).isEqual(to: normalized(actual) as! [String: Any])
+        return NSDictionary(dictionary: normalizedTimestamps(expected) as! [String: Any]).isEqual(to: normalizedTimestamps(actual) as! [String: Any])
+    }
+
+    private static func normalizedTimestamps(_ value: Any) -> Any {
+        if let values = value as? [Any] { return values.map(normalizedTimestamps) }
+        guard var dictionary = value as? [String: Any] else { return value }
+        dictionary.removeValue(forKey: "LastSet")
+        dictionary.removeValue(forKey: "LastUse")
+        for (key, child) in dictionary { dictionary[key] = normalizedTimestamps(child) }
+        return dictionary
     }
 
     private static func decode(_ data: Data) throws -> [String: Any] {

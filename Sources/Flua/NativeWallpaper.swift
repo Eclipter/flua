@@ -60,7 +60,7 @@ enum NativeWallpaper {
                 throw NativeWallpaperError("The macOS wallpaper store could not be read safely.")
             }
             let current = try Data(contentsOf: store)
-            let baseline = FileManager.default.fileExists(atPath: baselineURL.path) ? try Data(contentsOf: baselineURL) : nil
+            let baseline = readBaseline(at: baselineURL)
             let expected = try NativeWallpaperStore.replacing(assignments, displays: displays, provider: identifier,
                 mirrored: mirrored, in: current, baseline: baseline)
             if NativeWallpaperStore.applicationMatches(assignments, mirrored: mirrored, expected: expected, in: current) {
@@ -70,7 +70,7 @@ enum NativeWallpaper {
         }
         try register()
         try updateStore(root: root, baselineDisplays: displays, transform: { current in
-            let baseline = FileManager.default.fileExists(atPath: baselineURL.path) ? try Data(contentsOf: baselineURL) : nil
+            let baseline = readBaseline(at: baselineURL)
             return try NativeWallpaperStore.replacing(assignments, displays: displays, provider: identifier,
                 mirrored: mirrored, in: current, baseline: baseline)
         }, verify: { actual, expected in
@@ -80,7 +80,7 @@ enum NativeWallpaper {
     static func stop(displays: [String], mirrored: Bool, root: URL) throws -> Bool {
         guard available else { throw NativeWallpaperError(explanation) }
         let url = root.appendingPathComponent("NativeWallpaperBaseline.plist")
-        let baseline = FileManager.default.fileExists(atPath: url.path) ? try Data(contentsOf: url) : nil
+        let baseline = readBaseline(at: url)
         let store = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/com.apple.wallpaper/Store/Index.plist")
         let current = try Data(contentsOf: store)
         guard try NativeWallpaperStore.stopping(displays: displays, provider: identifier, in: current, baseline: baseline, mirrored: mirrored) != current else { return false }
@@ -105,30 +105,17 @@ enum NativeWallpaper {
     }
     static func remove(root: URL) throws {
         guard available else { throw NativeWallpaperError(explanation) }
-        let secondaryStore = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/com.apple.wallpaper/Store/Index_v2.plist")
-        if FileManager.default.fileExists(atPath: secondaryStore.path) {
-            let attributes = try FileManager.default.attributesOfItem(atPath: secondaryStore.path)
-            guard attributes[.type] as? FileAttributeType == .typeRegular,
-                  ((attributes[.size] as? NSNumber)?.intValue ?? Int.max) <= NativeWallpaperStore.maximumSize,
-                  try !NativeWallpaperStore.containsProvider(identifier, in: Data(contentsOf: secondaryStore)) else {
-                throw NativeWallpaperError("Another macOS wallpaper store still uses Flua. Choose another wallpaper in System Settings, then retry removal.")
-            }
-        }
-        let baseline = root.appendingPathComponent("NativeWallpaperBaseline.plist")
+        let baseline = readBaseline(at: root.appendingPathComponent("NativeWallpaperBaseline.plist"))
         let restore: (Data) throws -> Data = { current in
             guard try NativeWallpaperStore.containsProvider(identifier, in: current) else { return current }
-            guard FileManager.default.fileExists(atPath: baseline.path) else {
-                throw NativeWallpaperError("No original wallpaper was saved by this library. Choose another wallpaper in System Settings, then retry removal.")
-            }
-            let attributes = try FileManager.default.attributesOfItem(atPath: baseline.path)
-            guard attributes[.type] as? FileAttributeType == .typeRegular,
-                  ((attributes[.size] as? NSNumber)?.intValue ?? Int.max) <= NativeWallpaperStore.maximumSize else {
-                throw NativeWallpaperError("The original wallpaper backup could not be read safely. Choose another wallpaper in System Settings, then retry removal.")
-            }
-            return try NativeWallpaperStore.restoring(Data(contentsOf: baseline), provider: identifier, in: current)
+            return try NativeWallpaperStore.restoring(baseline, provider: identifier, in: current)
         }
         let verify: (Data, Data) -> Bool = { NativeWallpaperStore.restorationMatches($1, in: $0) }
         try updateStore(root: root, transform: restore, verify: verify)
+        let secondaryStore = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/com.apple.wallpaper/Store/Index_v2.plist")
+        if FileManager.default.fileExists(atPath: secondaryStore.path) {
+            try updateStore(root: root, storeName: "Index_v2.plist", transform: restore, verify: verify)
+        }
         try run("/usr/bin/pluginkit", ["-r", extensionURL.path])
         try run(registrationTool, ["-u", Bundle.main.bundlePath])
         let registered = try run("/usr/bin/pluginkit", ["-m", "-A", "-D", "-v", "-i", identifier], allowedStatuses: [0, 1])
@@ -139,9 +126,20 @@ enum NativeWallpaper {
         // Unregistration can make the host persist a cached per-display choice after the first reload.
         Thread.sleep(forTimeInterval: 1)
         try updateStore(root: root, transform: restore, verify: verify)
+        if FileManager.default.fileExists(atPath: secondaryStore.path) {
+            try updateStore(root: root, storeName: "Index_v2.plist", transform: restore, verify: verify)
+        }
     }
-    private static func updateStore(root: URL, baselineDisplays: [String]? = nil, transform: (Data) throws -> Data, verify: (Data, Data) -> Bool) throws {
-        let store = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/com.apple.wallpaper/Store/Index.plist")
+    static func readBaseline(at url: URL) -> Data? {
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
+              attributes[.type] as? FileAttributeType == .typeRegular,
+              let size = attributes[.size] as? NSNumber,
+              size.intValue <= NativeWallpaperStore.maximumSize else { return nil }
+        return try? Data(contentsOf: url)
+    }
+
+    private static func updateStore(root: URL, storeName: String = "Index.plist", baselineDisplays: [String]? = nil, transform: (Data) throws -> Data, verify: (Data, Data) -> Bool) throws {
+        let store = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/com.apple.wallpaper/Store").appendingPathComponent(storeName)
         let lockURL = store.deletingLastPathComponent().appendingPathComponent(".flua-apply.lock")
         let lock = open(lockURL.path, O_CREAT | O_RDWR | O_CLOEXEC | O_NOFOLLOW, 0o600)
         guard lock >= 0 else { throw NativeWallpaperError("Could not lock the wallpaper store. No wallpaper was changed.") }
@@ -172,16 +170,14 @@ enum NativeWallpaper {
         let previous = try Data(contentsOf: store)
         if let baselineDisplays {
             let url = root.appendingPathComponent("NativeWallpaperBaseline.plist")
-            let saved = FileManager.default.fileExists(atPath: url.path) ? try Data(contentsOf: url) : nil
-            if try NativeWallpaperStore.shouldCaptureBaseline(saved, provider: identifier, in: previous) {
-                let baseline = try NativeWallpaperStore.stopping(displays: baselineDisplays, provider: identifier, in: previous, baseline: saved, captureBaseline: true)
-                try baseline.write(to: url, options: .atomic)
-                try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
-            }
+            let saved = readBaseline(at: url)
+            let baseline = try NativeWallpaperStore.stopping(displays: baselineDisplays, provider: identifier, in: previous, baseline: saved, captureBaseline: true)
+            try baseline.write(to: url, options: .atomic)
+            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
         }
         let updated = try transform(previous)
         guard updated != previous else { return }
-        let backup = root.appendingPathComponent("NativeWallpaperBackup.plist")
+        let backup = root.appendingPathComponent(storeName == "Index.plist" ? "NativeWallpaperBackup.plist" : "NativeWallpaperBackup-v2.plist")
         try previous.write(to: backup, options: .atomic)
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: backup.path)
         guard process.isRunning else { throw NativeWallpaperError("Applying took too long. Your wallpaper was preserved; retry shortly.") }
@@ -189,12 +185,12 @@ enum NativeWallpaper {
         try input.fileHandleForWriting.write(contentsOf: Data("k".utf8))
         process.waitUntilExit()
         guard process.terminationStatus == 0 else {
-            throw NativeWallpaperError("macOS could not reload the wallpaper. The previous settings are saved in NativeWallpaperBackup.plist in your library.")
+            throw NativeWallpaperError("macOS could not reload the wallpaper. The previous settings are saved in \(backup.lastPathComponent) in your library.")
         }
         // The restarted host rewrites rejected stores after decoding them.
         Thread.sleep(forTimeInterval: 1)
         guard verify(try Data(contentsOf: store), updated) else {
-            throw NativeWallpaperError("macOS did not keep the selected wallpaper. The previous settings are saved in NativeWallpaperBackup.plist in your library.")
+            throw NativeWallpaperError("macOS did not keep the selected wallpaper. The previous settings are saved in \(backup.lastPathComponent) in your library.")
         }
     }
     static func agentPID(_ status: String) -> pid_t? {

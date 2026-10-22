@@ -16,10 +16,10 @@ Flua is a local wallpaper library for macOS 27+ on Apple Silicon. Playback uses 
 | Video editor | Draft trim and cover selection with Save Changes / Cancel; name and tags in Details | No standalone video studio or separate MP4/PNG export controls |
 | Export and packages | Video `.flua` folders; image copies; manifest folders, JSON, ZIP and `.bdpkg` imports | Source media is preserved; package export refuses an existing destination |
 | Native application | Set Wallpaper applies saved surface choices and modes to target displays across existing Spaces | Uses a guarded, backed-up private wallpaper-store transaction |
-| Restoration | Stop restores previous system choices; launch/reconnect respects active and stopped intent | A usable retained baseline is required for restoration; matching active choices avoid reload |
+| Restoration | Stop restores previous system choices; launch/reconnect respects active and stopped intent | Unavailable saved surfaces silently use the macOS default wallpaper; matching active choices avoid reload |
 | Live updates | Active assignment changes and rendering edits refresh after a 0.5-second debounce | No-op parameter edits avoid reload; unrelated providers and surface modes are preserved |
 | Recovery | Static fallback and media/catalog retries; explicit Apply reacquires after provider termination or missing grants | Live sandbox-token revocation and automatic process relaunch remain unverified |
-| Provider removal | Settings → Lock Screen → Remove native provider… restores Flua surfaces and unregisters this copy | Unsafe/missing baselines, mixed-provider surfaces or secondary-store references block removal; library media is retained |
+| Provider removal | Settings → Lock Screen → Remove native provider… restores Flua surfaces and unregisters this copy | Unavailable saved surfaces use the macOS default wallpaper; foreign choices and library media are retained |
 | Login startup | Opt-in | Not enabled during verification |
 
 ## Validation scope

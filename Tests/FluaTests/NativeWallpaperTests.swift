@@ -13,6 +13,24 @@ import Foundation
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root.appendingPathComponent("Media"), withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
+        let baselineURL = root.appendingPathComponent("baseline.plist")
+        precondition(NativeWallpaper.readBaseline(at: baselineURL) == nil)
+        let baselineBytes = Data("baseline".utf8)
+        try baselineBytes.write(to: baselineURL)
+        precondition(NativeWallpaper.readBaseline(at: baselineURL) == baselineBytes)
+        let baselineDirectory = root.appendingPathComponent("baseline-directory")
+        try FileManager.default.createDirectory(at: baselineDirectory, withIntermediateDirectories: false)
+        precondition(NativeWallpaper.readBaseline(at: baselineDirectory) == nil)
+        let baselineSymlink = root.appendingPathComponent("baseline-symlink.plist")
+        try FileManager.default.createSymbolicLink(at: baselineSymlink, withDestinationURL: baselineURL)
+        precondition(NativeWallpaper.readBaseline(at: baselineSymlink) == nil)
+        let oversizedBaseline = root.appendingPathComponent("baseline-oversized.plist")
+        precondition(FileManager.default.createFile(atPath: oversizedBaseline.path, contents: Data()))
+        let oversizedHandle = try FileHandle(forWritingTo: oversizedBaseline)
+        try oversizedHandle.truncate(atOffset: UInt64(NativeWallpaperStore.maximumSize + 1))
+        try oversizedHandle.close()
+        precondition(NativeWallpaper.readBaseline(at: oversizedBaseline) == nil)
+        print("PASS: baseline loading accepts bounded regular files and rejects missing files, directories, symlinks and oversized files")
         let source = root.appendingPathComponent("Media/video.mov")
         let sourceData = Data("source must stay intact".utf8)
         try sourceData.write(to: source)
@@ -37,6 +55,57 @@ import Foundation
         let old: [String: Any] = ["Type": "individual", "Desktop": ["Content": ["Choices": [["Provider": "old-desktop"]]]], "Idle": ["Content": ["Choices": [["Provider": "old-idle"]]]], "Keep": "metadata"]
         let store: [String: Any] = ["SystemDefault": old, "AllSpacesAndDisplays": [:], "Displays": ["display": old], "Spaces": ["space": ["Default": old, "Displays": ["display": old]]], "Keep": "root metadata"]
         func encode(_ value: Any) throws -> Data { try PropertyListSerialization.data(fromPropertyList: value, format: .binary, options: 0) }
+        let defaultOptions = try PropertyListSerialization.data(fromPropertyList: ["values": [String: String]()], format: .binary, options: 0)
+        func defaultSurface(encodedOptions: Any = defaultOptions, extra: [String: Any] = [:]) -> [String: Any] {
+            var content: [String: Any] = [
+                "Choices": [["Provider": "default", "Files": [[String: String]](), "Configuration": Data()]],
+                "Shuffle": "$null",
+                "EncodedOptionValues": encodedOptions
+            ]
+            for (key, value) in extra { content[key] = value }
+            return ["Content": content, "LastSet": Date(timeIntervalSince1970: 100), "LastUse": Date(timeIntervalSince1970: 101)]
+        }
+        func isDefaultSurface(_ value: Any?) -> Bool {
+            guard let surface = value as? [String: Any], let content = surface["Content"] as? [String: Any],
+                  let choices = content["Choices"] as? [[String: Any]], choices.count == 1 else { return false }
+            let choice = choices[0]
+            return choice["Provider"] as? String == "default" && (choice["Files"] as? [[String: String]])?.isEmpty == true &&
+                choice["Configuration"] as? Data == Data() && content["Shuffle"] as? String == "$null" &&
+                content["EncodedOptionValues"] as? Data == defaultOptions
+        }
+        func assertDefaultFallback(_ data: Data) throws {
+            let value = try PropertyListSerialization.propertyList(from: data, format: nil) as! [String: Any]
+            let systemDefault = value["SystemDefault"] as! [String: Any]
+            let display = (value["Displays"] as! [String: Any])["display"] as! [String: Any]
+            precondition(isDefaultSurface(systemDefault["Desktop"]) && isDefaultSurface(systemDefault["Idle"]))
+            precondition(isDefaultSurface(display["Desktop"]) && isDefaultSurface(display["Idle"]))
+            for surface in [systemDefault["Desktop"], systemDefault["Idle"], display["Desktop"], display["Idle"]] {
+                let assignment = surface as! [String: Any]
+                precondition(assignment["LastSet"] is Date && assignment["LastUse"] is Date)
+            }
+            let containsFlua = try NativeWallpaperStore.containsProvider("local.flua.desktop.wallpaper", in: data)
+            precondition(!containsFlua)
+        }
+        let foreignDesktop: [String: Any] = [
+            "Content": ["Choices": [["Provider": "foreign.desktop", "Files": [[String: String]](), "Configuration": Data()]],
+                        "Shuffle": "$null", "EncodedOptionValues": defaultOptions],
+            "LastSet": Date(timeIntervalSince1970: 100), "LastUse": Date(timeIntervalSince1970: 101)
+        ]
+        let expectedMixedFallback: [String: Any] = [
+            "SystemDefault": ["Type": "individual", "Desktop": foreignDesktop, "Idle": defaultSurface()],
+            "AllSpacesAndDisplays": [String: Any](),
+            "Displays": ["display": ["Type": "individual", "Desktop": foreignDesktop, "Idle": defaultSurface()]],
+            "Spaces": [String: Any]()
+        ]
+        let nativeResetToDefaults: [String: Any] = [
+            "SystemDefault": ["Type": "linked", "Linked": defaultSurface(encodedOptions: "$null")],
+            "AllSpacesAndDisplays": ["Type": "linked", "Linked": defaultSurface(encodedOptions: "$null")],
+            "Displays": [String: Any](), "Spaces": [String: Any]()
+        ]
+        let expectedMixedFallbackData = try encode(expectedMixedFallback)
+        let nativeResetData = try encode(nativeResetToDefaults)
+        precondition(!NativeWallpaperStore.stopMatches(expectedMixedFallbackData, in: nativeResetData),
+                     "A native whole-store reset must not verify when it drops a foreign Desktop choice")
         for type in ["individual", "linked", "desktop", "idle"] {
             var assignment = old
             assignment["Type"] = type
@@ -65,9 +134,9 @@ import Foundation
         precondition(stoppedAgain == stopped)
         precondition(NativeWallpaperStore.stopMatches(stopped, in: stopped))
         precondition(!NativeWallpaperStore.stopMatches(stopped, in: updated))
-        for baseline: Data? in [nil, updated] {
-            do { _ = try NativeWallpaperStore.stopping(displays: ["display"], provider: "local.flua.desktop.wallpaper", in: updated, baseline: baseline); preconditionFailure("Stopped without a usable baseline") }
-            catch is NativeWallpaperError {}
+        for baseline: Data? in [nil, updated, Data("malformed".utf8)] {
+            let fallback = try NativeWallpaperStore.stopping(displays: ["display"], provider: "local.flua.desktop.wallpaper", in: updated, baseline: baseline)
+            try assertDefaultFallback(fallback)
         }
         let reappliedWithoutBaseline = try NativeWallpaperStore.replacing(assignments, displays: ["display"], provider: "local.flua.desktop.wallpaper",
             mirrored: true, in: updated, baseline: nil)
@@ -225,10 +294,6 @@ import Foundation
         precondition(!NativeWallpaperStore.applicationMatches(applicationAssignments, mirrored: true,
             expected: mirroredExpectedWithOldDefault, in: mirroredExpected))
         print("PASS: Apply verification allows only requested per-display choice propagation into defaults")
-        let captureFresh = try NativeWallpaperStore.shouldCaptureBaseline(nil, provider: "local.flua.desktop.wallpaper", in: original)
-        let skipExisting = try NativeWallpaperStore.shouldCaptureBaseline(nil, provider: "local.flua.desktop.wallpaper", in: updated)
-        let refreshSaved = try NativeWallpaperStore.shouldCaptureBaseline(original, provider: "local.flua.desktop.wallpaper", in: updated)
-        precondition(captureFresh && !skipExisting && refreshSaved)
         let captured = try NativeWallpaperStore.stopping(displays: ["second"], provider: "local.flua.desktop.wallpaper", in: updated, baseline: original, captureBaseline: true)
         let recaptured = try NativeWallpaperStore.stopping(displays: ["display"], provider: "local.flua.desktop.wallpaper", in: updated, baseline: captured, captureBaseline: true)
         let repeatedStop = try NativeWallpaperStore.stopping(displays: ["display"], provider: "local.flua.desktop.wallpaper", in: updated, baseline: recaptured)
@@ -261,11 +326,13 @@ import Foundation
         var mixedStopDisplay = foreignDisplay
         mixedStopDisplay["Desktop"] = ["Content": ["Choices": [choice, ["Provider": "foreign"]]]]
         mixedStopStore["Displays"] = ["display": mixedStopDisplay]
-        do { _ = try NativeWallpaperStore.stopping(displays: ["display"], provider: "local.flua.desktop.wallpaper", in: encode(mixedStopStore), baseline: original); preconditionFailure("Discarded a mixed-provider selection") }
-        catch is NativeWallpaperError {}
+        let mixedStop = try NativeWallpaperStore.stopping(displays: ["display"], provider: "local.flua.desktop.wallpaper", in: encode(mixedStopStore), baseline: original)
+        let mixedStopResult = try PropertyListSerialization.propertyList(from: mixedStop, format: nil) as! [String: Any]
+        let mixedStopDesktop = (((mixedStopResult["Displays"] as! [String: Any])["display"] as! [String: Any])["Desktop"] as! [String: Any])["Content"] as! [String: Any]
+        precondition((mixedStopDesktop["Choices"] as! [[String: Any]]).map { $0["Provider"] as? String } == ["foreign"])
         do { _ = try NativeWallpaperStore.stopping(displays: ["display"], provider: "test", in: encode(["Displays": [:]]), baseline: original); preconditionFailure("Accepted malformed stop store") }
         catch is NativeWallpaperError {}
-        print("PASS: native Stop restores both surfaces, retains untargeted and foreign choices, survives repeated baseline capture, rejects missing baselines and verifies host timestamp changes")
+        print("PASS: native Stop restores both surfaces, retains untargeted and foreign choices, and falls back to macOS defaults when baselines are unavailable")
         let restored = try NativeWallpaperStore.restoring(original, provider: "local.flua.desktop.wallpaper", in: updated)
         precondition(NativeWallpaperStore.restorationMatches(original, in: restored))
         let containsFlua = try NativeWallpaperStore.containsProvider("local.flua.desktop.wallpaper", in: restored)
@@ -290,9 +357,44 @@ import Foundation
         precondition(NSDictionary(dictionary: partialStore["Displays"] as! [String: Any]).isEqual(to: removalMixed["Displays"] as! [String: Any]))
         precondition(!NativeWallpaperStore.restorationMatches(original, in: partial))
         for baseline in [updated, try encode(["bad": true])] {
-            do { _ = try NativeWallpaperStore.restoring(baseline, provider: "local.flua.desktop.wallpaper", in: updated); preconditionFailure("Accepted unsafe restoration") }
-            catch is NativeWallpaperError {}
+            let fallback = try NativeWallpaperStore.restoring(baseline, provider: "local.flua.desktop.wallpaper", in: updated)
+            try assertDefaultFallback(fallback)
         }
+        let noBaselineRestore = try NativeWallpaperStore.restoring(nil, provider: "local.flua.desktop.wallpaper", in: updated)
+        try assertDefaultFallback(noBaselineRestore)
+        var partialBaselineStore = store
+        var partialBaselineDefault = old
+        partialBaselineDefault["Desktop"] = ["Content": ["Choices": [choice]]]
+        partialBaselineStore["SystemDefault"] = partialBaselineDefault
+        let partialBaseline = try NativeWallpaperStore.restoring(encode(partialBaselineStore), provider: "local.flua.desktop.wallpaper", in: updated)
+        let partialBaselineResult = try PropertyListSerialization.propertyList(from: partialBaseline, format: nil) as! [String: Any]
+        let partialSystemDefault = partialBaselineResult["SystemDefault"] as! [String: Any]
+        precondition(isDefaultSurface(partialSystemDefault["Desktop"]))
+        precondition(NSDictionary(dictionary: partialSystemDefault["Idle"] as! [String: Any]).isEqual(to: old["Idle"] as! [String: Any]))
+        var missingSurfaceBaselineStore = store
+        var missingSurfaceDefault = old
+        missingSurfaceDefault.removeValue(forKey: "Desktop")
+        missingSurfaceBaselineStore["SystemDefault"] = missingSurfaceDefault
+        let missingSurfaceBaseline = try NativeWallpaperStore.restoring(encode(missingSurfaceBaselineStore), provider: "local.flua.desktop.wallpaper", in: updated)
+        let missingSurfaceResult = try PropertyListSerialization.propertyList(from: missingSurfaceBaseline, format: nil) as! [String: Any]
+        let missingSurfaceDefaultResult = missingSurfaceResult["SystemDefault"] as! [String: Any]
+        precondition(isDefaultSurface(missingSurfaceDefaultResult["Desktop"]))
+        precondition(NSDictionary(dictionary: missingSurfaceDefaultResult["Idle"] as! [String: Any]).isEqual(to: old["Idle"] as! [String: Any]))
+        var damagedBaselineStore = store
+        var damagedBaselineDefault = old
+        damagedBaselineDefault["Desktop"] = ["Content": ["Choices": [[:]]]]
+        damagedBaselineStore["SystemDefault"] = damagedBaselineDefault
+        let damagedBaseline = try encode(damagedBaselineStore)
+        let damagedStop = try NativeWallpaperStore.stopping(displays: ["display"], provider: "local.flua.desktop.wallpaper", in: updated, baseline: damagedBaseline)
+        let damagedStopResult = try PropertyListSerialization.propertyList(from: damagedStop, format: nil) as! [String: Any]
+        let damagedStopDefault = (damagedStopResult["SystemDefault"] as! [String: Any])
+        precondition(isDefaultSurface(damagedStopDefault["Desktop"]))
+        precondition(NSDictionary(dictionary: damagedStopDefault["Idle"] as! [String: Any]).isEqual(to: old["Idle"] as! [String: Any]))
+        let damagedRemoval = try NativeWallpaperStore.restoring(damagedBaseline, provider: "local.flua.desktop.wallpaper", in: updated)
+        let damagedRemovalResult = try PropertyListSerialization.propertyList(from: damagedRemoval, format: nil) as! [String: Any]
+        let damagedRemovalDefault = damagedRemovalResult["SystemDefault"] as! [String: Any]
+        precondition(isDefaultSurface(damagedRemovalDefault["Desktop"]))
+        precondition(NSDictionary(dictionary: damagedRemovalDefault["Idle"] as! [String: Any]).isEqual(to: old["Idle"] as! [String: Any]))
         var futureStore = saved
         var futureDefault = saved["SystemDefault"] as! [String: Any]
         futureDefault["Type"] = "future"
@@ -313,9 +415,44 @@ import Foundation
             let baseline = try encode(linkedStore)
             let applied = try NativeWallpaperStore.applying(assignments, mirrored: true, to: baseline)
             let restored = try NativeWallpaperStore.restoring(baseline, provider: "local.flua.desktop.wallpaper", in: applied)
-            precondition(NativeWallpaperStore.restorationMatches(baseline, in: restored))
+            precondition(NativeWallpaperStore.restorationMatches(baseline, in: restored), "Failed to restore " + type)
         }
-        print("PASS: native removal restores baseline assignments, preserves later foreign choices and metadata, handles repeat removal, and rejects missing or Flua baselines")
+        var linkedOnlyStore = store
+        linkedOnlyStore["SystemDefault"] = ["Type": "linked", "Linked": old["Desktop"]!]
+        let linkedOnlyBaseline = try encode(linkedOnlyStore)
+        let linkedOnlyApplied = try NativeWallpaperStore.applying(assignments, mirrored: true, to: linkedOnlyBaseline)
+        let linkedOnlyRestored = try NativeWallpaperStore.restoring(linkedOnlyBaseline, provider: "local.flua.desktop.wallpaper", in: linkedOnlyApplied)
+        precondition(NativeWallpaperStore.restorationMatches(linkedOnlyBaseline, in: linkedOnlyRestored))
+        var linkedWithStaleSurfaceStore = store
+        linkedWithStaleSurfaceStore["SystemDefault"] = [
+            "Type": "linked",
+            "Linked": old["Desktop"]!,
+            "Desktop": ["Content": ["Choices": [choice]]]
+        ]
+        let linkedWithStaleSurfaceBaseline = try encode(linkedWithStaleSurfaceStore)
+        let linkedWithStaleSurfaceApplied = try NativeWallpaperStore.applying(assignments, mirrored: true, to: linkedWithStaleSurfaceBaseline)
+        let linkedWithStaleSurfaceRestored = try NativeWallpaperStore.restoring(linkedWithStaleSurfaceBaseline, provider: "local.flua.desktop.wallpaper", in: linkedWithStaleSurfaceApplied)
+        let staleLinkedProviderRemains = try NativeWallpaperStore.containsProvider("local.flua.desktop.wallpaper", in: linkedWithStaleSurfaceRestored)
+        precondition(!staleLinkedProviderRemains)
+        var currentLinkedStore = saved
+        var currentLinkedAssignment = currentLinkedStore["SystemDefault"] as! [String: Any]
+        currentLinkedAssignment["Type"] = "linked"
+        currentLinkedAssignment["Linked"] = ["Content": ["Choices": [choice]]]
+        currentLinkedAssignment.removeValue(forKey: "Desktop")
+        currentLinkedAssignment.removeValue(forKey: "Idle")
+        currentLinkedStore["SystemDefault"] = currentLinkedAssignment
+        let currentLinkedData = try encode(currentLinkedStore)
+        let linkedMissingBaselineRestore = try NativeWallpaperStore.restoring(nil, provider: "local.flua.desktop.wallpaper", in: currentLinkedData)
+        let linkedMissingBaselineStore = try PropertyListSerialization.propertyList(from: linkedMissingBaselineRestore, format: nil) as! [String: Any]
+        let linkedMissingBaselineAssignment = linkedMissingBaselineStore["SystemDefault"] as! [String: Any]
+        precondition(isDefaultSurface(linkedMissingBaselineAssignment["Desktop"]) && isDefaultSurface(linkedMissingBaselineAssignment["Idle"]))
+        var unusableLinkedBaselineStore = store
+        unusableLinkedBaselineStore["SystemDefault"] = ["Type": "linked", "Linked": ["Content": ["Choices": [choice]]]]
+        let linkedUnusableBaselineRestore = try NativeWallpaperStore.restoring(encode(unusableLinkedBaselineStore), provider: "local.flua.desktop.wallpaper", in: currentLinkedData)
+        let linkedUnusableBaselineStore = try PropertyListSerialization.propertyList(from: linkedUnusableBaselineRestore, format: nil) as! [String: Any]
+        let linkedUnusableBaselineAssignment = linkedUnusableBaselineStore["SystemDefault"] as! [String: Any]
+        precondition(isDefaultSurface(linkedUnusableBaselineAssignment["Desktop"]) && isDefaultSurface(linkedUnusableBaselineAssignment["Idle"]))
+        print("PASS: native removal restores safe baseline assignments, preserves foreign choices and metadata, and uses macOS defaults for missing or Flua baselines")
         item.speed = 0.75
         item.dimming = 0.6
         item.trimStart = nil
@@ -356,8 +493,10 @@ import Foundation
         var foreignDefault = mixedDefault
         foreignDefault["Desktop"] = ["Content": ["Choices": [choice, ["Provider": "foreign"]]]]
         foreignMixed["SystemDefault"] = foreignDefault
-        do { _ = try NativeWallpaperStore.restoring(original, provider: "local.flua.desktop.wallpaper", in: encode(foreignMixed)); preconditionFailure("Overwrote a mixed foreign choice") }
-        catch is NativeWallpaperError {}
+        let foreignMixedRestored = try NativeWallpaperStore.restoring(original, provider: "local.flua.desktop.wallpaper", in: encode(foreignMixed))
+        let foreignMixedResult = try PropertyListSerialization.propertyList(from: foreignMixedRestored, format: nil) as! [String: Any]
+        let foreignMixedChoices = (((foreignMixedResult["SystemDefault"] as! [String: Any])["Desktop"] as! [String: Any])["Content"] as! [String: Any])["Choices"] as! [[String: Any]]
+        precondition(foreignMixedChoices.map { $0["Provider"] as? String } == ["foreign"])
         let mixedRefresh = try NativeWallpaperStore.refreshing(replacement, provider: "local.flua.desktop.wallpaper", in: mixedData)
         let mixedResult = try PropertyListSerialization.propertyList(from: mixedRefresh, format: nil) as! [String: Any]
         let mixedAssignment = mixedResult["SystemDefault"] as! [String: Any]
