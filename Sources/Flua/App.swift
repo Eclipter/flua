@@ -790,7 +790,7 @@ struct WallpaperCard: View {
                 .buttonStyle(.plain)
                 .padding(8)
                 .contentShape(Circle())
-                .accessibilityLabel(wallpaper.favorite ? "Remove favorite" : "Add favorite")
+                .accessibilityLabel((wallpaper.favorite ? "Remove favorite: " : "Add favorite: ") + wallpaper.title)
             }
             .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(selected ? library.accent : Color.primary.opacity(0.12), lineWidth: selected ? 2 : 1))
@@ -1209,6 +1209,7 @@ struct FilterMenu: View {
         .fluaGlassMenu()
         .fixedSize()
         .accessibilityLabel(title + " filter")
+        .accessibilityValue(selection.isEmpty ? "All" : selection.sorted().joined(separator: ", "))
     }
 }
 

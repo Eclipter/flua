@@ -46,10 +46,46 @@ enum SmokeRunner {
             "Display Mode: Mirrored", "Display Mode: Per Display", "Configure: Lock Screen", "Mirror all displays",
             "Rendering mode: Animated", "Rendering mode: Still", "Mirror Desktop and Lock Screen",
             "Search", "Category filter", "Color filter", "Motion filter", "Resolution filter", "Aspect filter",
-            "Add favorite", "Wallpaper name", "Tags", "Category",
+            "Add favorite: Northern lights", "Add favorite: Deep space", "Wallpaper name", "Tags", "Category",
             "Color", "Motion intensity",
             "Speed", "Dim", "Previous in playlist", "Next in playlist", "Stop on selected displays", "Create playlist"
         ])
+        let auditTitle = "Flua Library Audit"
+        let filterNames = ["Category", "Color", "Motion", "Resolution", "Aspect"]
+        for name in filterNames {
+            if auditElement(auditTitle, named: name + " filter").map({ ax($0, kAXValueAttribute) }) != "All" {
+                missing.append(name + " filter must announce All")
+            }
+        }
+        if let favorite = auditElement(auditTitle, named: "Add favorite: Northern lights") {
+            if AXUIElementPerformAction(favorite, kAXPressAction as CFString) != .success {
+                missing.append("Favorite accessibility action")
+            }
+            await pause(0.3)
+            missing += missingNames(auditTitle, ["Remove favorite: Northern lights"])
+            if library.state.item("aurora")?.favorite != true { missing.append("Favorite action must save its state") }
+            if let remove = auditElement(auditTitle, named: "Remove favorite: Northern lights") {
+                if AXUIElementPerformAction(remove, kAXPressAction as CFString) != .success {
+                    missing.append("Remove favorite accessibility action")
+                }
+            }
+            await pause(0.3)
+            missing += missingNames(auditTitle, ["Add favorite: Northern lights"])
+            if library.state.item("aurora")?.favorite != false { missing.append("Remove favorite must save its state") }
+        } else { missing.append("Favorite accessibility target") }
+        library.filter.categories = ["Nature"]
+        library.filter.colors = ["Green", "Purple"]
+        library.filter.motions = ["Low"]
+        library.filter.resolutions = ["4K"]
+        library.filter.aspects = ["16:9"]
+        await pause(0.3)
+        for (name, expected) in zip(filterNames, ["Nature", "Green, Purple", "Low", "4K", "16:9"]) {
+            if auditElement(auditTitle, named: name + " filter").map({ ax($0, kAXValueAttribute) }) != expected {
+                missing.append(name + " filter must announce " + expected)
+            }
+        }
+        library.clearFilters()
+        await pause(0.3)
         let inspectorNames = spokenNames(titled: "Flua Library Audit")
         if inspectorNames.contains(where: { $0.hasPrefix("Filter by ") }) {
             missing.append("Inspector must not show duplicate tag buttons")
@@ -159,6 +195,25 @@ enum SmokeRunner {
             if let found = findCheckbox(child, name, depth + 1) { return found }
         }
         return nil
+    }
+    private static func auditElement(_ title: String, named name: String) -> AXUIElement? {
+        let app = AXUIElementCreateApplication(ProcessInfo.processInfo.processIdentifier)
+        var windowsRef: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString, &windowsRef) == .success,
+              let windows = windowsRef as? [AXUIElement],
+              let window = windows.first(where: { ax($0, kAXTitleAttribute) == title }) else { return nil }
+        func find(_ element: AXUIElement, _ depth: Int) -> AXUIElement? {
+            guard depth <= 16 else { return nil }
+            if ax(element, kAXDescriptionAttribute) == name || ax(element, kAXTitleAttribute) == name { return element }
+            var childrenRef: CFTypeRef?
+            guard AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &childrenRef) == .success,
+                  let children = childrenRef as? [AXUIElement] else { return nil }
+            for child in children {
+                if let match = find(child, depth + 1) { return match }
+            }
+            return nil
+        }
+        return find(window, 0)
     }
     private static func missingNames(_ title: String, _ required: [String]) -> [String] {
         let names = spokenNames(titled: title)
