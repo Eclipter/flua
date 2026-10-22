@@ -68,9 +68,10 @@ After reviewing the task branch, integrate from the `main` worktree:
 git squash <task-branch>
 # Review the staged diff and run the relevant checks before committing.
 git commit
+make build
 ```
 
-A squash merge stages the combined change without creating a commit. Keep the task branch and worktree until the commit succeeds. For GitHub pull requests, use **Squash and merge** or `gh pr merge --squash`, and edit the final title and body to describe the whole change. Repository settings should enable squash merging and disable merge commits and rebase merging, using the pull request title and description for the squash message. The `git squash` alias runs `git merge --squash`; `pull.ff=only` rejects pulls that would merge diverged history. Local Git configuration is not copied by cloning; apply the commands above in every new clone. Rewriting published history and force-pushing require an explicit request.
+A squash merge stages the combined change without creating a commit. Keep the task branch and worktree until the commit succeeds. After the commit is on `main`, run `make build` from that worktree with `FLUA_CATALOG_PATH` and `FLUA_WALLPAPER_IDENTIFIER` unset, so `build/Flua.app` matches `main` and the standard library. For GitHub pull requests, use **Squash and merge** or `gh pr merge --squash`, and edit the final title and body to describe the whole change. Update the local `main` checkout after that merge, then run the same build. Repository settings should enable squash merging and disable merge commits and rebase merging, using the pull request title and description for the squash message. The `git squash` alias runs `git merge --squash`; `pull.ff=only` rejects pulls that would merge diverged history. Local Git configuration is not copied by cloning; apply the commands above in every new clone. Rewriting published history and force-pushing require an explicit request.
 
 ## Lock Screen integration checks
 

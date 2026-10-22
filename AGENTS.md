@@ -40,6 +40,7 @@
 
 - Keep `main` linear. Integrate each completed task with a squash merge, producing one commit for one coherent change; do not create merge commits or replay a task's intermediate commits onto `main`.
 - Use `git merge --squash <branch>` locally or `gh pr merge --squash` for pull requests. Review the staged result, run the relevant checks, then commit before deleting the task branch or worktree.
+- After that commit is on `main`, run `make build` with `FLUA_CATALOG_PATH` and `FLUA_WALLPAPER_IDENTIFIER` unset. The resulting `build/Flua.app` matches `main` and the standard library. When the integration was `gh pr merge --squash`, update the local `main` checkout first, then run the same build.
 - Write English Conventional Commit subjects (`feat:`, `fix:`, `perf:`, `test:`, `docs:`, `build:`, `chore:`) describing the resulting behavior. Add a body only when it explains a useful reason, limitation or validation detail. Omit branch names, plan item numbers and intermediate attempts.
 - Rewrite published history or force-push only when explicitly requested. See [the development workflow](docs/DEVELOPMENT.md#git-workflow) for local configuration.
 
