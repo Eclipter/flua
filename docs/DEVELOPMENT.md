@@ -11,15 +11,29 @@ make release        # dist/Flua.zip
 make wallpaper-test # isolated wallpaper extension tests, no OS activation
 ```
 
-`Package.swift` supports SwiftPM and opening the source package in Xcode. Use `make build` for a runnable `.app`; `swift build` alone only produces an executable. Model/package tests are standalone executables run by `make test`, not XCTest targets. Smoke builds `build/Flua.app` with its provider catalog pointing to the fresh test library, replacing any previous build at that path. Do not run a separate `make build` before `make smoke`. Quit any running Flua before smoke verification. The script refuses to start alongside another Flua process, runs its accessibility audit and background application check sequentially, and writes test data only to a fresh directory under `build/verification/`. GPU scene tests in `make test` render offscreen without launching Flua.
+`Package.swift` supports SwiftPM and opening the source package in Xcode. Use `make build` for a runnable `.app`; `swift build` alone only produces an executable. Model/package tests are standalone executables run by `make test`, not XCTest targets. Smoke builds `build/Flua.app` with its provider catalog pointing to the fresh test library, replacing any previous build at that path. The smoke script acquires a shared per-user lock before checking for a running Flua, building, or launching the test app, whether started through `make smoke` or directly; concurrent smoke and native-host checks wait for the lock. Do not run a separate `make build` before `make smoke`. Quit any running Flua before smoke verification. Agents may gracefully quit it, including a normal library session, when needed without separate confirmation; wait for it to exit and do not force-quit a normal library session. The script refuses to start alongside another Flua process, runs its accessibility audit and background application check sequentially, and writes test data only to a fresh directory under `build/verification/`. GPU scene tests in `make test` render offscreen without launching Flua.
+
+Run other GUI verification and native wallpaper procedures through `scripts/system-test-lock.py`, keeping the lock for the complete procedure, including restoration:
+
+```sh
+ui_check_dir=$(mktemp -d "$PWD/build/verification/ui-check.XXXXXX")
+./scripts/system-test-lock.py "visual UI verification" \
+    open -g -W build/Flua.app \
+    --args \
+    --data-dir "$ui_check_dir/library"
+./scripts/system-test-lock.py "native wallpaper verification" /bin/zsh /path/to/native-wallpaper-check.zsh
+```
+
+The lock file lives in the system temporary directory, shared by Flua worktrees for the current user. The helper reports the active holder while waiting and the OS releases the lock when its process exits. Do not delete the lock file. A forced termination releases the lock but does not prove that native wallpaper settings were restored. `make wallpaper-test` runs standalone provider checks without OS activation and does not need the lock.
 
 Opening the smoke-built app manually without `--data-dir` still uses the standard Flua library, not the smoke library. Its provider remains bound to the smoke catalog, so native wallpaper application from the standard library is blocked until the app is rebuilt without `FLUA_CATALOG_PATH`.
 
-Smoke launches in the background and treats application activation or an unexpected library error as a test failure. Library, Settings and editor checks use fully transparent parked windows; their snapshots are rendered from their views. The accessibility audit retains its nearly transparent parked windows so macOS exposes their accessibility elements. Live video and scene playback checks run consecutively in one 192 × 108-point nonactivating panel. The panel first stays behind other windows; only if it is occluded does verification raise it above other windows and allow it on the active fullscreen Space. Only playback windows use that behavior, one at a time, and the panel closes before export and editor checks continue. No fullscreen guard disables tests. Verification never activates Flua or explicitly switches Spaces. Playback checks record submitted scene frames and process CPU time, then check pause, hiding, window occlusion, resume and release. Run `swift Tests/FluaTests/FullscreenVerificationTests.swift` to build and execute the full smoke while observing that only one playback window appears and the foreground application stays unchanged. Run it with fullscreen active to cover that setup; it is separate from `make test`. For a quick scene-only frame-rate check, use a fresh disposable directory:
+Smoke launches in the background and treats application activation or an unexpected library error as a test failure. Library, Settings and editor checks use fully transparent parked windows; their snapshots are rendered from their views. The accessibility audit retains its nearly transparent parked windows so macOS exposes their accessibility elements. Live video and scene playback checks run consecutively in one 192 × 108-point nonactivating panel. The panel first stays behind other windows; only if it is occluded does verification raise it above other windows and allow it on the active fullscreen Space. Only playback windows use that behavior, one at a time, and the panel closes before export and editor checks continue. No fullscreen guard disables tests. Verification never activates Flua or explicitly switches Spaces. Playback checks record submitted scene frames and process CPU time, then check pause, hiding, window occlusion, resume and release. Run `swift Tests/FluaTests/FullscreenVerificationTests.swift` to build and execute the full smoke while observing that only one playback window appears and the foreground application stays unchanged. It acquires the shared system-test lock and waits before observing windows or starting its timeout. Run it with fullscreen active to cover that setup; it is separate from `make test`. For a quick scene-only frame-rate check, use a fresh disposable directory:
 
 ```sh
 preview_dir=$(mktemp -d "$PWD/build/verification/preview.XXXXXX")
-open -g -W "$PWD/build/Flua.app" \
+./scripts/system-test-lock.py "scene preview verification" \
+    open -g -W "$PWD/build/Flua.app" \
     --args \
     --data-dir "$preview_dir/library" \
     --preview-smoke "$preview_dir/results.json"
@@ -145,7 +159,11 @@ The library controls were checked on macOS 27.0.1 (26A434) with the existing mac
 VoiceOver was turned on for this check. With the test library in front, its caption read PLAYLISTS, the sidebar group. Speech for Search, the filter menus, tag actions, favorites, playback buttons and Blocked tags was not captured. On macOS 27.0.1, `make smoke` passed after these name changes. It runs the offscreen name check, then the interactive suite. The names checked are Search, the five filter menus, Clear search, Clear filters, Remove tag filter, favorite and playback buttons, and Settings → Blocked tags. Repeat the name check after browsing-control changes:
 
 ```sh
-build/Flua.app/Contents/MacOS/Flua --data-dir /tmp/flua-ax --accessibility-audit /tmp/flua-accessibility.json
+audit_dir=$(mktemp -d "$PWD/build/verification/accessibility.XXXXXX")
+./scripts/system-test-lock.py "accessibility audit" \
+    build/Flua.app/Contents/MacOS/Flua \
+    --data-dir "$audit_dir/library" \
+    --accessibility-audit "$audit_dir/results.json"
 ```
 
 The smoke suite also checks filter reset, including preservation of persisted blocked tags, but does not replace the keyboard interaction check above.

@@ -38,6 +38,8 @@ A saved-assignment check on macOS 27.0.1 (26A434) used a disposable library and 
 
 ## Build and verify
 
+Run native host procedures that register a provider, change system wallpaper state, or restore wallpaper settings through `scripts/system-test-lock.py`. Hold the lock for the entire procedure, from baseline capture through rollback and final comparison, so other Flua worktrees wait instead of launching tests concurrently. For example: `./scripts/system-test-lock.py "native wallpaper verification" /bin/zsh /path/to/native-wallpaper-check.zsh`. The lock releases when the command exits, including after a crash; that does not establish that system state was restored. `make wallpaper-test` is standalone and does not activate or change system wallpapers, so it does not need the lock.
+
 From the repository root, on a Mac with the Command Line Tools and a macOS 26 or newer SDK/runtime:
 
 ```sh

@@ -48,7 +48,7 @@
 
 Run the narrowest relevant checks, then expand when the change crosses boundaries:
 
-- Run GUI verification and profiling serially. Never launch a test copy while any Flua process is running; close the owned test process before another run. Do not terminate a user’s normal library session merely to bypass this rule.
+- Run GUI verification and profiling through `scripts/system-test-lock.py` so worktrees wait for one shared per-user lock. `make smoke` and the fullscreen observer acquire it automatically. Wrap every other command that launches Flua for verification or changes native wallpaper/system state in the same helper, holding it through rollback and verification. The lock releases when its process exits; it cannot verify rollback after a forced termination. Never launch a test copy while any Flua process is running. Agents may gracefully quit any running Flua instance, including the user’s normal library session, when needed for the task or verification, without asking for separate confirmation. Wait for the app to exit before launching a test copy; do not force-quit a normal library session.
 
 - After every UI change, visually inspect the current build in a real app window with a disposable `--data-dir`. Check the affected layout and interactions before reporting completion; builds and smoke tests alone do not count as visual verification.
 

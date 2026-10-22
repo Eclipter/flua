@@ -1,6 +1,9 @@
 #!/bin/zsh
 set -euo pipefail
 cd "${0:A:h:h}"
+if ! ./scripts/system-test-lock.py --is-locked; then
+    exec ./scripts/system-test-lock.py "smoke" "$PWD/scripts/smoke.sh" "$@"
+fi
 require_no_flua() {
     if /usr/bin/pgrep -x Flua; then
         print -u2 "Quit the running Flua before verification. Smoke tests never launch alongside another instance."
