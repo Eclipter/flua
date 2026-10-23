@@ -20,6 +20,7 @@ Flua is a local wallpaper library for macOS 27+ on Apple Silicon. Playback uses 
 | Explicit application | Inspector settings stay in preview until Set Wallpapers applies the selected wallpaper to the selected surface and target displays | Per Display targets the selected display; Mirrored targets every connected display; linked Desktop and Lock Screen choices stay synchronized. Applying pending settings preserves current assignments on the other independent surface, including removals and playlist progress |
 | Recovery | Static fallback and media/catalog retries; explicit Apply reacquires after provider termination or missing grants | Live host-token revocation remains unverified; automatic relaunch was not observed during a 90-second provider-crash check |
 | Provider removal | Settings → Lock Screen → Remove native provider… restores Flua surfaces and unregisters this copy | Unavailable saved surfaces use the macOS default wallpaper; foreign choices and library media are retained |
+| Startup window | Settings → General → Show window on startup; enabled by default, independent of Open at login | Dock reopen and Open Flua still open the library |
 | Login startup | Opt-in | Not enabled during verification |
 
 ## Validation scope

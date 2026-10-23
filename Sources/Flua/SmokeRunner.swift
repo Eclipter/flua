@@ -108,6 +108,18 @@ enum SmokeRunner {
         var settingsWindowsRef: CFTypeRef?
         AXUIElementCopyAttributeValue(settingsAX, kAXWindowsAttribute as CFString, &settingsWindowsRef)
         let settingsWindow = (settingsWindowsRef as? [AXUIElement])?.first { ax($0, kAXTitleAttribute) == settings.title }
+        var startupControlPassed = checkboxValue(settings.title, named: "Show window on startup") == true
+        for shown in [false, true] {
+            if let settingsWindow, let checkbox = findCheckbox(settingsWindow, "Show window on startup", 0) {
+                startupControlPassed = AXUIElementPerformAction(checkbox, kAXPressAction as CFString) == .success && startupControlPassed
+            } else {
+                startupControlPassed = false
+            }
+            await pause(0.2)
+            startupControlPassed = startupControlPassed && checkboxValue(settings.title, named: "Show window on startup") == shown
+                && (try? library.disk.load())?.showWindowOnStartup == shown
+        }
+        if !startupControlPassed { missing.append("Startup window control saves both states") }
         var powerControlsPassed = true
         for (name, lowPower, lowBattery) in [("Pause in Low Power Mode", false, true),
                                              ("Pause when battery is low", false, false),
@@ -340,6 +352,16 @@ enum SmokeRunner {
     }
     @MainActor static func runIfRequested(library: Library) async {
         let args = ProcessInfo.processInfo.arguments
+        if let i = args.firstIndex(of: "--startup-smoke"), args.indices.contains(i + 1), args.contains("--data-dir") {
+            await pause(1)
+            let visible = NSApp.windows.contains { $0.identifier?.rawValue == "library" && $0.isVisible }
+            let passed = visible == library.state.showWindowOnStartup
+            let report = ["passed": passed, "windowVisible": visible, "showWindowOnStartup": library.state.showWindowOnStartup]
+            if let data = try? JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys]) {
+                try? data.write(to: URL(fileURLWithPath: args[i + 1]))
+            }
+            exit(passed ? 0 : 1)
+        }
         guard !running, let i = args.firstIndex(of: "--smoke-test"), args.indices.contains(i + 1) else { return }
         running = true
         let out = URL(fileURLWithPath: args[i + 1], isDirectory: true)

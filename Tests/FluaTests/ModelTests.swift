@@ -144,6 +144,21 @@ import Foundation
         let legacyPresence = try JSONDecoder().decode(LibraryState.self, from: JSONSerialization.data(withJSONObject: inconsistent))
         precondition(legacyPresence.showsMenuBar && legacyPresence.hidesDockIcon == false)
         print("PASS: dock hiding requires the menu bar icon and legacy libraries keep both defaults")
+        precondition(LibraryState.initial.showWindowOnStartup)
+        var startup = LibraryState.initial
+        startup.showWindowOnStartup = false
+        try disk.save(startup)
+        let savedStartup = try disk.load()
+        precondition(!savedStartup.showWindowOnStartup && savedStartup.wallpapers == startup.wallpapers)
+        startup.showWindowOnStartup = true
+        let restoredStartup = try JSONDecoder().decode(LibraryState.self, from: JSONEncoder().encode(startup))
+        precondition(restoredStartup.showWindowOnStartup)
+        var legacyStartup = try JSONSerialization.jsonObject(with: JSONEncoder().encode(startup)) as! [String: Any]
+        legacyStartup.removeValue(forKey: "showWindowOnStartup")
+        let restoredLegacyStartup = try JSONDecoder().decode(LibraryState.self, from: JSONSerialization.data(withJSONObject: legacyStartup))
+        precondition(restoredLegacyStartup.showWindowOnStartup && restoredLegacyStartup.wallpapers == startup.wallpapers)
+        try disk.save(state)
+        print("PASS: startup window preference persists and legacy libraries show the window")
         precondition(legacyPresence.lowPowerThreshold == 20)
         precondition(LibraryState.initial.pauseOnLowPower == true)
         precondition(LibraryState.initial.lowPowerThreshold == 20)

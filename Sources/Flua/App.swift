@@ -325,7 +325,7 @@ extension View {
 enum AppContext {
     static let library: Library = {
         let args = ProcessInfo.processInfo.arguments
-        let isolatedVerification = args.contains("--smoke-test") || args.contains("--scroll-benchmark")
+        let isolatedVerification = args.contains("--smoke-test") || args.contains("--startup-smoke") || args.contains("--scroll-benchmark")
         do {
             if isolatedVerification {
                 guard let i = args.firstIndex(of: "--data-dir"), args.indices.contains(i + 1),
@@ -382,7 +382,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             Task { await SmokeRunner.runPreviewSmokeIfRequested() }
             return
         }
-        DispatchQueue.main.async { self.openLibrary?() }
+        if AppContext.library.state.showWindowOnStartup || ProcessInfo.processInfo.arguments.contains("--smoke-test") {
+            DispatchQueue.main.async { self.openLibrary?() }
+        }
         Task { await SmokeRunner.runIfRequested(library: AppContext.library) }
     }
     func application(_ sender: NSApplication, openFiles filenames: [String]) { AppContext.library.importMedia(filenames.map { URL(fileURLWithPath: $0) }) }
@@ -395,7 +397,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var body: some Scene {
         let _ = appDelegate.openLibrary = {
             openWindow(id: "library")
-            if !ProcessInfo.processInfo.arguments.contains("--smoke-test") { NSApp.activate() }
+            if !ProcessInfo.processInfo.arguments.contains("--smoke-test") && !ProcessInfo.processInfo.arguments.contains("--startup-smoke") { NSApp.activate() }
         }
         Window("Flua", id: "library") {
             LibraryView().environmentObject(library)
@@ -403,8 +405,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 .windowFullScreenBehavior(ProcessInfo.processInfo.arguments.contains("--smoke-test") || ProcessInfo.processInfo.arguments.contains("--preview-smoke") ? .disabled : .automatic)
         }
         .defaultSize(width: 1320, height: 840)
-        // Smoke tests start without an automatic window to exercise explicit launch handling.
-        .defaultLaunchBehavior(ProcessInfo.processInfo.arguments.contains("--smoke-test") || ProcessInfo.processInfo.arguments.contains("--preview-smoke") ? .suppressed : .presented)
+        // Smoke tests exercise explicit launch handling; background startup leaves the window closed.
+        .defaultLaunchBehavior(ProcessInfo.processInfo.arguments.contains("--smoke-test") || ProcessInfo.processInfo.arguments.contains("--preview-smoke") || !library.state.showWindowOnStartup ? .suppressed : .presented)
         .windowToolbarStyle(.unified)
         .commands {
             CommandGroup(after: .newItem) {
@@ -1153,6 +1155,7 @@ struct SettingsView: View {
                     .disabled(!library.state.showsMenuBar)
                     .tint(library.accentOverride)
                 Text("The Dock icon can be hidden while Flua remains in the menu bar.").font(.caption).foregroundStyle(.secondary)
+                Toggle("Show window on startup", isOn: Binding(get: { library.state.showWindowOnStartup }, set: { library.state.showWindowOnStartup = $0; library.save() })).tint(library.accentOverride)
                 Toggle("Open at login", isOn: Binding(get: { library.loginEnabled() }, set: { library.setLogin($0) })).tint(library.accentOverride)
                 Button("Show wallpaper folder in Finder") { NSWorkspace.shared.open(library.disk.assets) }
                 Text("Flua stores its own copies of imported wallpapers. Wallpapers play natively through macOS and continue playing after quitting Flua.").font(.caption).foregroundStyle(.secondary)

@@ -24,7 +24,17 @@ set -eu
 mkdir -p "$FLUA_APP_PATH/Contents/MacOS"
 print -r -- "$FLUA_APP_PATH" >> builds.txt
 print -r -- "$FLUA_CATALOG_PATH" >> catalogs.txt
-print '#!/bin/zsh' > "$FLUA_APP_PATH/Contents/MacOS/Flua"
+cat > "$FLUA_APP_PATH/Contents/MacOS/Flua" <<'PYTHON'
+#!/usr/bin/env python3
+import json
+from pathlib import Path
+import sys
+if '--startup-smoke' in sys.argv:
+    library = Path(sys.argv[sys.argv.index('--data-dir') + 1])
+    shown = json.loads((library / 'library.json').read_text())['showWindowOnStartup']
+    result = Path(sys.argv[sys.argv.index('--startup-smoke') + 1])
+    result.write_text(json.dumps({'passed': True, 'windowVisible': shown, 'showWindowOnStartup': shown}))
+PYTHON
 chmod +x "$FLUA_APP_PATH/Contents/MacOS/Flua"
 ''')
     build.chmod(0o755)
@@ -39,7 +49,8 @@ set -eu
 [[ "$5" == --data-dir && "$7" == --smoke-test ]]
 [[ "$(cat catalogs.txt | tail -1)" == "$6/catalog.json" ]]
 [[ -x "$3/Contents/MacOS/Flua" ]]
-mkdir -p "$8"
+mkdir -p "$8" "$6"
+print '{"nativePlayback":{}}' > "$6/library.json"
 print '{"passed":true,"failures":[]}' > "$8/smoke-results.json"
 ''')
     opener.chmod(0o755)

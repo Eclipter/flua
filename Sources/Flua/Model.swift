@@ -254,6 +254,7 @@ struct LibraryState: Codable {
     var blockedTags: [String] = []
     var showInMenuBar: Bool?
     var hideFromDock: Bool?
+    var showWindowOnStartup: Bool = true
 
     init() {}
 
@@ -301,7 +302,7 @@ struct LibraryState: Codable {
     private enum CodingKeys: String, CodingKey {
         case wallpapers, playlists, displays, interval, shuffle, pauseOnBattery, pauseOnLowPower, pauseOnLowBattery
         case lowPowerThreshold, pauseOnFullscreen, paused, displayMode, blockedTags, accentColor, nativePlayback, nativeCleanupDisplays
-        case showInMenuBar, hideFromDock
+        case showInMenuBar, hideFromDock, showWindowOnStartup
     }
 
     init(from decoder: Decoder) throws {
@@ -324,6 +325,7 @@ struct LibraryState: Codable {
         blockedTags = normalizedTags((try c.decodeIfPresent([String].self, forKey: .blockedTags) ?? []).joined(separator: ","))
         showInMenuBar = try c.decodeIfPresent(Bool.self, forKey: .showInMenuBar)
         hideFromDock = try c.decodeIfPresent(Bool.self, forKey: .hideFromDock)
+        showWindowOnStartup = try c.decodeIfPresent(Bool.self, forKey: .showWindowOnStartup) ?? true
         if !showsMenuBar { hideFromDock = nil }
     }
     static var initial: LibraryState {
