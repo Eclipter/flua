@@ -62,6 +62,8 @@ Smoke tests write only to a fresh directory under `build/verification/`. Do not 
 
 ## Tests and documentation
 
+- Keep `docs/PLAN.md` limited to unresolved work. Remove completed tasks instead of retaining checked entries; keep capability status and verification evidence in the relevant documentation.
+
 - Add or update a focused deterministic test for non-trivial model, persistence, path, or package-validation logic.
 - Tests in `Tests/FluaTests/` are standalone Swift executables driven by `scripts/test.sh`, not XCTest targets.
 - Update `docs/FEATURES.md` when capability status changes, `docs/ARCHITECTURE.md` when responsibilities or boundaries change, and `README.md` / `docs/DEVELOPMENT.md` when user or developer workflows change.
