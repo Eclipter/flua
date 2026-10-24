@@ -2,6 +2,48 @@ import Foundation
 
 @main struct ModelTests {
     static func main() throws {
+        var blockedPlaylist = LibraryState.initial
+        blockedPlaylist.shuffle = false
+        blockedPlaylist.blockedTags = ["nature"]
+        let savedPlaylist = blockedPlaylist.playlists[0]
+        precondition(blockedPlaylist.playableItems(in: savedPlaylist).map(\.id) == ["ocean", "cosmos", "ember"])
+        precondition(blockedPlaylist.playlists[0] == savedPlaylist)
+        precondition(blockedPlaylist.assign(blockedPlaylist.playableItems(in: savedPlaylist)[0].id,
+                                            display: "playlist-test", playlistID: "ambient"))
+        precondition(blockedPlaylist.displays["playlist-test"]?.desktop.wallpaperID == "ocean")
+        precondition(blockedPlaylist.advance(display: "playlist-test", force: true)?.id == "cosmos")
+        precondition(blockedPlaylist.advance(display: "playlist-test", force: true, backwards: true)?.id == "ocean")
+        blockedPlaylist.shuffle = true
+        for _ in 0..<25 {
+            let old = blockedPlaylist.displays["playlist-test"]?.desktop.wallpaperID
+            let next = blockedPlaylist.advance(display: "playlist-test", force: true)
+            precondition(next.map { blockedPlaylist.isPlayable($0) } == true && next?.id != old)
+        }
+        var newlyBlockedCurrent = LibraryState.initial
+        newlyBlockedCurrent.shuffle = false
+        newlyBlockedCurrent.assign("aurora", display: "blocked-current", playlistID: "ambient")
+        newlyBlockedCurrent.blockedTags = ["nature"]
+        precondition(newlyBlockedCurrent.advance(display: "blocked-current", force: true)?.id == "ocean")
+        blockedPlaylist.blockedTags = ["nature", "space", "stars", "blue", "water", "calm", "warm", "abstract", "orange"]
+        let assignmentBeforeBlockedAdvance = blockedPlaylist.displays["playlist-test"]
+        precondition(blockedPlaylist.advance(display: "playlist-test", force: true) == nil)
+        precondition(blockedPlaylist.displays["playlist-test"] == assignmentBeforeBlockedAdvance)
+        precondition(blockedPlaylist.playlists[0] == savedPlaylist)
+        precondition(providerCatalog(from: blockedPlaylist).items.isEmpty)
+        var eligibilityParity = LibraryState.initial
+        eligibilityParity.blockedTags = ["nature"]
+        eligibilityParity.wallpapers.append(contentsOf: [
+            Wallpaper(id: "unsupported", title: "Unsupported", kind: "unsupported"),
+            Wallpaper(id: "malformed", title: "Malformed", kind: "image", file: "../outside.png"),
+            Wallpaper(id: "missing-file", title: "Missing file", kind: "video"),
+            Wallpaper(id: "valid-file", title: "Valid file", kind: "image", file: "inside.png")
+        ])
+        eligibilityParity.playlists[0].items.append(contentsOf: ["unsupported", "malformed", "missing-file", "valid-file"])
+        let playlistEligibility = Set(eligibilityParity.playableItems(in: eligibilityParity.playlists[0]).map(\.id))
+        let descriptorEligibility = Set(providerCatalog(from: eligibilityParity).items.map(\.id))
+        precondition(playlistEligibility == Set(eligibilityParity.playlists[0].items).intersection(descriptorEligibility))
+        print("PASS: blocked playlist items are skipped in order and history without changing saved playlists")
+
         var live = LibraryState.initial
         live.displayMode = "perDisplay"
         let initialTime = Date(timeIntervalSince1970: 10)

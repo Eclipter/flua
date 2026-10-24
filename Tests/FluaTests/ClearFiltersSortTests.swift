@@ -46,6 +46,54 @@ extension Bundle {
 
         let displayIDs = library.screens.map(displayID)
         precondition(!displayIDs.isEmpty, "configuration apply regression requires a connected display")
+        let blockedPlaylistRoot = root.appendingPathComponent("BlockedPlaylist", isDirectory: true)
+        let blockedPlaylistDisk = try LibraryDisk(root: blockedPlaylistRoot)
+        var blockedPlaylistState = LibraryState.initial
+        blockedPlaylistState.displayMode = "perDisplay"
+        blockedPlaylistState.shuffle = false
+        blockedPlaylistState.playlists[0].interval = 0
+        try blockedPlaylistDisk.save(blockedPlaylistState)
+        let blockedPlaylistLibrary = try Library(root: blockedPlaylistRoot, systemPlaybackEnabled: false)
+        blockedPlaylistLibrary.tick?.invalidate()
+        blockedPlaylistLibrary.display = displayIDs[0]
+        blockedPlaylistLibrary.blockTags("nature")
+        let savedSlowMornings = blockedPlaylistLibrary.state.playlists[0]
+        blockedPlaylistLibrary.startPlaylist("ambient")
+        precondition(blockedPlaylistLibrary.state.displays[displayIDs[0]]?.desktop.wallpaperID == "ocean")
+        precondition(blockedPlaylistLibrary.state.playlists[0] == savedSlowMornings)
+        blockedPlaylistLibrary.advancePlaylists(force: false)
+        precondition(blockedPlaylistLibrary.state.displays[displayIDs[0]]?.desktop.wallpaperID == "cosmos")
+        blockedPlaylistLibrary.advancePlaylists(force: true, backwards: true)
+        precondition(blockedPlaylistLibrary.state.displays[displayIDs[0]]?.desktop.wallpaperID == "ocean")
+        blockedPlaylistLibrary.state.assign("aurora", display: displayIDs[0], playlistID: "ambient")
+        blockedPlaylistLibrary.advancePlaylists(force: true)
+        precondition(blockedPlaylistLibrary.state.displays[displayIDs[0]]?.desktop.wallpaperID == "ocean")
+        blockedPlaylistLibrary.advancePlaylists(force: true, backwards: true)
+        precondition(blockedPlaylistLibrary.state.displays[displayIDs[0]]?.desktop.wallpaperID == "ember")
+        blockedPlaylistLibrary.state.shuffle = true
+        blockedPlaylistLibrary.blockTags("stars, blue, water, calm, ambient, green")
+        blockedPlaylistLibrary.startPlaylist("ambient")
+        precondition(blockedPlaylistLibrary.state.displays[displayIDs[0]]?.desktop.wallpaperID == "ember")
+        blockedPlaylistLibrary.advancePlaylists(force: true)
+        precondition(blockedPlaylistLibrary.state.displays[displayIDs[0]]?.desktop.wallpaperID == "ember")
+        blockedPlaylistLibrary.advancePlaylists(force: true, backwards: true)
+        precondition(blockedPlaylistLibrary.state.displays[displayIDs[0]]?.desktop.wallpaperID == "ember")
+        blockedPlaylistLibrary.blockTags("warm, abstract, orange")
+        let allBlockedAssignments = blockedPlaylistLibrary.state.displays
+        blockedPlaylistLibrary.advancePlaylists(force: true)
+        precondition(blockedPlaylistLibrary.error?.contains("no playable wallpapers") == true)
+        precondition(blockedPlaylistLibrary.state.displays == allBlockedAssignments)
+        blockedPlaylistLibrary.error = nil
+        blockedPlaylistLibrary.advancePlaylists(force: false)
+        precondition(blockedPlaylistLibrary.error?.contains("no playable wallpapers") == true)
+        precondition(blockedPlaylistLibrary.state.displays == allBlockedAssignments)
+        blockedPlaylistLibrary.error = nil
+        blockedPlaylistLibrary.startPlaylist("ambient")
+        precondition(blockedPlaylistLibrary.error?.contains("no playable wallpapers") == true)
+        precondition(blockedPlaylistLibrary.state.displays == allBlockedAssignments)
+        precondition(blockedPlaylistLibrary.state.playlists[0] == savedSlowMornings)
+        print("PASS: library playlist start, advancement, history, and empty eligibility skip blocked wallpapers without changing saved contents")
+
         let launchRoot = root.appendingPathComponent("PlaylistLaunch", isDirectory: true)
         let launchDisk = try LibraryDisk(root: launchRoot)
         var launchState = LibraryState.initial

@@ -346,6 +346,17 @@ struct LibraryState: Codable {
     }
     func item(_ id: String?) -> Wallpaper? { wallpapers.first { $0.id == id } }
     func playlist(_ id: String?) -> Playlist? { playlists.first { $0.id == id } }
+    func isPlayable(_ wallpaper: Wallpaper) -> Bool {
+        guard !isBlocked(wallpaper) else { return false }
+        if builtInSceneKinds.contains(wallpaper.kind) { return true }
+        guard wallpaper.kind == "image" || wallpaper.kind == "video",
+              let name = wallpaper.file, name == (name as NSString).lastPathComponent,
+              name != ".", name != ".." else { return false }
+        return true
+    }
+    func playableItems(in playlist: Playlist) -> [Wallpaper] {
+        playlist.items.compactMap { item($0) }.filter { isPlayable($0) }
+    }
     private mutating func store(_ assignment: DisplayAssignment, display: String) {
         displays[display] = assignment.isEmpty ? nil : assignment
     }
@@ -415,19 +426,27 @@ struct LibraryState: Codable {
     mutating func advance(display: String, surface: WallpaperSurface = .desktop, now: Date = Date(), force: Bool = false, backwards: Bool = false) -> Wallpaper? {
         guard var a = displays[display]?.selection(for: surface), let p = playlist(a.playlistID) else { return nil }
         let ids = p.items.filter { item($0) != nil }
-        guard !ids.isEmpty else { return nil }
+        let eligible = Set(playableItems(in: p).map(\.id))
+        guard !eligible.isEmpty else { return nil }
         guard force || now.timeIntervalSince(a.changedAt) >= (p.interval ?? interval) else { return nil }
         let currentIndex = ids.firstIndex(of: a.wallpaperID ?? "") ?? ((a.index % ids.count) + ids.count) % ids.count
         if backwards {
-            var history = (a.history ?? []).filter { ids.contains($0) }
+            var history = (a.history ?? []).filter { eligible.contains($0) }
             if let previous = history.popLast(), let index = ids.firstIndex(of: previous) { a.index = index }
-            else { a.index = (currentIndex - 1 + ids.count) % ids.count }
+            else {
+                let previous = (1...ids.count).map { (currentIndex - $0 + ids.count * 2) % ids.count }
+                    .first { eligible.contains(ids[$0]) }!
+                a.index = previous
+            }
             a.history = history
         } else {
             if let old = a.wallpaperID { a.history = Array(((a.history ?? []) + [old]).suffix(128)) }
-            if (p.shuffle ?? shuffle) && ids.count > 1 {
-                a.index = ids.indices.filter { ids[$0] != a.wallpaperID }.randomElement() ?? 0
-            } else { a.index = (currentIndex + 1) % ids.count }
+            if (p.shuffle ?? shuffle) && eligible.count > 1 {
+                a.index = ids.indices.filter { eligible.contains(ids[$0]) && ids[$0] != a.wallpaperID }.randomElement()!
+            } else {
+                a.index = (1...ids.count).map { (currentIndex + $0) % ids.count }
+                    .first { eligible.contains(ids[$0]) }!
+            }
         }
         a.wallpaperID = ids[a.index]
         a.changedAt = now
@@ -504,7 +523,7 @@ func providerCatalog(from state: LibraryState) -> ProviderCatalog {
         pauseOnFullscreen: state.pauseOnFullscreen
     ).clampedForExport
     return ProviderCatalog(items: state.wallpapers.compactMap { wallpaper in
-        guard !state.isBlocked(wallpaper) else { return nil }
+        guard state.isPlayable(wallpaper) else { return nil }
         // The provider draws these scenes, so a choice needs no media file. Still is the desktop thumbnail time.
         if builtInSceneKinds.contains(wallpaper.kind) {
             return .init(id: wallpaper.id, title: wallpaper.title, kind: wallpaper.kind, file: "",

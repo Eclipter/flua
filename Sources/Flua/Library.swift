@@ -185,7 +185,8 @@ final class Library: ObservableObject {
     }
     @MainActor func startPlaylist(_ id: String) {
         guard !nativeSetupBusy else { return }
-        guard let p = state.playlist(id), let w = p.items.compactMap({ state.item($0) }).first else { error = "Add at least one wallpaper to this playlist first."; return }
+        guard let p = state.playlist(id) else { error = "This playlist is unavailable."; return }
+        guard let w = state.playableItems(in: p).first else { error = "This playlist has no playable wallpapers. Unblock a wallpaper or add another one."; return }
         let now = Date()
         let ids = playbackTargets.map(displayID)
         for id in ids { state.assign(w.id, display: id, playlistID: p.id, now: now) }
@@ -204,11 +205,22 @@ final class Library: ObservableObject {
     @MainActor func advancePlaylists(force: Bool, backwards: Bool = false, allDisplays: Bool = false) {
         guard !nativeSetupBusy, force || automaticPlaylistPlaybackEnabled, !state.paused || force else { return }
         if !force && screens.allSatisfy({ stoppedNativeDisplays.contains(displayID($0)) }) { return }
+        let now = Date()
+        func reportIfUnplayable(_ key: String) -> Bool {
+            guard let assignment = state.displays[key]?.desktop,
+                  let playlist = state.playlist(assignment.playlistID),
+                  state.playableItems(in: playlist).isEmpty,
+                  force || now.timeIntervalSince(assignment.changedAt) >= (playlist.interval ?? state.interval) else { return false }
+            error = "A playlist has no playable wallpapers. Unblock a wallpaper or add another one."
+            return true
+        }
         // Mutating a @Published value notifies the whole window even when advancement returns nil.
         var next = state
         var didChange = false
         if resolvedDisplayMode(state.displayMode) == "mirrored" {
-            if next.advanceMirrored(displayIDs: screens.map(displayID), force: force, backwards: backwards) != nil {
+            let ids = screens.map(displayID)
+            let source = ids.first { state.displays[$0]?.desktop.playlistID != nil }
+            if let source, !reportIfUnplayable(source), next.advanceMirrored(displayIDs: ids, now: now, force: force, backwards: backwards) != nil {
                 didChange = true
             }
         } else {
@@ -216,7 +228,8 @@ final class Library: ObservableObject {
                 let key = displayID(screen)
                 if !force && stoppedNativeDisplays.contains(key) { continue }
                 if force && !allDisplays && !playbackTargets.contains(screen) { continue }
-                if next.advance(display: key, force: force, backwards: backwards) != nil {
+                if reportIfUnplayable(key) { continue }
+                if next.advance(display: key, now: now, force: force, backwards: backwards) != nil {
                     didChange = true
                 }
             }
