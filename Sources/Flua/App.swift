@@ -21,6 +21,16 @@ final class ViewState: ObservableObject {
 
 
 extension Library {
+    func navigate(to section: String) {
+        if self.section == "settings" || section == "settings" {
+            withAnimation(NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? nil : .default) {
+                self.section = section
+            }
+        } else {
+            self.section = section
+        }
+    }
+
     var accent: Color { accentOverride ?? AppAccent.system.color }
     // Apply only to accent controls; a container tint also restyles neutral buttons.
     var accentOverride: Color? {
@@ -409,6 +419,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         .defaultLaunchBehavior(ProcessInfo.processInfo.arguments.contains("--smoke-test") || ProcessInfo.processInfo.arguments.contains("--preview-smoke") || !library.state.showWindowOnStartup ? .suppressed : .presented)
         .windowToolbarStyle(.unified)
         .commands {
+            CommandGroup(replacing: .appSettings) {
+                Button("Settings…") {
+                    library.navigate(to: "settings")
+                    openWindow(id: "library")
+                }.keyboardShortcut(",")
+            }
             CommandGroup(after: .newItem) {
                 Button("Add Wallpaper…") { library.chooseMedia() }.keyboardShortcut("n")
             }
@@ -419,7 +435,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 Button("Stop wallpapers") { library.stop() }
             }
         }
-        Settings { SettingsView().environmentObject(library).frame(width: 530) }
         MenuBarExtra(isInserted: Binding(get: { library.state.showsMenuBar }, set: { library.setShowsMenuBar($0) })) {
             TrayView().environmentObject(library)
         } label: {
@@ -438,7 +453,11 @@ struct TrayView: View {
         Button("Next on every display") { library.advancePlaylists(force: true, allDisplays: true) }
         Button("Stop wallpapers") { library.stop() }
         Divider()
-        SettingsLink { Text("Settings…") }
+        Button("Settings…") {
+            library.navigate(to: "settings")
+            openWindow(id: "library")
+            NSApp.activate(ignoringOtherApps: true)
+        }
         Button("Quit Flua") { NSApp.terminate(nil) }.keyboardShortcut("q")
     }
 }
@@ -452,36 +471,48 @@ struct LibraryView: View {
                 sidebar
                     .toolbar(removing: .sidebarToggle)
             } detail: {
-                GeometryReader { geometry in
-                    let isCompact = geometry.size.width < 650
-                    ScrollViewReader { proxy in
-                    ScrollView {
-                        Group {
-                            libraryContent(width: geometry.size.width)
-                        }
-                        .padding(.top, geometry.safeAreaInsets.top)
-                        .padding(.bottom, ui.transportHeight)
+                if library.section == "settings" {
+                    VStack(alignment: .leading, spacing: 0) {
+                        Text("Settings")
+                            .font(.system(size: 32, weight: .bold, design: .serif))
+                            .padding(.horizontal, 24)
+                            .padding(.top, 8)
+                        SettingsView()
                     }
-                    .ignoresSafeArea(.container, edges: .top)
-                    .overlay(alignment: .bottom) {
-                        transport(compact: isCompact, stackedControls: geometry.size.width < 380)
-                            .fluaGlass(in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-                            .padding(12)
-                            .padding(.trailing, NSScroller.scrollerWidth(for: .regular, scrollerStyle: NSScroller.preferredScrollerStyle))
-                            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: {
-                                if abs(ui.transportHeight - $0) > 0.5 { ui.transportHeight = $0 }
+                    .frame(maxWidth: 760)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    GeometryReader { geometry in
+                        let isCompact = geometry.size.width < 650
+                        ScrollViewReader { proxy in
+                        ScrollView {
+                            Group {
+                                libraryContent(width: geometry.size.width)
                             }
-                    }
-                    .onChange(of: library.lastImportIDs) { _, ids in
-                        if !ids.isEmpty {
-                            DispatchQueue.main.async { if let id = library.selection { proxy.scrollTo(id, anchor: .top) } }
+                            .padding(.top, geometry.safeAreaInsets.top)
+                            .padding(.bottom, ui.transportHeight)
+                        }
+                        .ignoresSafeArea(.container, edges: .top)
+                        .overlay(alignment: .bottom) {
+                            transport(compact: isCompact, stackedControls: geometry.size.width < 380)
+                                .fluaGlass(in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                                .padding(12)
+                                .padding(.trailing, NSScroller.scrollerWidth(for: .regular, scrollerStyle: NSScroller.preferredScrollerStyle))
+                                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: {
+                                    if abs(ui.transportHeight - $0) > 0.5 { ui.transportHeight = $0 }
+                                }
+                        }
+                        .onChange(of: library.lastImportIDs) { _, ids in
+                            if !ids.isEmpty {
+                                DispatchQueue.main.async { if let id = library.selection { proxy.scrollTo(id, anchor: .top) } }
+                            }
+                        }
                         }
                     }
-                    }
+                    .navigationSplitViewColumnWidth(min: 280, ideal: 800)
                 }
-                .navigationSplitViewColumnWidth(min: 280, ideal: 800)
             }
-            .inspector(isPresented: .constant(windowGeometry.size.width >= 1000)) {
+            .inspector(isPresented: .constant(library.section != "settings" && windowGeometry.size.width >= 1000)) {
                 InspectorView().inspectorColumnWidth(min: 220, ideal: 280, max: 360)
             }
             // Keep the inspector from starting a separate transition after a window resize.
@@ -539,7 +570,7 @@ struct LibraryView: View {
     private var sectionSelection: Binding<String?> {
         Binding(get: { library.section }, set: { value in
             guard let value, value != library.section else { return }
-            library.section = value
+            library.navigate(to: value)
             if value == "discover" { library.query = "" }
         })
     }
@@ -709,6 +740,7 @@ struct LibraryView: View {
                 Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
                 TextField("Search", text: $library.query).textFieldStyle(.plain).accessibilityLabel("Search")
                     .onChange(of: library.query) { _, value in
+                        if !value.isEmpty && library.section == "settings" { library.navigate(to: "all") }
                         if !value.isEmpty && library.section == "discover" { library.section = "browse" }
                     }
                 if !library.query.isEmpty {
@@ -724,7 +756,10 @@ struct LibraryView: View {
     }
     private var sidebarFooter: some View {
         VStack(alignment: .leading, spacing: 8) {
-            SettingsLink { Label("Settings", systemImage: "gearshape") }.buttonStyle(.plain)
+            Button { library.navigate(to: "settings") } label: { Label("Settings", systemImage: "gearshape") }
+                .buttonStyle(.plain)
+                .foregroundStyle(library.section == "settings" ? library.accent : .secondary)
+                .accessibilityAddTraits(library.section == "settings" ? .isSelected : [])
         }
         .font(.callout)
         .foregroundStyle(.secondary)
@@ -1235,7 +1270,6 @@ struct SettingsView: View {
                 Text("Add, preview, edit and set wallpapers, with playlists and per-display playback. Everything in your library remains local.").font(.caption).foregroundStyle(.secondary)
             }
         }.formStyle(.grouped).scrollContentBackground(.hidden).padding(8)
-            .fluaBackdrop(accent: library.accent)
             .fluaClearInitialFocus()
             .toggleStyle(.switch)
             .buttonStyle(FluaGlassButtonStyle())

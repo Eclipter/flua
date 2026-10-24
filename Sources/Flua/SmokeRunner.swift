@@ -15,7 +15,7 @@ enum SmokeRunner {
             window.collectionBehavior = [.primary, .fullScreenNone, .stationary, .ignoresCycle]
             window.hidesOnDeactivate = false
             window.ignoresMouseEvents = true
-        } else {
+        } else if !window.ignoresMouseEvents || window.alphaValue > 0.01 {
             park(window)
         }
     }
@@ -100,6 +100,32 @@ enum SmokeRunner {
             if let error = playlistLibrary.error { missing.append("Lock Screen playlist verification: " + error) }
             hosted.contentView = originalContent
         } else { missing.append("Lock Screen playlist verification library") }
+        let selectedBeforeSettings = library.selection
+        let windowsBeforeSettings = NSApp.windows.count
+        if let settingsButton = auditElement(auditTitle, named: "Settings") {
+            if AXUIElementPerformAction(settingsButton, kAXPressAction as CFString) != .success {
+                missing.append("Open internal Settings action")
+            }
+        } else { missing.append("Settings sidebar button") }
+        for (index, delay) in [0.05, 0.1, 0.2].enumerated() {
+            await pause(delay)
+            captureView(hosted, to: destination.deletingLastPathComponent().appendingPathComponent("Flua-settings-opening-\(index).png"))
+        }
+        await pause(0.65)
+        captureView(hosted, to: destination.deletingLastPathComponent().appendingPathComponent("Flua-settings-navigation.png"))
+        missing += missingNames(auditTitle, ["Accent color", "Blocked tags", "Show window on startup"])
+        if library.section != "settings" { missing.append("Settings sidebar opens internal page") }
+        if NSApp.windows.count > windowsBeforeSettings { missing.append("Settings must not open another window") }
+        if auditElement(auditTitle, named: "Set Wallpapers") != nil { missing.append("Settings hides playback controls") }
+        if auditElement(auditTitle, named: "Wallpaper name") != nil { missing.append("Settings hides wallpaper inspector") }
+        library.navigate(to: "all")
+        for (index, delay) in [0.05, 0.1, 0.2].enumerated() {
+            await pause(delay)
+            captureView(hosted, to: destination.deletingLastPathComponent().appendingPathComponent("Flua-settings-closing-\(index).png"))
+        }
+        await pause(0.65)
+        missing += missingNames(auditTitle, ["Set Wallpapers", "Wallpaper name"])
+        if library.selection != selectedBeforeSettings { missing.append("Settings preserves wallpaper selection") }
         library.filter.categories = ["Nature"]
         library.filter.colors = ["Green", "Purple"]
         library.filter.motions = ["Low"]
@@ -123,14 +149,10 @@ enum SmokeRunner {
         await pause(0.4)
         for window in NSApp.windows { park(window); window.orderBack(nil) }
         missing += missingNames("Flua Library Audit", ["Clear search", "Clear filters", "Remove ambient filter"])
-        let settings = NSWindow(contentRect: NSRect(x: -20000, y: -20000, width: 530, height: 760), styleMask: [.titled], backing: .buffered, defer: false)
-        settings.title = "Flua Settings Audit"
-        settings.isReleasedWhenClosed = false
-        settings.contentView = NSHostingView(rootView: SettingsView().environmentObject(library).frame(width: 530, height: 760))
-        park(settings)
-        settings.orderBack(nil)
+        let settings = hosted
+        library.section = "settings"
         await pause(0.4)
-        missing += missingNames("Flua Settings Audit", ["Accent color", "Blocked tags", "Block", "Unblock test", "Show in menu bar", "Hide from Dock"])
+        missing += missingNames(settings.title, ["Accent color", "Blocked tags", "Block", "Unblock test", "Show in menu bar", "Hide from Dock"])
         let settingsAX = AXUIElementCreateApplication(ProcessInfo.processInfo.processIdentifier)
         var settingsWindowsRef: CFTypeRef?
         AXUIElementCopyAttributeValue(settingsAX, kAXWindowsAttribute as CFString, &settingsWindowsRef)
@@ -165,14 +187,14 @@ enum SmokeRunner {
             captureView(settings, to: destination.deletingLastPathComponent().appendingPathComponent("Flua-settings-power-\(lowPower)-\(lowBattery).png"))
         }
         if !powerControlsPassed { missing.append("Independent Low Power Mode and low battery controls") }
-        let menuShown = checkboxValue("Flua Settings Audit", named: "Show in menu bar") == true
-        let dockHidden = checkboxValue("Flua Settings Audit", named: "Hide from Dock") == false
-        let dockEnabled = checkboxEnabled("Flua Settings Audit", named: "Hide from Dock") == true
+        let menuShown = checkboxValue(settings.title, named: "Show in menu bar") == true
+        let dockHidden = checkboxValue(settings.title, named: "Hide from Dock") == false
+        let dockEnabled = checkboxEnabled(settings.title, named: "Hide from Dock") == true
         if !menuShown || !dockHidden || !dockEnabled { missing.append("Hide from Dock while menu bar is shown") }
         library.state.setShowsMenuBar(false)
         await pause(0.3)
-        let dockStaysOff = checkboxValue("Flua Settings Audit", named: "Hide from Dock") == false
-        let dockDisabled = checkboxEnabled("Flua Settings Audit", named: "Hide from Dock") == false
+        let dockStaysOff = checkboxValue(settings.title, named: "Hide from Dock") == false
+        let dockDisabled = checkboxEnabled(settings.title, named: "Hide from Dock") == false
         if !dockStaysOff || !dockDisabled { missing.append("Hide from Dock while menu bar is hidden") }
         library.state.setShowsMenuBar(true)
         let report: [String: Any] = ["passed": missing.isEmpty, "missing": missing]
@@ -1099,17 +1121,22 @@ enum SmokeRunner {
             library.unblockTag("test")
             results["clearFilters"] = library.filter.activeCount == 0 && library.query.isEmpty && library.visible.count == library.state.wallpapers.count
             library.blockTags("example")
-            let settings = NSWindow(contentRect: NSRect(x: 100, y: 100, width: 530, height: 760), styleMask: [.titled, .closable], backing: .buffered, defer: false)
-            settings.isReleasedWhenClosed = false
-            settings.title = "Flua Settings Verification"
-            settings.contentView = NSHostingView(rootView: SettingsView().environmentObject(library))
-            settings.orderBack(nil)
+            guard let settings = NSApp.windows.first(where: { $0.title == "Flua" }) else {
+                throw NativeWallpaperError("Main window unavailable for internal Settings verification.")
+            }
+            if !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+                let animationPassed = await verifySettingsInspectorAnimation(settings, library: library, directory: out)
+                results["settingsInspectorAnimation"] = animationPassed
+                if !animationPassed { failures.append("settingsInspectorAnimation") }
+            }
+            library.section = "settings"
             await pause(0.3)
             captureView(settings, to: out.appendingPathComponent("Flua-settings.png"))
             await captureAppearances(settings, stem: "Flua-settings", directory: out)
-            if let mainWindow = NSApp.windows.first(where: { $0.title == "Flua" }) {
-                captureView(mainWindow, to: out.appendingPathComponent("Flua-library-system.png"))
-            }
+            library.section = "all"
+            await pause(0.3)
+            captureView(settings, to: out.appendingPathComponent("Flua-library-system.png"))
+            library.section = "settings"
             results["systemAccentDefault"] = library.state.accentColor == nil && library.accent == AppAccent.system.color && library.accentOverride == nil
             library.state.accentColor = AppAccent.purple.rawValue
             library.save()
@@ -1117,9 +1144,17 @@ enum SmokeRunner {
             results["accentSelection"] = savedAccent == "Purple" && library.accent == AppAccent.purple.color && library.accentOverride == AppAccent.purple.color
             await pause(0.3)
             captureView(settings, to: out.appendingPathComponent("Flua-settings-purple.png"))
-            if let mainWindow = NSApp.windows.first(where: { $0.title == "Flua" }) {
-                captureView(mainWindow, to: out.appendingPathComponent("Flua-library-purple.png"))
-            }
+            library.section = "all"
+            await pause(0.3)
+            captureView(settings, to: out.appendingPathComponent("Flua-library-purple.png"))
+            library.section = "settings"
+            let settingsFrame = settings.frame
+            settings.setFrame(NSRect(x: settingsFrame.origin.x, y: settingsFrame.origin.y, width: 720, height: 440), display: true, animate: false)
+            park(settings)
+            await pause(0.3)
+            captureView(settings, to: out.appendingPathComponent("Flua-settings-compact.png"))
+            settings.setFrame(settingsFrame, display: true, animate: false)
+            park(settings)
             library.state.accentColor = AppAccent.system.rawValue
             results["explicitSystemAccent"] = library.accentOverride == nil
             library.state.accentColor = "Unknown future color"
@@ -1127,7 +1162,7 @@ enum SmokeRunner {
             library.state.accentColor = nil
             library.save()
             results["systemAccentReset"] = try library.disk.load().accentColor == nil
-            settings.close()
+            library.section = "all"
             library.unblockTag("example")
             library.selection = "aurora"
             library.section = "discover"
@@ -1322,6 +1357,66 @@ enum SmokeRunner {
                 && retainedInput == inputBytes
         }
         return results
+    }
+    @MainActor private static func verifySettingsInspectorAnimation(_ window: NSWindow, library: Library, directory: URL) async -> Bool {
+        guard let root = window.contentView else { return false }
+        func frame() -> NSRect? {
+            var result: NSRect?
+            func visit(_ view: NSView) {
+                if view.identifier?.rawValue == "FluaInspectorApplyTarget" {
+                    var ancestor = view.superview
+                    while let parent = ancestor {
+                        if let scroll = parent as? NSScrollView {
+                            if !scroll.isHiddenOrHasHiddenAncestor {
+                                if let layer = scroll.layer, let rootLayer = root.layer {
+                                    let presented = layer.presentation() ?? layer
+                                    result = (rootLayer.presentation() ?? rootLayer).convert(presented.bounds, from: presented)
+                                } else {
+                                    result = root.convert(scroll.bounds, from: scroll)
+                                }
+                            }
+                            break
+                        }
+                        ancestor = parent.superview
+                    }
+                }
+                view.subviews.forEach(visit)
+            }
+            visit(root)
+            return result
+        }
+        let originalSelection = library.selection
+        let originalSection = library.section
+        defer {
+            library.selection = originalSelection
+            library.section = originalSection
+        }
+        library.selection = "aurora"
+        library.section = "all"
+        await pause(1)
+        guard let baseline = frame() else { return false }
+        var samples: [String: [String]] = [:]
+        var moving: [Bool] = []
+        for (direction, section) in [("opening", "settings"), ("closing", "all")] {
+            library.navigate(to: section)
+            var frames: [NSRect] = []
+            var recorded: [String] = []
+            for _ in 0..<25 {
+                await pause(0.02)
+                if let current = frame() {
+                    frames.append(current)
+                    recorded.append(NSStringFromRect(current))
+                } else { recorded.append("hidden") }
+            }
+            samples[direction] = recorded
+            let intermediate = frames.filter { $0.minX > baseline.minX + 1 && $0.minX < root.bounds.maxX - 1 }
+            moving.append(intermediate.count >= 2 && intermediate.first != intermediate.last)
+            await pause(0.5)
+        }
+        if let data = try? JSONSerialization.data(withJSONObject: samples, options: [.prettyPrinted, .sortedKeys]) {
+            try? data.write(to: directory.appendingPathComponent("settings-inspector-animation.json"))
+        }
+        return moving.allSatisfy { $0 } && frame() == baseline
     }
     @MainActor private static func verifyInstantInspectorResize(_ window: NSWindow) async -> Bool {
         guard let root = window.contentView else { return false }

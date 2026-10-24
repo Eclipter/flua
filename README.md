@@ -49,6 +49,8 @@ Updates copy the replacement beside the installed app before swapping it in. If 
 2. Click a card to select it. Preview and settings appear in the right inspector when the window is at least 1000 points wide. Adjust playback or use **Edit Video…** to trim and choose a cover, then **Save Changes** or **Cancel**.
 3. Choose a display mode and target surface in the sidebar, then click **Set Wallpapers** to apply the selected wallpaper to that display and surface. Per Display targets the selected display; Mirrored targets every connected display. Sidebar changes stay in preview until you press the button. Use **Stop** to restore the previous system wallpapers. Opening Flua does not reapply saved wallpapers; start playback explicitly to resume saved playlists.
 
+Open **Settings** from the sidebar or with **Command-comma**. Settings replaces the main content and inspector inside the same window; choose a library section to return.
+
 ## Building from source
 
 <details>

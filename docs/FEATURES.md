@@ -34,6 +34,8 @@ Native fullscreen entry/exit paused and resumed Desktop scene frames with Flua c
 
 ## Library behavior
 
+Settings opens in the main window from the sidebar, app menu, Command-comma or menu bar menu. It replaces the wallpaper content and inspector; selecting a library section returns to browsing. The inspector uses the same native animation in opposite directions when entering and leaving Settings, respecting Reduce Motion.
+
 The right inspector uses a 24-point top margin and shows the selected wallpaper's title above its preview, followed by editable details and playback settings. Tags appear only in the editable text field, without duplicate tag buttons.
 
 Global **Add Wallpaper…** accepts multiple files and supported packages without filling the current playlist. File drops use the same importer. Symbolic links to media files are imported as independent copies, so moving or removing the original does not break the imported wallpaper. Successful imports reset browsing filters, reveal the batch and offer Undo. Clear filters appears when filters or search are active, or sorting differs from Name. It clears filters and search and resets sorting to Name. Undo removes entries from the library and playlists while retaining source and copied media. Added wallpapers with blocked tags remain temporarily visible until the import confirmation is dismissed. Playlist **Add Wallpapers…** offers existing items and **Add Files…**.
