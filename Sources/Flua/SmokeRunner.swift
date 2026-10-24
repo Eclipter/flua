@@ -1027,6 +1027,7 @@ enum SmokeRunner {
                 results[key] = passed
                 if !passed { failures.append(key) }
             }
+            results["symlinkImportIsIndependent"] = try await verifySymlinkImport(library: library, image: imageURL, output: out)
             library.blockTags("unknown-color")
             library.importMedia([unknownPackageURL])
             let blockedImportDeadline = Date().addingTimeInterval(20)
@@ -1062,7 +1063,7 @@ enum SmokeRunner {
                 !window.isVisible || window.alphaValue == 0
             }
             if results["nonPlaybackWindowsHidden"] as? Bool != true { failures.append("nonPlaybackWindowsHidden") }
-            let required = [ "configurationDraftPreviewUsesLivePlaylist", "configurationDraftPreservesPlaylistProgress", "configurationDraftPreservesRemoval", "applySelectedSurfaceOnly", "applyLockScreenOnly", "surfaceControlsApplyHiddenMode", "configurePickerLinkedNormalizesToDesktop", "fileDrop", "fileDropUndo", "blockedImportRevealed", "importRevealsAdded", "editorCancel", "editorSave", "editorPreservesNewerEdits", "editorRejectsInvalidDraft", "editorRejectsMissingWallpaper", "playlistFileImport", "importUndo", "playlistExistingAdd", "inspectorSceneInteraction", "inspectorVideoInteraction", "explicitSystemAccent", "systemAccentDefault", "accentSelection", "unknownAccentFallback", "systemAccentReset", "importFacts", "rotatedFacts", "missingFacts", "legacyBackfill", "staleEditPreservesFacts", "unknownColorBackfill", "unknownColorRoundTrip", "blockedDiscover", "tagFiltering", "combinedBrowsing", "clearFiltersPreservesBlockedTags", "clearFilters", "imageImport", "videoImport", "videoReady", "videoPlaying", "videoLooped", "videoPaused", "videoResumed", "liveAdjustmentPreservesTime", "liveAdjustmentSpeed", "stillHeld", "stillIgnoresResume", "stillPreservesSource", "sceneStillRetained", "desktopStill", "desktopStillSurvivesPause", "playlistPauseStatus", "playlistResumeStatus", "desktopStillPersisted", "desktopStillPreservesSource", "render_image", "render_aurora", "render_cosmos", "render_ocean", "render_ember", "systemWallpaperPreserved", "libraryAssignmentValidated", "nativeDescriptorValidation", "nativeDescriptorValidationRejectsMissing", "nativeCatalogMismatchRejected", "backgroundLaunch", "videoPreviewWindowVisible", "scenePreviewWindowVisible", "scenePreviewReshownWindowVisible", "playlistStart", "playlistNext", "libraryStop", "libraryRoundTrip", "discoverWindow", "windowSnapshot", "videoInformation", "trimmedPlayback", "trimmedExport", "thumbnailExport", "rejectInvalidTrim", "preserveSourceOnExport", "packageRoundTrip", "editorPersistence", "editorWindow", "silentExport"]
+            let required = [ "configurationDraftPreviewUsesLivePlaylist", "configurationDraftPreservesPlaylistProgress", "configurationDraftPreservesRemoval", "applySelectedSurfaceOnly", "applyLockScreenOnly", "surfaceControlsApplyHiddenMode", "configurePickerLinkedNormalizesToDesktop", "fileDrop", "fileDropUndo", "blockedImportRevealed", "importRevealsAdded", "editorCancel", "editorSave", "editorPreservesNewerEdits", "editorRejectsInvalidDraft", "editorRejectsMissingWallpaper", "playlistFileImport", "importUndo", "playlistExistingAdd", "inspectorSceneInteraction", "inspectorVideoInteraction", "explicitSystemAccent", "systemAccentDefault", "accentSelection", "unknownAccentFallback", "systemAccentReset", "importFacts", "rotatedFacts", "missingFacts", "legacyBackfill", "staleEditPreservesFacts", "unknownColorBackfill", "unknownColorRoundTrip", "blockedDiscover", "tagFiltering", "combinedBrowsing", "clearFiltersPreservesBlockedTags", "clearFilters", "imageImport", "videoImport", "symlinkImportIsIndependent", "videoReady", "videoPlaying", "videoLooped", "videoPaused", "videoResumed", "liveAdjustmentPreservesTime", "liveAdjustmentSpeed", "stillHeld", "stillIgnoresResume", "stillPreservesSource", "sceneStillRetained", "desktopStill", "desktopStillSurvivesPause", "playlistPauseStatus", "playlistResumeStatus", "desktopStillPersisted", "desktopStillPreservesSource", "render_image", "render_aurora", "render_cosmos", "render_ocean", "render_ember", "systemWallpaperPreserved", "libraryAssignmentValidated", "nativeDescriptorValidation", "nativeDescriptorValidationRejectsMissing", "nativeCatalogMismatchRejected", "backgroundLaunch", "videoPreviewWindowVisible", "scenePreviewWindowVisible", "scenePreviewReshownWindowVisible", "playlistStart", "playlistNext", "libraryStop", "libraryRoundTrip", "discoverWindow", "windowSnapshot", "videoInformation", "trimmedPlayback", "trimmedExport", "thumbnailExport", "rejectInvalidTrim", "preserveSourceOnExport", "packageRoundTrip", "editorPersistence", "editorWindow", "silentExport"]
             for key in required + ["compactWindow"] where results[key] as? Bool != true { failures.append(key) }
             for (key, value) in results where key.hasPrefix("surfaceControls") && value as? Bool != true { failures.append(key) }
         } catch { failures.append(String(reflecting: error)) }
@@ -1071,6 +1072,52 @@ enum SmokeRunner {
         if let data = try? JSONSerialization.data(withJSONObject: results, options: [.prettyPrinted, .sortedKeys]) { try? data.write(to: out.appendingPathComponent("smoke-results.json")) }
         NSApp.terminate(nil)
     }
+    @MainActor private static func verifySymlinkImport(library: Library, image: URL, output: URL) async throws -> Bool {
+        let linked = output.appendingPathComponent("linked-source.png")
+        let alias = output.appendingPathComponent("linked.png")
+        let moved = output.appendingPathComponent("linked-source-moved.png")
+        try FileManager.default.copyItem(at: image, to: linked)
+        try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: linked)
+        let previousIDs = Set(library.state.wallpapers.map(\.id))
+        library.error = nil
+        library.importMedia([alias])
+        let deadline = Date().addingTimeInterval(20)
+        while library.importing && Date() < deadline { await pause(0.1) }
+        guard !library.importing, library.error == nil,
+              let wallpaper = library.state.wallpapers.first(where: { !previousIDs.contains($0.id) }),
+              wallpaper.kind == "image", let copied = library.disk.url(for: wallpaper) else { return false }
+        let display = "symlink-import-smoke"
+        var descriptorState = library.state
+        descriptorState.assign(wallpaper.id, display: display)
+        func descriptorUsesCopy() throws -> Bool {
+            let assignments = try NativeWallpaperStore.assignments(from: descriptorState, displays: [display], root: library.disk.root, provider: "com.example.flua.smoke")
+            guard let choice = assignments[display]?.desktop,
+                  let file = (choice["Files"] as? [[String: String]])?.first?["relative"] else { return false }
+            return URL(string: file)?.resolvingSymlinksInPath() == copied.resolvingSymlinksInPath()
+        }
+        guard try descriptorUsesCopy(),
+              (try? copied.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true,
+              (try? copied.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) != true else { return false }
+        try FileManager.default.moveItem(at: linked, to: moved)
+        let brokenAlias = output.appendingPathComponent("broken-link.png")
+        try FileManager.default.createSymbolicLink(at: brokenAlias, withDestinationURL: output.appendingPathComponent("missing-source.png"))
+        let brokenLibrary = try Library(root: output.appendingPathComponent("BrokenSymlinkLibrary"))
+        brokenLibrary.tick?.invalidate()
+        let previousBrokenIDs = Set(brokenLibrary.state.wallpapers.map(\.id))
+        brokenLibrary.importMedia([brokenAlias])
+        let brokenDeadline = Date().addingTimeInterval(20)
+        while brokenLibrary.importing && Date() < brokenDeadline { await pause(0.1) }
+        let brokenRejected = !brokenLibrary.importing && brokenLibrary.error != nil
+            && Set(brokenLibrary.state.wallpapers.map(\.id)) == previousBrokenIDs
+        brokenLibrary.stop()
+        return try descriptorUsesCopy()
+            && brokenRejected
+            && FileManager.default.fileExists(atPath: moved.path)
+            && !FileManager.default.fileExists(atPath: alias.path)
+            && NSImage(contentsOf: copied) != nil
+            && (try Data(contentsOf: copied)) == (try Data(contentsOf: image))
+    }
+
     @MainActor private static func verifyImportFormats(library: Library, image: URL, video: URL, package: URL, output: URL) async throws -> [String: Bool] {
         let zipURL = output.appendingPathComponent("ImportVideo.zip")
         let archive = Process()

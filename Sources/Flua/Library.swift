@@ -552,7 +552,10 @@ final class Library: ObservableObject {
                         package = try await Task.detached(priority: .userInitiated) { try ScenePackage.inspect(url) }.value
                     } else { package = nil }
                     defer { package?.cleanup() }
-                    let mediaURL = package?.assetURL ?? url
+                    let mediaURL = package?.assetURL ?? url.resolvingSymlinksInPath()
+                    guard (try? mediaURL.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true else {
+                        throw LibraryError.unreadableMedia(url.lastPathComponent)
+                    }
                     let type = UTType(filenameExtension: mediaURL.pathExtension)
                     let kind: String
                     if type?.conforms(to: .image) == true, NSImage(contentsOf: mediaURL) != nil { kind = "image" }
