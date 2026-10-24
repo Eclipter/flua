@@ -4,7 +4,7 @@ Current capabilities and limitations are listed in [FEATURES.md](FEATURES.md). T
 
 ## Window management and resizing
 
-- Enable the native window-management popup when hovering over the green window button in a normal Flua session. Compare it with Window → Move & Resize, which exposes the native tiling presets. Verify the popup with an active real app window; the earlier automated check did not establish why it was absent.
+- Enable the native window-management popup when hovering over the green window button in a normal Flua session. Compare it with Window → Move & Resize, which exposes the native tiling presets. The active-window check remains inconclusive; physical-pointer hover is unverified. See [the recorded check](DEVELOPMENT.md#green-button-window-management-popup).
 - Remove the sluggish animation caused by wallpaper-grid rearrangement during window resizing and instant tiling. Keep the adaptive grid, and verify direct resizing and transitions from side tiles to the bottom tile in a real window. The user traced the separate apparent floating-playback-bar flicker to the external window-management app; do not treat that as an unresolved Flua defect.
 
 ## Real-system validation
