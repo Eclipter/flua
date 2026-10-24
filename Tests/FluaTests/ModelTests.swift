@@ -1,7 +1,82 @@
 import Foundation
 
 @main struct ModelTests {
+    static func playlistTargetTests() {
+        let start = Date(timeIntervalSince1970: 1_000)
+        let due = start.addingTimeInterval(60)
+        var state = LibraryState.initial
+        state.shuffle = false
+        state.playlists[0].interval = 60
+        for id in ["stopped", "active", "not-due", "disconnected"] {
+            state.assign("aurora", display: id, playlistID: "ambient", now: id == "not-due" ? due : start)
+            state.assign("ember", display: id, surface: .lockScreen)
+        }
+        let stopped = state.displays["stopped"]
+        let disconnected = state.displays["disconnected"]
+        let notDue = state.displays["not-due"]
+        let lock = state.displays["active"]?.lockScreen
+        let changes = state.advancePlaylists(displayIDs: ["stopped", "active", "not-due"], targetDisplayIDs: ["stopped", "active", "not-due"],
+                                             stoppedDisplayIDs: ["stopped"], surfaces: WallpaperSurface.allCases,
+                                             mirrored: false, now: due, force: false, backwards: false)
+        precondition(changes == ["active": [.desktop]], "automatic apply must target only the display/surface that advanced")
+        precondition(state.displays["stopped"] == stopped)
+        precondition(state.displays["not-due"] == notDue)
+        precondition(state.displays["disconnected"] == disconnected)
+        precondition(state.displays["active"]?.desktop.wallpaperID == "ocean")
+        precondition(state.displays["active"]?.lockScreen == lock)
+        precondition(state.advancePlaylists(displayIDs: ["active"], targetDisplayIDs: [], stoppedDisplayIDs: [],
+                                            surfaces: [.desktop], mirrored: false, now: due, force: true, backwards: false).isEmpty)
+
+        state.assign("aurora", display: "active", surface: .lockScreen, playlistID: "ambient", now: start)
+        let desktop = state.displays["active"]?.desktop
+        let manual = state.advancePlaylists(displayIDs: ["active", "stopped"], targetDisplayIDs: ["active"],
+                                            stoppedDisplayIDs: [], surfaces: [.lockScreen], mirrored: false,
+                                            now: due, force: true, backwards: false)
+        precondition(manual == ["active": [.lockScreen]])
+        precondition(state.displays["active"]?.lockScreen?.wallpaperID == "ocean")
+        precondition(state.displays["active"]?.desktop == desktop)
+        precondition(state.displays["stopped"] == stopped)
+        _ = state.advancePlaylists(displayIDs: ["active"], targetDisplayIDs: ["active"], stoppedDisplayIDs: [],
+                                   surfaces: [.lockScreen], mirrored: false, now: due, force: true, backwards: true)
+        precondition(state.displays["active"]?.lockScreen?.wallpaperID == "aurora")
+
+        state.setSurfacesLinked(true, display: "active")
+        let linked = state.advancePlaylists(displayIDs: ["active"], targetDisplayIDs: ["active"], stoppedDisplayIDs: [],
+                                            surfaces: WallpaperSurface.allCases, mirrored: false,
+                                            now: due.addingTimeInterval(60), force: false, backwards: false)
+        precondition(Set(linked.keys) == ["active"])
+        precondition(state.displays["active"]?.desktop.wallpaperID == "cosmos", "linked surfaces advanced more than once")
+        precondition(state.displays["active"]?.lockScreen == state.displays["active"]?.desktop)
+
+        var mirrored = LibraryState.initial
+        mirrored.shuffle = false
+        mirrored.playlists[0].interval = 60
+        for id in ["A", "B", "stopped"] {
+            mirrored.assign("aurora", display: id, playlistID: "ambient", now: start)
+            mirrored.assign(id == "A" ? "ember" : "cosmos", display: id, surface: .lockScreen)
+        }
+        let lockA = mirrored.displays["A"]?.lockScreen
+        let lockB = mirrored.displays["B"]?.lockScreen
+        let stoppedMirrored = mirrored.displays["stopped"]
+        let mirroredChanges = mirrored.advancePlaylists(displayIDs: ["A", "B", "stopped"], targetDisplayIDs: ["A", "B", "stopped"],
+                                                        stoppedDisplayIDs: ["stopped"], surfaces: WallpaperSurface.allCases,
+                                                        mirrored: true, now: due, force: false, backwards: false)
+        precondition(mirroredChanges == ["A": [.desktop], "B": [.desktop]])
+        precondition(mirrored.displays["A"]?.desktop.wallpaperID == "ocean")
+        precondition(mirrored.displays["A"]?.desktop == mirrored.displays["B"]?.desktop)
+        precondition(mirrored.displays["A"]?.lockScreen == lockA && mirrored.displays["B"]?.lockScreen == lockB)
+        precondition(mirrored.displays["stopped"] == stoppedMirrored)
+        mirrored.blockedTags = ["nature", "water", "stars", "warm"]
+        let beforeBlocked = mirrored.displays
+        precondition(mirrored.advancePlaylists(displayIDs: ["A", "B"], targetDisplayIDs: ["A", "B"], stoppedDisplayIDs: [],
+                                               surfaces: WallpaperSurface.allCases, mirrored: true,
+                                               now: due, force: true, backwards: false).isEmpty)
+        precondition(mirrored.displays == beforeBlocked)
+        print("PASS: playlist batches target only advanced connected displays and surfaces; stopped, not-due and independent choices survive")
+    }
+
     static func main() throws {
+        playlistTargetTests()
         var blockedPlaylist = LibraryState.initial
         blockedPlaylist.shuffle = false
         blockedPlaylist.blockedTags = ["nature"]

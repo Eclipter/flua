@@ -73,6 +73,33 @@ enum SmokeRunner {
             missing += missingNames(auditTitle, ["Add favorite: Northern lights"])
             if library.state.item("aurora")?.favorite != false { missing.append("Remove favorite must save its state") }
         } else { missing.append("Favorite accessibility target") }
+        if let playlistLibrary = try? Library(root: destination.deletingLastPathComponent().appendingPathComponent("PlaylistControlValidation"), systemPlaybackEnabled: false),
+           let key = playlistLibrary.screens.first.map(displayID) {
+            let originalContent = hosted.contentView
+            hosted.contentView = NSHostingView(rootView: LibraryView().environmentObject(playlistLibrary).frame(width: 1320, height: 840))
+            playlistLibrary.tick?.invalidate()
+            playlistLibrary.state.displayMode = "perDisplay"
+            playlistLibrary.display = key
+            playlistLibrary.state.shuffle = false
+            playlistLibrary.state.assign("ember", display: key)
+            let desktop = playlistLibrary.state.displays[key]?.desktop
+            playlistLibrary.surface = .lockScreen
+            playlistLibrary.startPlaylist("ambient")
+            var controlsPassed = playlistLibrary.state.displays[key]?.lockScreen?.wallpaperID == "aurora"
+                && playlistLibrary.state.displays[key]?.desktop == desktop
+            for (name, expected) in [("Next in playlist", "ocean"), ("Previous in playlist", "aurora")] {
+                await pause(0.3)
+                if let button = auditElement(auditTitle, named: name) {
+                    controlsPassed = AXUIElementPerformAction(button, kAXPressAction as CFString) == .success && controlsPassed
+                } else { controlsPassed = false }
+                await pause(0.3)
+                controlsPassed = controlsPassed && playlistLibrary.state.displays[key]?.lockScreen?.wallpaperID == expected
+                    && playlistLibrary.state.displays[key]?.desktop == desktop
+            }
+            if !controlsPassed { missing.append("Lock Screen playlist Previous/Next preserve Desktop") }
+            if let error = playlistLibrary.error { missing.append("Lock Screen playlist verification: " + error) }
+            hosted.contentView = originalContent
+        } else { missing.append("Lock Screen playlist verification library") }
         library.filter.categories = ["Nature"]
         library.filter.colors = ["Green", "Purple"]
         library.filter.motions = ["Low"]
@@ -945,6 +972,23 @@ enum SmokeRunner {
                 results["desktopStopPreservesLockScreen"] = library.state.displays.values.allSatisfy { $0.desktop.wallpaperID == nil && $0.lockScreen == lockScreen }
                 let persisted = try library.disk.load()
                 results["surfaceAssignmentsPersisted"] = persisted.displays == library.state.displays
+                library.tick?.invalidate()
+                library.surface = .lockScreen
+                library.startPlaylist("ambient")
+                library.surface = .desktop
+                library.startPlaylist("ambient")
+                let previousInterval = library.state.playlists[0].interval
+                library.state.playlists[0].interval = 0
+                library.advancePlaylists(force: false)
+                results["independentPlaylistTimers"] = library.state.displays.values.allSatisfy {
+                    $0.desktop.wallpaperID == "ocean" && $0.lockScreen?.wallpaperID == "ocean"
+                }
+                for id in library.screens.map(displayID) { library.state.setSurfacesLinked(true, display: id) }
+                library.advancePlaylists(force: false)
+                results["linkedPlaylistAdvancesOnce"] = library.state.displays.values.allSatisfy {
+                    $0.desktop.wallpaperID == "cosmos" && $0.lockScreen == $0.desktop
+                }
+                library.state.playlists[0].interval = previousInterval
                 library.state.displays.removeAll()
                 library.save()
             }
@@ -991,7 +1035,9 @@ enum SmokeRunner {
                 draftValidation.startPlaylist("ambient")
                 draftValidation.surface = .lockScreen
                 draftValidation.setSurfaceMode(.still)
+                draftValidation.surface = .desktop
                 draftValidation.advancePlaylists(force: true)
+                draftValidation.surface = .lockScreen
                 let advanced = draftValidation.state.displays[key]?.desktop
                 results["configurationDraftPreviewUsesLivePlaylist"] = draftValidation.surfaceSummary(.desktop).contains("Quiet tides")
                 draftValidation.selection = "cosmos"
@@ -1153,7 +1199,7 @@ enum SmokeRunner {
                 !window.isVisible || window.alphaValue == 0
             }
             if results["nonPlaybackWindowsHidden"] as? Bool != true { failures.append("nonPlaybackWindowsHidden") }
-            let required = [ "configurationDraftPreviewUsesLivePlaylist", "configurationDraftPreservesPlaylistProgress", "configurationDraftPreservesRemoval", "applySelectedSurfaceOnly", "applyLockScreenOnly", "surfaceControlsApplyHiddenMode", "configurePickerLinkedNormalizesToDesktop", "fileDrop", "fileDropUndo", "blockedImportRevealed", "importRevealsAdded", "editorCancel", "editorSave", "editorPreservesNewerEdits", "editorRejectsInvalidDraft", "editorRejectsMissingWallpaper", "playlistFileImport", "importUndo", "playlistExistingAdd", "inspectorSceneInteraction", "inspectorVideoInteraction", "explicitSystemAccent", "systemAccentDefault", "accentSelection", "unknownAccentFallback", "systemAccentReset", "importFacts", "rotatedFacts", "missingFacts", "legacyBackfill", "staleEditPreservesFacts", "unknownColorBackfill", "unknownColorRoundTrip", "blockedDiscover", "tagFiltering", "combinedBrowsing", "clearFiltersPreservesBlockedTags", "clearFilters", "imageImport", "videoImport", "symlinkImportIsIndependent", "videoReady", "videoPlaying", "videoLooped", "videoPaused", "videoResumed", "liveAdjustmentPreservesTime", "liveAdjustmentSpeed", "stillHeld", "stillIgnoresResume", "stillPreservesSource", "sceneStillRetained", "desktopStill", "desktopStillSurvivesPause", "playlistPauseStatus", "playlistResumeStatus", "desktopStillPersisted", "desktopStillPreservesSource", "render_image", "render_aurora", "render_cosmos", "render_ocean", "render_ember", "systemWallpaperPreserved", "libraryAssignmentValidated", "nativeDescriptorValidation", "nativeDescriptorValidationRejectsMissing", "nativeCatalogMismatchRejected", "backgroundLaunch", "videoPreviewWindowVisible", "scenePreviewWindowVisible", "scenePreviewReshownWindowVisible", "playlistStart", "playlistNext", "libraryStop", "libraryRoundTrip", "discoverWindow", "windowSnapshot", "videoInformation", "trimmedPlayback", "trimmedExport", "thumbnailExport", "rejectInvalidTrim", "preserveSourceOnExport", "packageRoundTrip", "editorPersistence", "editorWindow", "silentExport", "desktopPlaylistPreservesLockScreen", "desktopStopPreservesLockScreen", "surfaceAssignmentsPersisted"]
+            let required = [ "independentPlaylistTimers", "linkedPlaylistAdvancesOnce", "configurationDraftPreviewUsesLivePlaylist", "configurationDraftPreservesPlaylistProgress", "configurationDraftPreservesRemoval", "applySelectedSurfaceOnly", "applyLockScreenOnly", "surfaceControlsApplyHiddenMode", "configurePickerLinkedNormalizesToDesktop", "fileDrop", "fileDropUndo", "blockedImportRevealed", "importRevealsAdded", "editorCancel", "editorSave", "editorPreservesNewerEdits", "editorRejectsInvalidDraft", "editorRejectsMissingWallpaper", "playlistFileImport", "importUndo", "playlistExistingAdd", "inspectorSceneInteraction", "inspectorVideoInteraction", "explicitSystemAccent", "systemAccentDefault", "accentSelection", "unknownAccentFallback", "systemAccentReset", "importFacts", "rotatedFacts", "missingFacts", "legacyBackfill", "staleEditPreservesFacts", "unknownColorBackfill", "unknownColorRoundTrip", "blockedDiscover", "tagFiltering", "combinedBrowsing", "clearFiltersPreservesBlockedTags", "clearFilters", "imageImport", "videoImport", "symlinkImportIsIndependent", "videoReady", "videoPlaying", "videoLooped", "videoPaused", "videoResumed", "liveAdjustmentPreservesTime", "liveAdjustmentSpeed", "stillHeld", "stillIgnoresResume", "stillPreservesSource", "sceneStillRetained", "desktopStill", "desktopStillSurvivesPause", "playlistPauseStatus", "playlistResumeStatus", "desktopStillPersisted", "desktopStillPreservesSource", "render_image", "render_aurora", "render_cosmos", "render_ocean", "render_ember", "systemWallpaperPreserved", "libraryAssignmentValidated", "nativeDescriptorValidation", "nativeDescriptorValidationRejectsMissing", "nativeCatalogMismatchRejected", "backgroundLaunch", "videoPreviewWindowVisible", "scenePreviewWindowVisible", "scenePreviewReshownWindowVisible", "playlistStart", "playlistNext", "libraryStop", "libraryRoundTrip", "discoverWindow", "windowSnapshot", "videoInformation", "trimmedPlayback", "trimmedExport", "thumbnailExport", "rejectInvalidTrim", "preserveSourceOnExport", "packageRoundTrip", "editorPersistence", "editorWindow", "silentExport", "desktopPlaylistPreservesLockScreen", "desktopStopPreservesLockScreen", "surfaceAssignmentsPersisted"]
             for key in required + ["compactWindow"] where results[key] as? Bool != true { failures.append(key) }
             for (key, value) in results where key.hasPrefix("surfaceControls") && value as? Bool != true { failures.append(key) }
         } catch { failures.append(String(reflecting: error)) }

@@ -8,7 +8,7 @@ Use disposable libraries and matching catalog builds. Follow the [integration an
 
 - Verify native fullscreen entry/exit on the affected displays, including pause and resume with Flua closed.
 - Verify native playback through VoiceOver by activating playback controls and Set Wallpapers with a disposable matching-catalog build and rollback procedure.
-- Verify independent and linked Desktop/Lock Screen choices, modes, Stop, restart and disconnect/reconnect with multiple physical displays. Include automatic Desktop assignment routing and restoration.
+- Verify independent and linked Desktop/Lock Screen choices, modes, Stop, restart and disconnect/reconnect with multiple physical displays. Include automatic playlist advancement while another selected display remains stopped, Desktop assignment routing and restoration.
 - Verify sleep/wake, visible provider output across display scaling modes, and HDR output on suitable hardware. The recorded display-mode switch does not establish rendering correctness.
 - Verify recovery after revoking a live sandbox token. A separate voluntary lease-release check denied a fresh file open and explicit Apply reacquired scoped playback; it does not revoke a still-active host-issued grant. Automatic provider relaunch was not observed during a 90-second provider-crash check with WallpaperAgent alive. See the [recorded scope](../Sources/WallpaperExtension/README.md#provider-termination-and-released-access-lease); live token revocation and automatic recovery remain unestablished.
 
@@ -17,11 +17,6 @@ Update capability claims only after the relevant checks pass. Keep untested OS v
 ## Audit follow-ups
 
 The numbers below match the repository audit findings. Each fix needs a focused regression check; these entries describe pending work, not completed capabilities.
-
-### Must fix
-
-4. **Apply automatic playlist changes only to displays that advanced.** A stopped, selected display must stay stopped when another display advances. Cover target selection deterministically and verify behavior on multiple physical displays. See `Sources/Flua/Library.swift`.
-5. **Honor the selected surface in playlist controls.** Start and manually advance the selected Desktop or Lock Screen playlist. Automatically advance independent surfaces and process linked surfaces once. Test that the other surface is preserved. See `Sources/Flua/Library.swift`.
 
 ### Should fix
 

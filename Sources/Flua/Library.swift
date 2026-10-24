@@ -189,11 +189,10 @@ final class Library: ObservableObject {
         guard let w = state.playableItems(in: p).first else { error = "This playlist has no playable wallpapers. Unblock a wallpaper or add another one."; return }
         let now = Date()
         let ids = playbackTargets.map(displayID)
-        for id in ids { state.assign(w.id, display: id, playlistID: p.id, now: now) }
-        if resolvedDisplayMode(state.displayMode) == "mirrored" { _ = state.synchronizeMirrored(displayIDs: ids) }
+        for id in ids { state.assign(w.id, display: id, surface: surface, playlistID: p.id, now: now) }
         activity = "Playlist: \(p.name)"
         save()
-        applySavedNativeAssignments(displays: ids)
+        applySavedNativeAssignments(displays: ids, surface: surface)
     }
     @discardableResult func restoreAssignments(preferredDisplay: String? = nil) -> Bool {
         let previousDisplays = state.displays
@@ -204,40 +203,33 @@ final class Library: ObservableObject {
     }
     @MainActor func advancePlaylists(force: Bool, backwards: Bool = false, allDisplays: Bool = false) {
         guard !nativeSetupBusy, force || automaticPlaylistPlaybackEnabled, !state.paused || force else { return }
-        if !force && screens.allSatisfy({ stoppedNativeDisplays.contains(displayID($0)) }) { return }
         let now = Date()
-        func reportIfUnplayable(_ key: String) -> Bool {
-            guard let assignment = state.displays[key]?.desktop,
-                  let playlist = state.playlist(assignment.playlistID),
-                  state.playableItems(in: playlist).isEmpty,
-                  force || now.timeIntervalSince(assignment.changedAt) >= (playlist.interval ?? state.interval) else { return false }
-            error = "A playlist has no playable wallpapers. Unblock a wallpaper or add another one."
-            return true
+        let displayIDs = screens.map(displayID)
+        let manual = force
+        let targets = manual
+            ? (allDisplays ? displayIDs : playbackTargets.map(displayID))
+            : displayIDs
+        let surfaces = manual ? [surface] : WallpaperSurface.allCases
+        for key in targets {
+            if !force && stoppedNativeDisplays.contains(key) { continue }
+            for targetSurface in surfaces {
+                guard targetSurface != .lockScreen || !surfaces.contains(.desktop) || state.displays[key]?.surfacesLinked != true,
+                      let assignment = state.displays[key]?.selection(for: targetSurface),
+                      let playlist = state.playlist(assignment.playlistID),
+                      state.playableItems(in: playlist).isEmpty,
+                      force || now.timeIntervalSince(assignment.changedAt) >= (playlist.interval ?? state.interval) else { continue }
+                error = "A playlist has no playable wallpapers. Unblock a wallpaper or add another one."
+            }
         }
-        // Mutating a @Published value notifies the whole window even when advancement returns nil.
         var next = state
-        var didChange = false
-        if resolvedDisplayMode(state.displayMode) == "mirrored" {
-            let ids = screens.map(displayID)
-            let source = ids.first { state.displays[$0]?.desktop.playlistID != nil }
-            if let source, !reportIfUnplayable(source), next.advanceMirrored(displayIDs: ids, now: now, force: force, backwards: backwards) != nil {
-                didChange = true
-            }
-        } else {
-            for screen in screens {
-                let key = displayID(screen)
-                if !force && stoppedNativeDisplays.contains(key) { continue }
-                if force && !allDisplays && !playbackTargets.contains(screen) { continue }
-                if reportIfUnplayable(key) { continue }
-                if next.advance(display: key, now: now, force: force, backwards: backwards) != nil {
-                    didChange = true
-                }
-            }
-        }
-        if didChange {
+        let changed = next.advancePlaylists(displayIDs: displayIDs, targetDisplayIDs: targets,
+            stoppedDisplayIDs: stoppedNativeDisplays, surfaces: surfaces,
+            mirrored: resolvedDisplayMode(state.displayMode) == "mirrored", now: now,
+            force: force, backwards: backwards)
+        if !changed.isEmpty {
             state = next
             save()
-            applySavedNativeAssignments()
+            applySavedNativeAssignments(displays: displayIDs.filter { changed[$0] != nil })
         }
     }
     func stop() {

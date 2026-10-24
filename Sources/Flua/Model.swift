@@ -127,7 +127,7 @@ struct Playlist: Codable, Identifiable, Equatable {
     var shuffle: Bool?
 }
 
-enum WallpaperSurface: CaseIterable {
+enum WallpaperSurface: CaseIterable, Hashable {
     case desktop, lockScreen
 }
 
@@ -456,7 +456,46 @@ struct LibraryState: Codable {
     mutating func advanceMirrored(displayIDs: [String], surface: WallpaperSurface = .desktop, now: Date = Date(), force: Bool = false, backwards: Bool = false) -> Wallpaper? {
         guard let source = displayIDs.first(where: { displays[$0]?.selection(for: surface)?.playlistID != nil }),
               advance(display: source, surface: surface, now: now, force: force, backwards: backwards) != nil else { return nil }
-        return synchronizeMirrored(displayIDs: displayIDs, surface: surface, preferredSource: source)
+        synchronizeMirroredSurface(displayIDs: displayIDs, surface: surface, source: source)
+        return item(displays[source]?.selection(for: surface)?.wallpaperID)
+    }
+    mutating func advancePlaylists(displayIDs: [String], targetDisplayIDs: [String], stoppedDisplayIDs: Set<String>,
+                                   surfaces: [WallpaperSurface], mirrored: Bool, now: Date, force: Bool,
+                                   backwards: Bool) -> [String: Set<WallpaperSurface>] {
+        let targets = targetDisplayIDs.filter { displayIDs.contains($0) && (force || !stoppedDisplayIDs.contains($0)) }
+        guard !targets.isEmpty else { return [:] }
+        let previous = displays
+        var changed: [String: Set<WallpaperSurface>] = [:]
+        for surface in surfaces {
+            let candidates = targets.filter { id in
+                guard let assignment = displays[id] else { return false }
+                return surface != .lockScreen || !surfaces.contains(.desktop) || !assignment.surfacesLinked
+            }
+            guard !candidates.isEmpty else { continue }
+            if mirrored {
+                _ = advanceMirrored(displayIDs: candidates, surface: surface, now: now, force: force, backwards: backwards)
+            } else {
+                for id in candidates {
+                    _ = advance(display: id, surface: surface, now: now, force: force, backwards: backwards)
+                }
+            }
+        }
+        for id in targets {
+            for surface in WallpaperSurface.allCases {
+                if previous[id]?.selection(for: surface) != displays[id]?.selection(for: surface) {
+                    changed[id, default: []].insert(surface)
+                }
+            }
+        }
+        return changed
+    }
+    private mutating func synchronizeMirroredSurface(displayIDs: [String], surface: WallpaperSurface, source: String) {
+        guard let selection = displays[source]?.selection(for: surface) else { return }
+        for id in displayIDs {
+            var assignment = displays[id] ?? DisplayAssignment()
+            assignment.set(selection, for: surface)
+            store(assignment, display: id)
+        }
     }
     mutating func synchronizeMirrored(displayIDs: [String], surface: WallpaperSurface = .desktop, preferredSource: String? = nil) -> Wallpaper? {
         let preferred = preferredSource.flatMap { displayIDs.contains($0) ? $0 : nil }

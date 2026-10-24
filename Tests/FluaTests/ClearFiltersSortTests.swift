@@ -94,6 +94,42 @@ extension Bundle {
         precondition(blockedPlaylistLibrary.state.playlists[0] == savedSlowMornings)
         print("PASS: library playlist start, advancement, history, and empty eligibility skip blocked wallpapers without changing saved contents")
 
+        let surfaceRoot = root.appendingPathComponent("SurfacePlaylists", isDirectory: true)
+        let surfaceLibrary = try Library(root: surfaceRoot, systemPlaybackEnabled: false)
+        surfaceLibrary.tick?.invalidate()
+        surfaceLibrary.state.displayMode = "perDisplay"
+        surfaceLibrary.display = displayIDs[0]
+        surfaceLibrary.state.shuffle = false
+        surfaceLibrary.state.playlists[0].interval = 0
+        surfaceLibrary.state.assign("ember", display: displayIDs[0])
+        let preservedDesktop = surfaceLibrary.state.displays[displayIDs[0]]?.desktop
+        surfaceLibrary.surface = .lockScreen
+        surfaceLibrary.startPlaylist("ambient")
+        precondition(surfaceLibrary.state.displays[displayIDs[0]]?.desktop == preservedDesktop, "Lock Screen playlist start replaced Desktop")
+        precondition(surfaceLibrary.state.displays[displayIDs[0]]?.lockScreen?.wallpaperID == "aurora")
+        surfaceLibrary.advancePlaylists(force: true)
+        precondition(surfaceLibrary.state.displays[displayIDs[0]]?.lockScreen?.wallpaperID == "ocean")
+        precondition(surfaceLibrary.state.displays[displayIDs[0]]?.desktop == preservedDesktop)
+        surfaceLibrary.advancePlaylists(force: true, backwards: true)
+        precondition(surfaceLibrary.state.displays[displayIDs[0]]?.lockScreen?.wallpaperID == "aurora")
+        surfaceLibrary.surface = .desktop
+        surfaceLibrary.startPlaylist("ambient")
+        let preservedLock = surfaceLibrary.state.displays[displayIDs[0]]?.lockScreen
+        surfaceLibrary.advancePlaylists(force: true)
+        precondition(surfaceLibrary.state.displays[displayIDs[0]]?.desktop.wallpaperID == "ocean")
+        precondition(surfaceLibrary.state.displays[displayIDs[0]]?.lockScreen == preservedLock)
+        surfaceLibrary.advancePlaylists(force: false)
+        precondition(surfaceLibrary.state.displays[displayIDs[0]]?.desktop.wallpaperID == "cosmos")
+        precondition(surfaceLibrary.state.displays[displayIDs[0]]?.lockScreen?.wallpaperID == "ocean", "automatic advancement ignored independent Lock Screen playlist")
+        surfaceLibrary.state.setSurfacesLinked(true, display: displayIDs[0])
+        surfaceLibrary.advancePlaylists(force: false)
+        let linkedAssignment = surfaceLibrary.state.displays[displayIDs[0]]!
+        precondition(linkedAssignment.desktop.wallpaperID == "ember", "linked playlist advanced twice")
+        precondition(linkedAssignment.lockScreen == linkedAssignment.desktop)
+        let savedSurfaceState = try LibraryDisk(root: surfaceRoot).load()
+        precondition(savedSurfaceState.displays == surfaceLibrary.state.displays)
+        print("PASS: playlist controls honor the selected surface; automatic independent and linked advancement persists")
+
         let launchRoot = root.appendingPathComponent("PlaylistLaunch", isDirectory: true)
         let launchDisk = try LibraryDisk(root: launchRoot)
         var launchState = LibraryState.initial
@@ -215,7 +251,9 @@ extension Bundle {
         library.startPlaylist("ambient")
         library.surface = .lockScreen
         library.setSurfaceMode(.still)
+        library.surface = .desktop
         library.advancePlaylists(force: true)
+        library.surface = .lockScreen
         let currentDesktop = library.state.displays[firstDisplay]!.desktop
         precondition(library.surfaceSummary(.desktop).contains("Quiet tides"), "draft summary used old playlist position")
         library.selection = "cosmos"
