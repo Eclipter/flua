@@ -15,7 +15,7 @@ The versioned provider catalog publishes eligible images, videos and the four bu
 
 ## Previews, editing and imports
 
-`Engine.swift` provides `MediaSurface` for app previews and display identification. Video and scene previews pause when hidden, offscreen or fully occluded. Video previews are explicitly silent.
+`Engine.swift` provides `MediaSurface` for app previews and display identification. Video and scene previews pause when hidden, offscreen or fully occluded. Video previews are explicitly silent. The inspector passes the configured surface’s draft rendering mode to its preview, using Animated when target displays have mixed modes. Still previews use the selected video cover time within its trim range, or the built-in scene at time 7; returning to Animated restarts playback.
 
 `SceneView.swift` hosts an `MTKView`. `ScenePreviewRenderer.swift` shares Metal resources, and `ScenePreview.metal` renders four scenes at up to 60 fps, capped at 1280 pixels on the long edge with at most two frames in flight. A busy GPU skips frames; failed setup shows a still preview. `SceneDrawing.swift` supplies the Core Graphics reference used for thumbnails, still frames and provider rendering at up to 24 fps.
 

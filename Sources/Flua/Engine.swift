@@ -17,6 +17,8 @@ final class MediaSurface: NSView {
     private(set) var showsStillImage = false
     private var currentWallpaper: Wallpaper?
     private var currentURL: URL?
+    var sceneIsPaused: Bool { sceneView?.isPaused ?? true }
+    var sceneFrameCount: Int { sceneView?.frameCount ?? 0 }
     var playbackTime: Double { queue?.currentTime().seconds ?? 0 }
     var playbackRate: Float { queue?.rate ?? 0 }
     var mediaReady: Bool { queue?.currentItem?.status == .readyToPlay }

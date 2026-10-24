@@ -811,22 +811,73 @@ struct WallpaperCard: View {
 struct SurfacePreview: NSViewRepresentable {
     let wallpaper: Wallpaper
     let url: URL?
+    let mode: WallpaperMode?
     func makeNSView(context: Context) -> MediaSurface {
         let view = MediaSurface(frame: NSRect(x: 0, y: 0, width: 256, height: 160))
-        view.configure(wallpaper, url: url)
-        context.coordinator.current = wallpaper
+        configure(view, coordinator: context.coordinator)
         return view
     }
     func updateNSView(_ view: MediaSurface, context: Context) {
-        if context.coordinator.current != wallpaper {
-            if context.coordinator.current?.id == wallpaper.id { view.updateParameters(wallpaper) }
-            else { view.configure(wallpaper, url: url) }
-            context.coordinator.current = wallpaper
+        configure(view, coordinator: context.coordinator)
+    }
+    static func dismantleNSView(_ view: MediaSurface, coordinator: Coordinator) {
+        coordinator.stillTask?.cancel()
+        view.cleanup()
+    }
+    func makeCoordinator() -> Coordinator { Coordinator() }
+    private func configure(_ view: MediaSurface, coordinator: Coordinator) {
+        let resolvedMode = mode ?? .animated
+        if coordinator.current == wallpaper, coordinator.mode == resolvedMode { return }
+        if let current = coordinator.current, current.id == wallpaper.id, coordinator.mode == resolvedMode,
+           !(resolvedMode == .still && wallpaper.kind == "video" && stillStamp(for: current) != stillStamp(for: wallpaper)) {
+            view.updateParameters(wallpaper)
+            coordinator.current = wallpaper
+            return
+        }
+        coordinator.stillTask?.cancel()
+        let stillImage = resolvedMode == .still ? immediateStillImage() : nil
+        view.configure(wallpaper, url: url, mode: resolvedMode, stillImage: stillImage)
+        coordinator.current = wallpaper
+        coordinator.mode = resolvedMode
+        if resolvedMode == .still, wallpaper.kind == "video", let url {
+            let requestedStamp = stillStamp(for: wallpaper)
+            coordinator.stillTask = Task { [weak view] in
+                guard let data = try? await VideoTools.thumbnail(source: url,
+                    time: stillFrameTime(edit: wallpaper.videoEdit, duration: wallpaper.mediaFacts?.sourceDuration)) else { return }
+                guard !Task.isCancelled else { return }
+                await MainActor.run {
+                    guard coordinator.current?.id == wallpaper.id,
+                          coordinator.current.map({ stillStamp(for: $0) }) == requestedStamp,
+                          coordinator.mode == .still,
+                          let image = NSImage(data: data) else { return }
+                    view?.useStill(image)
+                }
+            }
         }
     }
-    static func dismantleNSView(_ view: MediaSurface, coordinator: Coordinator) { view.cleanup() }
-    func makeCoordinator() -> Coordinator { Coordinator() }
-    final class Coordinator { var current: Wallpaper? }
+    private func immediateStillImage() -> NSImage? {
+        if wallpaper.kind == "image", let url { return NSImage(contentsOf: url) }
+        guard ["aurora", "cosmos", "ocean", "ember"].contains(wallpaper.kind) else { return nil }
+        let width = 640, height = 400
+        guard let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: width, pixelsHigh: height,
+            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+            colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0),
+              let context = NSGraphicsContext(bitmapImageRep: bitmap) else { return nil }
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = context
+        SceneDrawing.render(scene: wallpaper.kind, time: 7, dimming: 0,
+            in: context.cgContext, bounds: CGRect(x: 0, y: 0, width: width, height: height))
+        context.flushGraphics()
+        NSGraphicsContext.restoreGraphicsState()
+        let image = NSImage(size: NSSize(width: width, height: height))
+        image.addRepresentation(bitmap)
+        return image
+    }
+    final class Coordinator {
+        var current: Wallpaper?
+        var mode: WallpaperMode?
+        var stillTask: Task<Void, Never>?
+    }
 }
 
 struct InspectorView: View {
@@ -844,7 +895,8 @@ struct InspectorView: View {
             if let w = library.selected {
                 VStack(alignment: .leading, spacing: 20) {
                     Text(w.title).font(.system(size: 24, weight: .semibold, design: .serif))
-                    SurfacePreview(wallpaper: w, url: library.disk.url(for: w)).id(w.id).aspectRatio(16/10, contentMode: .fit).clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    SurfacePreview(wallpaper: w, url: library.disk.url(for: w), mode: library.surfaceMode)
+                        .id(w.id).aspectRatio(16/10, contentMode: .fit).clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                     detailsSection(w)
                     Divider().opacity(0.3)
                     settingsSection(w)

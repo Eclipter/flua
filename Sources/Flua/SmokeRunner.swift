@@ -675,6 +675,96 @@ enum SmokeRunner {
             for check in ["scenePreviewAnimated", "scenePreviewPaused", "scenePreviewHidden", "scenePreviewResumed", "scenePreviewReleased", "scenePreviewWindowHidden", "scenePreviewWindowResumed"] {
                 if results[check] as? Bool != true { failures.append(check) }
             }
+            let previousSelection = library.selection
+            let previousSurface = library.surface
+            let previousLinked = library.surfacesLinked
+            library.surface = .desktop
+            let previousDesktopMode = library.surfaceMode ?? .animated
+            library.surface = .lockScreen
+            let previousLockScreenMode = library.surfaceMode ?? .animated
+            library.surface = previousSurface
+            if previousLinked { library.setSurfacesLinked(false) }
+            testWindow.setContentSize(NSSize(width: 380, height: 900))
+            testWindow.title = "Flua inspector verification"
+            testWindow.contentView = NSHostingView(rootView: InspectorView().environmentObject(library))
+            library.selection = video.id
+            library.surface = .desktop
+            var coverVideo = video
+            coverVideo.videoEdit = VideoEdit(start: 0.25, end: 0.75, thumbnail: 0.1)
+            library.edit(coverVideo)
+            library.setSurfaceMode(.still)
+            results["inspectorPreviewWindowVisible"] = await waitUntilVisible(testWindow)
+            func inspectorPreview() -> MediaSurface? {
+                func find(_ view: NSView) -> MediaSurface? {
+                    if let surface = view as? MediaSurface { return surface }
+                    for child in view.subviews {
+                        if let surface = find(child) { return surface }
+                    }
+                    return nil
+                }
+                return testWindow.contentView.flatMap(find)
+            }
+            var previewConfiguration = coverVideo
+            previewConfiguration.speed = 1.5
+            previewConfiguration.dimming = 0.2
+            library.editConfiguration(previewConfiguration)
+            var previewDeadline = Date().addingTimeInterval(5)
+            while inspectorPreview()?.showsStillImage != true && Date() < previewDeadline { await pause(0.05) }
+            let videoStillPreview = inspectorPreview()
+            results["inspectorVideoStillPreview"] = videoStillPreview?.holdsStill == true && videoStillPreview?.showsStillImage == true
+            results["inspectorVideoStillFrameClamped"] = stillFrameTime(edit: coverVideo.videoEdit,
+                duration: coverVideo.mediaFacts?.sourceDuration) == 0.25
+            capture(testWindow, to: out.appendingPathComponent("Flua-inspector-video-still.png"))
+            library.surface = .desktop
+            library.setSurfaceMode(.still)
+            library.surface = .lockScreen
+            library.setSurfaceMode(.animated)
+            await pause(0.3)
+            let lockScreenAnimated = inspectorPreview()?.holdsStill == false && library.surfaceMode == .animated
+            library.surface = .desktop
+            await pause(0.3)
+            let desktopStillRemains = inspectorPreview()?.holdsStill == true && library.surfaceMode == .still
+            library.surface = .lockScreen
+            library.setSurfaceMode(.still)
+            await pause(0.3)
+            results["inspectorSurfaceModesIndependent"] = lockScreenAnimated && desktopStillRemains
+                && inspectorPreview()?.holdsStill == true
+            library.surface = .desktop
+            library.setSurfaceMode(.still)
+            library.setSurfaceMode(.animated)
+            previewDeadline = Date().addingTimeInterval(3)
+            while (inspectorPreview()?.playbackRate ?? 0) <= 0 && Date() < previewDeadline { await pause(0.05) }
+            results["inspectorVideoPreviewResumed"] = inspectorPreview()?.holdsStill == false && (inspectorPreview()?.playbackRate ?? 0) > 0
+            let resumedVideoTime = inspectorPreview()?.playbackTime ?? 0
+            await pause(0.12)
+            results["inspectorVideoTimeAdvancesAfterResume"] = (inspectorPreview()?.playbackTime ?? 0) > resumedVideoTime + 0.02
+            capture(testWindow, to: out.appendingPathComponent("Flua-inspector-video-animated.png"))
+            library.selection = "aurora"
+            library.setSurfaceMode(.still)
+            await pause(0.4)
+            let sceneStillPreview = inspectorPreview()
+            results["inspectorSceneStillPreview"] = sceneStillPreview?.holdsStill == true && sceneStillPreview?.showsStillImage == true
+            capture(testWindow, to: out.appendingPathComponent("Flua-inspector-scene-still.png"))
+            library.setSurfaceMode(.animated)
+            let sceneFramesBeforeResume = sceneStillPreview?.sceneFrameCount ?? 0
+            await pause(0.4)
+            let sceneFramesAfterResume = sceneStillPreview?.sceneFrameCount ?? 0
+            results["inspectorSceneFrameProgress"] = sceneFramesAfterResume > sceneFramesBeforeResume + 2
+            results["inspectorScenePreviewResumed"] = sceneStillPreview?.holdsStill == false
+                && sceneStillPreview?.sceneIsPaused == false && sceneFramesAfterResume > sceneFramesBeforeResume + 2
+            capture(testWindow, to: out.appendingPathComponent("Flua-inspector-scene-animated.png"))
+            library.selection = previousSelection
+            library.edit(video)
+            library.editConfiguration(video)
+            library.surface = .desktop
+            library.setSurfaceMode(previousDesktopMode)
+            library.surface = .lockScreen
+            library.setSurfaceMode(previousLockScreenMode)
+            if previousLinked { library.setSurfacesLinked(true) }
+            library.surface = previousSurface
+            for check in ["inspectorPreviewWindowVisible", "inspectorVideoStillPreview", "inspectorVideoStillFrameClamped", "inspectorSurfaceModesIndependent", "inspectorVideoPreviewResumed", "inspectorVideoTimeAdvancesAfterResume", "inspectorSceneStillPreview", "inspectorSceneFrameProgress", "inspectorScenePreviewResumed"] {
+                if results[check] as? Bool != true { failures.append(check) }
+            }
             testWindow.close()
             let exported = out.appendingPathComponent("trimmed.mp4")
             let exportSession = try await VideoTools.exporter(source: videoURL, edit: edited.videoEdit!)
