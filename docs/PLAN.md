@@ -13,11 +13,3 @@ Use disposable libraries and matching catalog builds. Follow the [integration an
 - Verify recovery after revoking a live sandbox token. A separate voluntary lease-release check denied a fresh file open and explicit Apply reacquired scoped playback; it does not revoke a still-active host-issued grant. Automatic provider relaunch was not observed during a 90-second provider-crash check with WallpaperAgent alive. See the [recorded scope](../Sources/WallpaperExtension/README.md#provider-termination-and-released-access-lease); live token revocation and automatic recovery remain unestablished.
 
 Update capability claims only after the relevant checks pass. Keep untested OS versions and hardware explicitly unverified.
-
-## Audit follow-ups
-
-The numbers below match the repository audit findings. Each fix needs a focused regression check; these entries describe pending work, not completed capabilities.
-
-### Should fix
-
-10. **Remove the unused on-disk still cache.** Delete its helpers, directory creation and cache-only checks without changing provider-owned Still playback. Update the architecture description and retain useful still-frame and mode tests. Approximately 45 lines can be removed; no dependency change is needed. See `Sources/Flua/Model.swift`, its tests and `Sources/Flua/SmokeRunner.swift`.
