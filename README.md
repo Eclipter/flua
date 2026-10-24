@@ -41,6 +41,8 @@ Run in Terminal to install the latest release:
 curl -fsSL https://raw.githubusercontent.com/Eclipter/flua/main/install.sh | bash
 ```
 
+Updates copy the replacement beside the installed app before swapping it in. If copying fails, the existing installation stays in place; if the final move fails, the installer attempts to restore the previous app and reports its backup location if restoration fails.
+
 ## Getting started
 
 1. Use **Add Wallpaper…** to add images, videos or supported packages, or choose a built-in wallpaper.

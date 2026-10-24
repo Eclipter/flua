@@ -96,7 +96,7 @@ import Foundation
 
         var badArchiveEnv = ProcessInfo.processInfo.environment
         badArchiveEnv["FLUA_DOWNLOAD_URL"] = "file://\(badZipURL.path)"
-        let targetAppsDir = tempBase.appendingPathComponent("Applications")
+        let targetAppsDir = tempBase.appendingPathComponent("Test Applications")
         try FileManager.default.createDirectory(at: targetAppsDir, withIntermediateDirectories: true)
 
         let badArchiveRun = runScript(scriptURL: installScriptURL, arguments: ["--dir", targetAppsDir.path], environment: badArchiveEnv)
@@ -122,6 +122,13 @@ import Foundation
 
         var validEnv = ProcessInfo.processInfo.environment
         validEnv["FLUA_DOWNLOAD_URL"] = "file://\(validZipURL.path)"
+        validEnv["PATH"] = "\(mockBinDir.path):\(validEnv["PATH"] ?? "")"
+        let mockPgrep = mockBinDir.appendingPathComponent("pgrep")
+        try "#!/bin/sh\nexit 1\n".write(to: mockPgrep, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: mockPgrep.path)
+        let mockKillall = mockBinDir.appendingPathComponent("killall")
+        try "#!/bin/sh\necho 'Unexpected killall call' >&2\nexit 1\n".write(to: mockKillall, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: mockKillall.path)
 
         let successRun = runScript(scriptURL: installScriptURL, arguments: ["--dir", targetAppsDir.path], environment: validEnv)
         precondition(successRun.status == 0, "Installation failed: \(successRun.stderr)")
@@ -131,6 +138,40 @@ import Foundation
         precondition(FileManager.default.fileExists(atPath: installedApp.path), "Flua.app was not installed")
         let installedBin = installedApp.appendingPathComponent("Contents/MacOS/Flua")
         precondition(FileManager.default.fileExists(atPath: installedBin.path), "Installed app binary missing")
+
+        let oldMarker = installedApp.appendingPathComponent("previous-version.txt")
+        try "previous installation".write(to: oldMarker, atomically: true, encoding: .utf8)
+        let originalBinary = try Data(contentsOf: installedBin)
+
+        // A partial copy must leave the installed app intact and remove staging files.
+        let mockCopy = mockBinDir.appendingPathComponent("cp")
+        try "#!/bin/sh\n/bin/cp \"$@\"\nexit 37\n".write(to: mockCopy, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: mockCopy.path)
+        let copyFailure = runScript(scriptURL: installScriptURL, arguments: ["--dir", targetAppsDir.path], environment: validEnv)
+        precondition(copyFailure.status == 37, "Injected copy failure must reach the caller")
+        precondition((try? Data(contentsOf: installedBin)) == originalBinary, "Copy failure changed the installed binary")
+        precondition(FileManager.default.fileExists(atPath: oldMarker.path), "Copy failure removed the previous installation")
+        precondition((try? FileManager.default.contentsOfDirectory(atPath: targetAppsDir.path)) == ["Flua.app"], "Copy failure left staging files behind")
+        try FileManager.default.removeItem(at: mockCopy)
+
+        // A failed final rename must restore the app moved aside for replacement.
+        let mockMove = mockBinDir.appendingPathComponent("mv")
+        let moveScript = """
+        #!/bin/sh
+        if [ "$1" != "$FLUA_TEST_TARGET" ] && [ "$2" = "$FLUA_TEST_TARGET" ] && [ "${1##*/}" = "Flua.app" ]; then
+            exit 38
+        fi
+        exec /bin/mv "$@"
+        """
+        try moveScript.write(to: mockMove, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: mockMove.path)
+        validEnv["FLUA_TEST_TARGET"] = installedApp.path
+        let moveFailure = runScript(scriptURL: installScriptURL, arguments: ["--dir", targetAppsDir.path], environment: validEnv)
+        precondition(moveFailure.status == 38, "Injected replacement failure must reach the caller")
+        precondition((try? Data(contentsOf: installedBin)) == originalBinary, "Replacement failure changed the installed binary")
+        precondition(FileManager.default.fileExists(atPath: oldMarker.path), "Replacement failure removed the previous installation")
+        precondition((try? FileManager.default.contentsOfDirectory(atPath: targetAppsDir.path)) == ["Flua.app"], "Replacement failure left staging files behind")
+        try FileManager.default.removeItem(at: mockMove)
 
         // 10. Quarantine removal check
         let xattrSet = Process()
@@ -142,6 +183,8 @@ import Foundation
         // Re-run installer: it should update existing installation and clear quarantine
         let updateRun = runScript(scriptURL: installScriptURL, arguments: ["--dir", targetAppsDir.path], environment: validEnv)
         precondition(updateRun.status == 0, "Update installation failed: \(updateRun.stderr)")
+        precondition(!FileManager.default.fileExists(atPath: oldMarker.path), "Successful update retained files from the previous installation")
+        precondition((try? FileManager.default.contentsOfDirectory(atPath: targetAppsDir.path)) == ["Flua.app"], "Successful update left staging files behind")
 
         let xattrCheck = Process()
         xattrCheck.executableURL = URL(fileURLWithPath: "/usr/bin/xattr")
@@ -152,7 +195,7 @@ import Foundation
         xattrCheck.waitUntilExit()
         precondition(xattrCheck.terminationStatus != 0, "Quarantine attribute should have been removed")
 
-        print("PASS: installer validates OS, architecture, version, directory permissions, extracts Flua.zip, strips quarantine, and cleans up temporary directories")
+        print("PASS: installer validates prerequisites, installs and updates Flua.zip, preserves the installed app after copy or replacement failure, strips quarantine, and cleans up staging directories")
     }
 
     struct ScriptResult {

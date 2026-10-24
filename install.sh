@@ -115,10 +115,21 @@ fi
 
 # 6. Set up temporary directory with automated cleanup
 TMP_DIR="$(mktemp -d /tmp/flua-install.XXXXXX)"
+STAGE_DIR=""
 cleanup() {
     rm -rf "$TMP_DIR"
+    if [ -n "$STAGE_DIR" ]; then
+        if [ -e "${STAGE_DIR}/previous.app" ] && [ ! -e "$TARGET_APP" ]; then
+            if ! mv "${STAGE_DIR}/previous.app" "$TARGET_APP"; then
+                error "Could not restore ${TARGET_APP}. Previous installation preserved at ${STAGE_DIR}/previous.app."
+                return 1
+            fi
+        fi
+        rm -rf "$STAGE_DIR"
+    fi
 }
-trap cleanup EXIT INT TERM HUP
+trap cleanup EXIT
+trap 'exit 1' INT TERM HUP
 
 TMP_ZIP="${TMP_DIR}/Flua.zip"
 TMP_EXTRACT="${TMP_DIR}/extract"
@@ -143,6 +154,9 @@ fi
 
 # 9. Install application to target directory
 info "Installing to ${TARGET_APP}..."
+STAGE_DIR="$(mktemp -d "${INSTALL_DIR}/.flua-install.XXXXXX")"
+cp -R "${TMP_EXTRACT}/${APP_NAME}" "${STAGE_DIR}/${APP_NAME}"
+
 if pgrep -xq "Flua" 2>/dev/null; then
     info "Closing running Flua instance..."
     killall Flua 2>/dev/null || true
@@ -150,10 +164,10 @@ if pgrep -xq "Flua" 2>/dev/null; then
 fi
 
 if [ -e "$TARGET_APP" ]; then
-    rm -rf "$TARGET_APP"
+    mv "$TARGET_APP" "${STAGE_DIR}/previous.app"
 fi
 
-cp -R "${TMP_EXTRACT}/${APP_NAME}" "${INSTALL_DIR}/"
+mv "${STAGE_DIR}/${APP_NAME}" "$TARGET_APP"
 
 # 10. Strip quarantine attribute
 info "Removing quarantine attribute..."
