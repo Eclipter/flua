@@ -6,7 +6,7 @@ Current capabilities and limitations are listed in [FEATURES.md](FEATURES.md). T
 
 Use disposable libraries and matching catalog builds. Follow the [integration and rollback procedure](DEVELOPMENT.md#lock-screen-integration-checks); standalone tests and application smoke do not establish system playback behavior.
 
-- Verify native fullscreen entry/exit on the affected displays, including pause and resume with Flua closed.
+- Verify native fullscreen entry/exit pause and resume on multiple physical displays; current evidence covers only the built-in display on one Mac.
 - Verify native playback through VoiceOver by activating playback controls and Set Wallpapers with a disposable matching-catalog build and rollback procedure.
 - Verify independent and linked Desktop/Lock Screen choices, modes, Stop, restart and disconnect/reconnect with multiple physical displays. Include automatic playlist advancement while another selected display remains stopped, Desktop assignment routing and restoration.
 - Verify sleep/wake, visible provider output across display scaling modes, and HDR output on suitable hardware. The recorded display-mode switch does not establish rendering correctness.
