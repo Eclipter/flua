@@ -51,6 +51,14 @@ The smoke launch suppresses automatic library-window creation to verify that the
 
 UI smoke checks cover adaptive window layout, native window controls, scrolling, inspector hit targets and saved assignments. Desktop playlist and Stop checks must preserve the Lock Screen assignment, and surface assignments must survive persistence; a false or missing result fails smoke. `make test` exercises that failure aggregation without launching the app. Inspect the current build in a real window with a disposable `--data-dir` after every UI change; smoke captures alone do not replace that check. See [feature status](FEATURES.md) for the supported interface and [architecture](ARCHITECTURE.md) for component responsibilities.
 
+## Release versions
+
+Flua is unreleased. The app and wallpaper extension both use development version `0.1.0`, build `1`. Keep their `CFBundleShortVersionString` and `CFBundleVersion` values aligned in `Resources/Info.plist` and `Sources/WallpaperExtension/Info.plist`.
+
+Keep the development version between releases; Git commits identify source changes. Use `0.1.0` for the first public preview, then increase the patch number for fixes (`0.1.1`) or the minor number for feature releases (`0.2.0`). Use `1.0.0` when the app is ready for regular use, including as the first public release if no previews are distributed. Increase the build number for each distributed build, including replacements prepared under the same upcoming version. Once a release is published, preserve its tag and artifacts; publish changes under a new version. Tag releases as `v0.1.0`, for example.
+
+`make release` only creates the local archive; it does not tag or publish a release.
+
 ## Layout
 
 - `Sources/Flua/`: main application, rendering, persistence, media inspection, importer and editor.
