@@ -137,10 +137,14 @@ enum VideoTools {
         do {
             _ = try VideoTools.range(edit, duration: info.duration)
             draft.videoEdit?.end = min(edit.end ?? info.duration, info.duration)
-            guard !draft.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { error = "Enter a wallpaper name."; return }
+            guard let library, var current = library.state.item(draft.id) else {
+                error = "This wallpaper is no longer in your library."
+                return
+            }
+            current.videoEdit = draft.videoEdit
             error = nil
-            library?.edit(draft)
-            library?.generateThumbnail(draft)
+            library.edit(current)
+            library.generateThumbnail(current)
             status = "Saved to your library. The original video is preserved."
         } catch { self.error = error.localizedDescription }
     }
