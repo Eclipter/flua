@@ -85,6 +85,10 @@ Development and validation run locally; pushing changes is a separate developer 
 
 On macOS 27.0.1 (26A434), an active disposable Flua window exposed Left, Right, Top, Bottom and corner presets in Window → Move & Resize. A synthetic `CGEvent` mouse move aimed at the green zoom button did not show a popup after two seconds. Finder showed no popup in the same synthetic-hover check. Flua showed the same result while Vorssaint was temporarily stopped. The app used a disposable `--data-dir`; no macOS preferences or wallpaper stores changed. Vorssaint and its `now-playing.pl` helper were running again afterward, though its transient window list differed from the pre-check snapshot. Physical-pointer hover remains unverified, so this check does not establish a Flua defect or confirm native popup behavior.
 
+### Wallpaper-grid resizing
+
+On 2026-10-25, the user reported that the sluggish wallpaper-grid rearrangement during direct resizing and side-to-bottom tiling was no longer occurring. No code change or targeted performance measurement was made for this follow-up; this records the user's observation only.
+
 ## Git workflow
 
 Keep `main` linear with one squash commit per completed task. Work on a task branch in a separate worktree, then review the combined change and run its relevant checks before integration. Use an English Conventional Commit subject that describes the resulting change, such as `fix: restore wallpaper previews after selection`; summarize reasons or limitations in the body when needed.
