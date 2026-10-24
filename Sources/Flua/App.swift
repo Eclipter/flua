@@ -484,6 +484,10 @@ struct LibraryView: View {
             .inspector(isPresented: .constant(windowGeometry.size.width >= 1000)) {
                 InspectorView().inspectorColumnWidth(min: 220, ideal: 280, max: 360)
             }
+            // Keep the inspector from starting a separate transition after a window resize.
+            .transaction(value: windowGeometry.size.width) { transaction in
+                transaction.disablesAnimations = true
+            }
         }
         .sheet(isPresented: Binding(get: { ui.playlistPicker != nil }, set: { if !$0 { ui.playlistPicker = nil } })) {
             if let id = ui.playlistPicker { PlaylistWallpaperPicker(playlistID: id).environmentObject(library) }

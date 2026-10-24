@@ -4,7 +4,7 @@ Flua is a local wallpaper library for macOS 27+ on Apple Silicon. Playback uses 
 
 | Area | Support | Limitations |
 | --- | --- | --- |
-| Appearance | System or eight macOS accent colors, frosted surfaces, pressed shrink feedback on glass buttons (honors Reduce Motion), Reduce Transparency, adaptive narrow layout | Inspector hides below 1000 points wide |
+| Appearance | System or eight macOS accent colors, frosted surfaces, pressed shrink feedback on glass buttons (honors Reduce Motion), Reduce Transparency, adaptive narrow layout | Inspector hides below 1000 points wide; resize-driven panel changes are immediate |
 | Menu bar | Sakura template icon; optional Dock hiding while the menu bar icon is enabled | Disabling the menu bar icon also clears Dock hiding |
 | Wallpapers | Local images, looping videos and four built-in scenes: aurora, cosmos, ocean and ember | Interactive and audio-reactive runtimes are unsupported |
 | Previews | Inspector previews follow the configured surface’s Animated/Still mode; Metal scenes animate at up to 60 fps; hidden, offscreen and occluded playback pauses | Provider scene rendering uses Core Graphics at up to 24 fps |

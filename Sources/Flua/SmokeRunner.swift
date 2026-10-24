@@ -1121,6 +1121,7 @@ enum SmokeRunner {
             if let window = NSApp.windows.first(where: { $0.title == "Flua" }) {
                 results["discoverWindow"] = true
                 await captureAppearances(window, stem: "Flua-discover", directory: out)
+                results["instantInspectorResize"] = await verifyInstantInspectorResize(window)
                 let originalFrame = window.frame
                 window.setFrame(NSRect(x: originalFrame.origin.x, y: originalFrame.origin.y, width: 720, height: 440), display: true, animate: false)
                 park(window)
@@ -1198,7 +1199,7 @@ enum SmokeRunner {
                 !window.isVisible || window.alphaValue == 0
             }
             if results["nonPlaybackWindowsHidden"] as? Bool != true { failures.append("nonPlaybackWindowsHidden") }
-            let required = [ "independentPlaylistTimers", "linkedPlaylistAdvancesOnce", "configurationDraftPreviewUsesLivePlaylist", "configurationDraftPreservesPlaylistProgress", "configurationDraftPreservesRemoval", "applySelectedSurfaceOnly", "applyLockScreenOnly", "surfaceControlsApplyHiddenMode", "configurePickerLinkedNormalizesToDesktop", "fileDrop", "fileDropUndo", "blockedImportRevealed", "importRevealsAdded", "editorCancel", "editorSave", "editorPreservesNewerEdits", "editorRejectsInvalidDraft", "editorRejectsMissingWallpaper", "playlistFileImport", "importUndo", "playlistExistingAdd", "inspectorSceneInteraction", "inspectorVideoInteraction", "explicitSystemAccent", "systemAccentDefault", "accentSelection", "unknownAccentFallback", "systemAccentReset", "importFacts", "rotatedFacts", "missingFacts", "legacyBackfill", "staleEditPreservesFacts", "unknownColorBackfill", "unknownColorRoundTrip", "blockedDiscover", "tagFiltering", "combinedBrowsing", "clearFiltersPreservesBlockedTags", "clearFilters", "imageImport", "videoImport", "symlinkImportIsIndependent", "videoReady", "videoPlaying", "videoLooped", "videoPaused", "videoResumed", "liveAdjustmentPreservesTime", "liveAdjustmentSpeed", "stillHeld", "stillIgnoresResume", "stillPreservesSource", "sceneStillMode", "desktopStill", "desktopStillSurvivesPause", "playlistPauseStatus", "playlistResumeStatus", "desktopStillPersisted", "desktopStillPreservesSource", "render_image", "render_aurora", "render_cosmos", "render_ocean", "render_ember", "systemWallpaperPreserved", "libraryAssignmentValidated", "nativeDescriptorValidation", "nativeDescriptorValidationRejectsMissing", "nativeCatalogMismatchRejected", "backgroundLaunch", "videoPreviewWindowVisible", "scenePreviewWindowVisible", "scenePreviewReshownWindowVisible", "playlistStart", "playlistNext", "libraryStop", "libraryRoundTrip", "discoverWindow", "windowSnapshot", "videoInformation", "trimmedPlayback", "trimmedExport", "thumbnailExport", "rejectInvalidTrim", "preserveSourceOnExport", "packageRoundTrip", "editorPersistence", "editorWindow", "silentExport", "desktopPlaylistPreservesLockScreen", "desktopStopPreservesLockScreen", "surfaceAssignmentsPersisted"]
+            let required = [ "instantInspectorResize", "independentPlaylistTimers", "linkedPlaylistAdvancesOnce", "configurationDraftPreviewUsesLivePlaylist", "configurationDraftPreservesPlaylistProgress", "configurationDraftPreservesRemoval", "applySelectedSurfaceOnly", "applyLockScreenOnly", "surfaceControlsApplyHiddenMode", "configurePickerLinkedNormalizesToDesktop", "fileDrop", "fileDropUndo", "blockedImportRevealed", "importRevealsAdded", "editorCancel", "editorSave", "editorPreservesNewerEdits", "editorRejectsInvalidDraft", "editorRejectsMissingWallpaper", "playlistFileImport", "importUndo", "playlistExistingAdd", "inspectorSceneInteraction", "inspectorVideoInteraction", "explicitSystemAccent", "systemAccentDefault", "accentSelection", "unknownAccentFallback", "systemAccentReset", "importFacts", "rotatedFacts", "missingFacts", "legacyBackfill", "staleEditPreservesFacts", "unknownColorBackfill", "unknownColorRoundTrip", "blockedDiscover", "tagFiltering", "combinedBrowsing", "clearFiltersPreservesBlockedTags", "clearFilters", "imageImport", "videoImport", "symlinkImportIsIndependent", "videoReady", "videoPlaying", "videoLooped", "videoPaused", "videoResumed", "liveAdjustmentPreservesTime", "liveAdjustmentSpeed", "stillHeld", "stillIgnoresResume", "stillPreservesSource", "sceneStillMode", "desktopStill", "desktopStillSurvivesPause", "playlistPauseStatus", "playlistResumeStatus", "desktopStillPersisted", "desktopStillPreservesSource", "render_image", "render_aurora", "render_cosmos", "render_ocean", "render_ember", "systemWallpaperPreserved", "libraryAssignmentValidated", "nativeDescriptorValidation", "nativeDescriptorValidationRejectsMissing", "nativeCatalogMismatchRejected", "backgroundLaunch", "videoPreviewWindowVisible", "scenePreviewWindowVisible", "scenePreviewReshownWindowVisible", "playlistStart", "playlistNext", "libraryStop", "libraryRoundTrip", "discoverWindow", "windowSnapshot", "videoInformation", "trimmedPlayback", "trimmedExport", "thumbnailExport", "rejectInvalidTrim", "preserveSourceOnExport", "packageRoundTrip", "editorPersistence", "editorWindow", "silentExport", "desktopPlaylistPreservesLockScreen", "desktopStopPreservesLockScreen", "surfaceAssignmentsPersisted"]
             for key in required + ["compactWindow"] where results[key] as? Bool != true { failures.append(key) }
             for (key, value) in results where key.hasPrefix("surfaceControls") && value as? Bool != true { failures.append(key) }
         } catch { failures.append(String(reflecting: error)) }
@@ -1307,6 +1308,51 @@ enum SmokeRunner {
                 && retainedInput == inputBytes
         }
         return results
+    }
+    @MainActor private static func verifyInstantInspectorResize(_ window: NSWindow) async -> Bool {
+        guard let root = window.contentView else { return false }
+        let originalFrame = window.frame
+        defer { window.setFrame(originalFrame, display: true, animate: false) }
+        func inspectorFrame() -> NSRect? {
+            var frame: NSRect?
+            func visit(_ view: NSView) {
+                if view.identifier?.rawValue == "FluaInspectorApplyTarget" {
+                    var ancestor = view.superview
+                    while let parent = ancestor {
+                        if let scroll = parent as? NSScrollView {
+                            if !scroll.isHiddenOrHasHiddenAncestor {
+                                frame = root.convert(scroll.bounds, from: scroll)
+                            }
+                            break
+                        }
+                        ancestor = parent.superview
+                    }
+                }
+                view.subviews.forEach(visit)
+            }
+            visit(root)
+            return frame
+        }
+        var passed = true
+        // Match shortcut tiling: jump sizes without an AppKit window animation.
+        for width in [1100.0, 900, 1320, 1000, 999, 1100, 1320] {
+            var frame = originalFrame
+            frame.size.width = width
+            window.setFrame(frame, display: true, animate: false)
+            await pause(0.05)
+            root.layoutSubtreeIfNeeded()
+            let immediate = inspectorFrame()
+            await pause(0.35)
+            root.layoutSubtreeIfNeeded()
+            let settled = inspectorFrame()
+            let visible = width >= 1000
+            let stable = immediate == settled && (settled != nil) == visible
+            if !stable {
+                print("Inspector resize at \(width): initial \(String(describing: immediate)), settled \(String(describing: settled))")
+            }
+            passed = passed && stable
+        }
+        return passed
     }
     @MainActor private static func verifySystemScrollers() -> Bool {
         guard let window = NSApp.windows.first(where: { $0.title == "Flua" }),

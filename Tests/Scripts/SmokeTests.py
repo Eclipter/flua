@@ -10,12 +10,13 @@ smoke_runner = (source / 'Sources/Flua/SmokeRunner.swift').read_text()
 required_checks = next(line.strip() for line in smoke_runner.splitlines() if line.strip().startswith('let required = ['))
 aggregation = next(line.strip() for line in smoke_runner.splitlines() if line.strip().startswith('for key in required +'))
 passed_assignment = next(line.strip() for line in smoke_runner.splitlines() if line.strip() == 'results["passed"] = failures.isEmpty')
-surface_checks = [
+regression_checks = [
+    'instantInspectorResize',
     'desktopPlaylistPreservesLockScreen',
     'desktopStopPreservesLockScreen',
     'surfaceAssignmentsPersisted',
 ]
-for check in surface_checks:
+for check in regression_checks:
     assert f'"{check}"' in required_checks
 swift_source = f'''import Foundation
 func evaluate(_ check: String, _ value: Bool?) -> (Bool, [String]) {{
@@ -28,7 +29,7 @@ func evaluate(_ check: String, _ value: Bool?) -> (Bool, [String]) {{
     {passed_assignment}
     return (results["passed"] as? Bool == true, failures)
 }}
-for check in {json.dumps(surface_checks)} {{
+for check in {json.dumps(regression_checks)} {{
     let falseResult = evaluate(check, false)
     precondition(!falseResult.0 && falseResult.1.contains(check))
     let missingResult = evaluate(check, nil)
@@ -36,7 +37,7 @@ for check in {json.dumps(surface_checks)} {{
     let trueResult = evaluate(check, true)
     precondition(trueResult.0 && !trueResult.1.contains(check))
 }}
-print("PASS: required surface smoke checks fail when false or missing and pass when true")
+print("PASS: required UI and surface smoke checks fail when false or missing and pass when true")
 '''
 with tempfile.TemporaryDirectory(prefix='flua-required-smoke-checks-') as temporary:
     swift_file = Path(temporary) / 'RequiredSmokeChecks.swift'
