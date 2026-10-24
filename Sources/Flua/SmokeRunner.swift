@@ -381,9 +381,23 @@ enum SmokeRunner {
         let args = ProcessInfo.processInfo.arguments
         if let i = args.firstIndex(of: "--startup-smoke"), args.indices.contains(i + 1), args.contains("--data-dir") {
             await pause(1)
-            let visible = NSApp.windows.contains { $0.identifier?.rawValue == "library" && $0.isVisible }
+            let window = NSApp.windows.first { $0.identifier?.rawValue == "library" }
+            let visible = window?.isVisible == true
+            let fullScreenPrimary = window?.collectionBehavior.contains(.fullScreenPrimary) == true
+            let fullScreenNone = window?.collectionBehavior.contains(.fullScreenNone) == true
+            let fullScreenEligible = fullScreenPrimary && !fullScreenNone
             let passed = visible == library.state.showWindowOnStartup
-            let report = ["passed": passed, "windowVisible": visible, "showWindowOnStartup": library.state.showWindowOnStartup]
+                && (!visible || fullScreenEligible)
+            let report: [String: Any] = [
+                "passed": passed,
+                "windowVisible": visible,
+                "showWindowOnStartup": library.state.showWindowOnStartup,
+                "hidesDockIcon": library.state.hidesDockIcon,
+                "activationPolicy": NSApp.activationPolicy().rawValue,
+                "fullScreenPrimary": fullScreenPrimary,
+                "fullScreenNone": fullScreenNone,
+                "fullScreenEligible": fullScreenEligible
+            ]
             if let data = try? JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys]) {
                 try? data.write(to: URL(fileURLWithPath: args[i + 1]))
             }

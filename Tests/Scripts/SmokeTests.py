@@ -72,9 +72,16 @@ from pathlib import Path
 import sys
 if '--startup-smoke' in sys.argv:
     library = Path(sys.argv[sys.argv.index('--data-dir') + 1])
-    shown = json.loads((library / 'library.json').read_text())['showWindowOnStartup']
+    state = json.loads((library / 'library.json').read_text())
+    shown = state['showWindowOnStartup']
+    hidden = state.get('hideFromDock', False)
     result = Path(sys.argv[sys.argv.index('--startup-smoke') + 1])
-    result.write_text(json.dumps({'passed': True, 'windowVisible': shown, 'showWindowOnStartup': shown}))
+    result.write_text(json.dumps({
+        'passed': True, 'windowVisible': shown, 'showWindowOnStartup': shown,
+        'hidesDockIcon': hidden, 'activationPolicy': 1 if hidden else 0,
+        'fullScreenPrimary': shown, 'fullScreenNone': False,
+        'fullScreenEligible': shown,
+    }))
 PYTHON
 chmod +x "$FLUA_APP_PATH/Contents/MacOS/Flua"
 ''')

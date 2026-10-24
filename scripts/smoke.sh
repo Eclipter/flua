@@ -44,6 +44,7 @@ import sys
 state = json.loads(Path(sys.argv[1]).read_text())
 state['showWindowOnStartup'] = sys.argv[3] == 'true'
 state['nativePlayback'] = {}
+state['hideFromDock'] = False
 Path(sys.argv[2]).write_text(json.dumps(state))
 PYTHON
     "$app/Contents/MacOS/Flua" \
@@ -56,6 +57,31 @@ from pathlib import Path
 import sys
 for shown in (False, True):
     result = json.loads((Path(sys.argv[1]) / f'startup-{str(shown).lower()}.json').read_text())
-    assert result == {'passed': True, 'windowVisible': shown, 'showWindowOnStartup': shown}, result
+    assert result['passed'] is True and result['windowVisible'] is shown, result
+    assert result['showWindowOnStartup'] is shown and result['hidesDockIcon'] is False, result
+    assert result['fullScreenEligible'] is shown, result
+    assert result['activationPolicy'] == 0, result
 print('PASS: normal startup honors both startup window settings')
+PYTHON
+accessory_dir="$run_dir/startup-hide-from-dock"
+mkdir -p "$accessory_dir"
+python3 - "$run_dir/startup-true/library.json" "$accessory_dir/library.json" <<'PYTHON'
+import json
+from pathlib import Path
+import sys
+state = json.loads(Path(sys.argv[1]).read_text())
+state['hideFromDock'] = True
+Path(sys.argv[2]).write_text(json.dumps(state))
+PYTHON
+require_no_flua
+"$app/Contents/MacOS/Flua" \
+    --data-dir "$accessory_dir" \
+    --startup-smoke "$run_dir/results/startup-hide-from-dock.json"
+python3 - "$run_dir/results/startup-hide-from-dock.json" <<'PYTHON'
+import json, sys
+result = json.load(open(sys.argv[1]))
+assert result['passed'] is True and result['windowVisible'] is True, result
+assert result['hidesDockIcon'] is True and result['activationPolicy'] == 1, result
+assert result['fullScreenEligible'] is True, result
+print('PASS: Hide from Dock preserves fullscreen eligibility')
 PYTHON

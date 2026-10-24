@@ -402,7 +402,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Window("Flua", id: "library") {
             LibraryView().environmentObject(library)
                 .frame(minWidth: 700, minHeight: 440)
-                .windowFullScreenBehavior(ProcessInfo.processInfo.arguments.contains("--smoke-test") || ProcessInfo.processInfo.arguments.contains("--preview-smoke") ? .disabled : .automatic)
+                .windowFullScreenBehavior(ProcessInfo.processInfo.arguments.contains("--smoke-test") || ProcessInfo.processInfo.arguments.contains("--preview-smoke") ? .disabled : .enabled)
         }
         .defaultSize(width: 1320, height: 840)
         // Smoke tests exercise explicit launch handling; background startup leaves the window closed.

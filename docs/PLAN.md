@@ -4,7 +4,7 @@ Current capabilities and limitations are listed in [FEATURES.md](FEATURES.md). T
 
 ## Window management and resizing
 
-- Enable the native window-management popup when hovering over the green window button in a normal Flua session. Compare it with Window → Move & Resize, which exposes the native tiling presets. The active-window check remains inconclusive; physical-pointer hover is unverified. See [the recorded check](DEVELOPMENT.md#green-button-window-management-popup).
+- Confirm the native window-management popup appears when physically hovering over the green window button in a normal Flua session with Hide from Dock enabled. The window is now explicitly fullscreen eligible in both regular and accessory activation policies; physical-pointer popup verification remains open. See [the recorded check](DEVELOPMENT.md#green-button-window-management-popup).
 
 ## Real-system validation
 
