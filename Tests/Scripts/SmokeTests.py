@@ -1,10 +1,50 @@
 #!/usr/bin/env python3
+import json
 import os
 from pathlib import Path
 import subprocess
 import tempfile
 
 source = Path(__file__).resolve().parents[2]
+smoke_runner = (source / 'Sources/Flua/SmokeRunner.swift').read_text()
+required_checks = next(line.strip() for line in smoke_runner.splitlines() if line.strip().startswith('let required = ['))
+aggregation = next(line.strip() for line in smoke_runner.splitlines() if line.strip().startswith('for key in required +'))
+passed_assignment = next(line.strip() for line in smoke_runner.splitlines() if line.strip() == 'results["passed"] = failures.isEmpty')
+surface_checks = [
+    'desktopPlaylistPreservesLockScreen',
+    'desktopStopPreservesLockScreen',
+    'surfaceAssignmentsPersisted',
+]
+for check in surface_checks:
+    assert f'"{check}"' in required_checks
+swift_source = f'''import Foundation
+func evaluate(_ check: String, _ value: Bool?) -> (Bool, [String]) {{
+    var results: [String: Any] = [:]
+    var failures: [String] = []
+    {required_checks}
+    for key in required + ["compactWindow"] {{ results[key] = true }}
+    if let value {{ results[check] = value }} else {{ results.removeValue(forKey: check) }}
+    {aggregation}
+    {passed_assignment}
+    return (results["passed"] as? Bool == true, failures)
+}}
+for check in {json.dumps(surface_checks)} {{
+    let falseResult = evaluate(check, false)
+    precondition(!falseResult.0 && falseResult.1.contains(check))
+    let missingResult = evaluate(check, nil)
+    precondition(!missingResult.0 && missingResult.1.contains(check))
+    let trueResult = evaluate(check, true)
+    precondition(trueResult.0 && !trueResult.1.contains(check))
+}}
+print("PASS: required surface smoke checks fail when false or missing and pass when true")
+'''
+with tempfile.TemporaryDirectory(prefix='flua-required-smoke-checks-') as temporary:
+    swift_file = Path(temporary) / 'RequiredSmokeChecks.swift'
+    executable = Path(temporary) / 'required-smoke-checks'
+    swift_file.write_text(swift_source)
+    subprocess.run(['swiftc', str(swift_file), '-o', str(executable)], check=True)
+    subprocess.run([str(executable)], check=True)
+
 with tempfile.TemporaryDirectory(prefix='flua-smoke-tests-') as temporary:
     root = Path(temporary).resolve()
     (root / 'scripts').mkdir()

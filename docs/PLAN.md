@@ -25,5 +25,4 @@ The numbers below match the repository audit findings. Each fix needs a focused 
 
 ### Should fix
 
-9. **Make all intended smoke checks affect the suite result.** Add `desktopPlaylistPreservesLockScreen`, `desktopStopPreservesLockScreen` and `surfaceAssignmentsPersisted` to the required checks. Verify a false result causes failure. See `Sources/Flua/SmokeRunner.swift`.
 10. **Remove the unused on-disk still cache.** Delete its helpers, directory creation and cache-only checks without changing provider-owned Still playback. Update the architecture description and retain useful still-frame and mode tests. Approximately 45 lines can be removed; no dependency change is needed. See `Sources/Flua/Model.swift`, its tests and `Sources/Flua/SmokeRunner.swift`.
