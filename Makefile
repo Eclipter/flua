@@ -10,7 +10,7 @@ scroll-test:
 	@./scripts/scroll-test.sh
 run: build
 	@open build/Flua.app
-release: build
+release:
 	@./scripts/release.sh
 wallpaper-test:
 	@sh Sources/WallpaperExtension/build-and-test.sh

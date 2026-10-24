@@ -34,6 +34,7 @@
 - Follow `.editorconfig`: four spaces in Swift, tabs in `Makefile`, LF endings, and a final newline.
 - Do not edit generated `.build/`, `build/`, `dist/`, or `Sources/WallpaperExtension/Built/` artifacts.
 - Do not push, notarize, or register login items unless explicitly requested.
+- Run `make release` only when the user explicitly requests a release. It increments the app and wallpaper extension patch version and build number, builds the app and creates `dist/Flua.zip`. Never run it as routine implementation, verification, or task completion; keep versions unchanged during ordinary development.
 - Reversible OS integration checks are authorized when needed to implement or verify the requested task, including temporary registration, selection and activation of the wallpaper provider. No separate confirmation is needed for these checks. Use disposable fixtures, record the affected system settings and establish a rollback procedure before changing them, then restore the previous settings and registration state on completion or failure. Ask before irreversible changes or when reliable restoration cannot be established.
 
 ## Git history
@@ -56,7 +57,7 @@ Run the narrowest relevant checks, then expand when the change crosses boundarie
 - Main app build or compile-sensitive changes not covered by smoke: `make build`.
 - Playback, UI, import/export, or end-to-end behavior: `make smoke`. It builds `build/Flua.app` itself; do not run a separate `make build` first.
 - Wallpaper provider changes: `make wallpaper-test`.
-- Release packaging changes: `make release` and verify the produced archive under `dist/`.
+- Release packaging changes: run `python3 Tests/Scripts/ReleaseTests.py` in disposable fixtures. Only when the user explicitly requests a release, run `make release` and verify the produced archive under `dist/`.
 
 Smoke tests write only to a fresh directory under `build/verification/`. Do not claim multi-display, sleep/wake, fullscreen, battery, login startup, system-provider activation, or other hardware/OS integration behavior was verified unless it was tested on the relevant real setup.
 

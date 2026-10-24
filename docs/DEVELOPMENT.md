@@ -7,7 +7,7 @@ make build          # Flua.app with the wallpaper extension, ad-hoc signature
 make test           # model, library path, package security tests
 make smoke          # builds Flua.app for an isolated library, tests, then exits
 make run            # open the app
-make release        # dist/Flua.zip
+make release        # explicitly requested release only: bump version, build, create dist/Flua.zip
 make wallpaper-test # isolated wallpaper extension tests, no OS activation
 ```
 
@@ -55,9 +55,11 @@ UI smoke checks cover adaptive window layout, native window controls, scrolling,
 
 Flua is unreleased. The app and wallpaper extension both use development version `0.1.0`, build `1`. Keep their `CFBundleShortVersionString` and `CFBundleVersion` values aligned in `Resources/Info.plist` and `Sources/WallpaperExtension/Info.plist`.
 
-Keep the development version between releases; Git commits identify source changes. Use `0.1.0` for the first public preview, then increase the patch number for fixes (`0.1.1`) or the minor number for feature releases (`0.2.0`). Use `1.0.0` when the app is ready for regular use, including as the first public release if no previews are distributed. Increase the build number for each distributed build, including replacements prepared under the same upcoming version. Once a release is published, preserve its tag and artifacts; publish changes under a new version. Tag releases as `v0.1.0`, for example.
+Keep the development version between releases; Git commits identify source changes. Run `make release` only when the user explicitly requests a release, never as part of routine agent implementation or validation. Each successful invocation increments the patch version and build number in both source plists before building and packaging: the current baseline becomes `0.1.1`, build `2`. The version changes remain in the working tree for review and commit. Minor or major version changes require a separate explicit decision.
 
-`make release` only creates the local archive; it does not tag or publish a release.
+Release builds ignore `FLUA_APP_PATH`, `FLUA_CATALOG_PATH` and `FLUA_WALLPAPER_IDENTIFIER` overrides so the archive contains the standard app and library configuration. A build or packaging failure restores the source version files and preserves any existing `dist/Flua.zip`. A successful release replaces that local archive. The command does not commit, tag, publish or notarize anything. Once a release is published, preserve its tag and artifacts; publish changes under a new version. Tag releases as `v0.1.1`, for example.
+
+For release tooling changes, run `python3 Tests/Scripts/ReleaseTests.py` (also included in `make test`). These checks exercise version bumps and failure recovery in disposable fixtures without making a release from the checkout.
 
 ## Layout
 
