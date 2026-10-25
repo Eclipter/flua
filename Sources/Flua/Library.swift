@@ -167,10 +167,15 @@ final class Library: ObservableObject {
         // Linked surfaces have no independent Lock Screen target.
         if linked && surface == .lockScreen { surface = .desktop }
     }
-    func save() {
-        guard !saveBlocked else { error = LibraryError.invalidLibrary.localizedDescription; return }
-        do { try disk.save(state) } catch { self.error = error.localizedDescription }
+    @discardableResult func save() -> Bool {
+        guard !saveBlocked else { error = LibraryError.invalidLibrary.localizedDescription; return false }
+        do { try disk.save(state) } catch {
+            self.error = error.localizedDescription
+            onChange?()
+            return false
+        }
         onChange?()
+        return true
     }
     func settingChanged() { save() }
     @MainActor func applySelected() {
@@ -400,8 +405,10 @@ final class Library: ObservableObject {
             } catch { self.error = error.localizedDescription }
         }
     }
-    func edit(_ value: Wallpaper) {
-        guard let i = state.wallpapers.firstIndex(where: { $0.id == value.id }) else { return }
+    @discardableResult func edit(_ value: Wallpaper) -> Bool {
+        guard let i = state.wallpapers.firstIndex(where: { $0.id == value.id }) else { return false }
+        let previousState = state
+        let previousSelection = selection
         let previous = providerCatalog(from: state).items.first { $0.id == value.id }
         var updated = value
         updated.mediaFacts = state.wallpapers[i].mediaFacts
@@ -410,8 +417,13 @@ final class Library: ObservableObject {
         if updated.metadata?.color == nil { updated.metadata?.color = state.wallpapers[i].metadata?.color }
         if updated.metadata?.motion == nil { updated.metadata?.motion = state.wallpapers[i].metadata?.motion }
         state.wallpapers[i] = updated
+        error = nil
+        guard save() else {
+            state = previousState
+            selection = previousSelection
+            return false
+        }
         clearBlockedSelection()
-        save()
         let current = providerCatalog(from: state).items.first { $0.id == value.id }
         if let previous, let current,
            previous.fit != current.fit || previous.speed != current.speed || previous.dimming != current.dimming ||
@@ -419,6 +431,7 @@ final class Library: ObservableObject {
             pendingNativeEdits.insert(value.id)
             scheduleNativeRefresh()
         }
+        return true
     }
     private func scheduleNativeAssignmentRefresh(for displays: [String]) {
         guard nativeRoutingAvailable, !displays.isEmpty else { return }

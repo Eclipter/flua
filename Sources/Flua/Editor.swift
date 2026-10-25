@@ -133,6 +133,8 @@ enum VideoTools {
     }
     func seek(_ time: Double) { player.seek(to: CMTime(seconds: time, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero) }
     func save() {
+        error = nil
+        status = ""
         guard let info, let edit = draft.videoEdit else { return }
         do {
             _ = try VideoTools.range(edit, duration: info.duration)
@@ -142,8 +144,10 @@ enum VideoTools {
                 return
             }
             current.videoEdit = draft.videoEdit
-            error = nil
-            library.edit(current)
+            guard library.edit(current) else {
+                error = library.error ?? "Could not save this wallpaper. Try again."
+                return
+            }
             library.generateThumbnail(current)
             status = "Saved to your library. The original video is preserved."
         } catch { self.error = error.localizedDescription }

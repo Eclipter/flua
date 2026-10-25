@@ -2,13 +2,6 @@
 
 Current capabilities and limitations are listed in [FEATURES.md](FEATURES.md). This plan contains only unresolved implementation and validation work. Remove completed tasks instead of keeping checked entries; record verified capabilities and evidence in FEATURES.md and the relevant documentation. Community features, profiles, network services and third-party runtime dependencies are outside its scope.
 
-## Audit follow-up
-
-### Must fix
-
-- Audit 5 (Medium): In `Editor.swift`, propagate library save failures and keep the editor draft open; verify with an injected write failure.
-
-
 ## Real-system validation
 
 Use disposable libraries and matching catalog builds. Follow the [integration and rollback procedure](DEVELOPMENT.md#lock-screen-integration-checks); standalone tests and application smoke do not establish system playback behavior.

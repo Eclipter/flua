@@ -644,7 +644,11 @@ enum SmokeRunner {
             failures.append("Smoke verification activated Flua")
         }
         defer { NotificationCenter.default.removeObserver(activationObserver) }
-        let errorObservation = library.$error.compactMap { $0 }.sink { failures.append("Unexpected library error: " + $0) }
+        var expectingEditorSaveError = false
+        let errorObservation = library.$error.compactMap { $0 }.sink {
+            guard !expectingEditorSaveError else { return }
+            failures.append("Unexpected library error: " + $0)
+        }
         defer { errorObservation.cancel() }
         let originalWallpapers = library.screens.map { NSWorkspace.shared.desktopImageURL(for: $0) }
         do {
@@ -1114,7 +1118,8 @@ enum SmokeRunner {
             cancelModel.draft.videoEdit?.start = 0.3
             cancelModel.close()
             results["editorCancel"] = library.state.item(edited.id)?.videoEdit == beforeCancel.videoEdit
-            let saveModel = VideoEditorModel(wallpaper: edited, source: library.disk.url(for: edited)!, library: library)
+            let saveEditorWindow = VideoEditorWindow(wallpaper: edited, source: library.disk.url(for: edited)!, library: library)
+            let saveModel = saveEditorWindow.model
             while saveModel.info == nil && saveModel.error == nil { await pause(0.1) }
             saveModel.draft.videoEdit?.start = 0.4
             saveModel.draft.videoEdit?.thumbnail = 0.45
@@ -1134,6 +1139,50 @@ enum SmokeRunner {
                 && persistedEditorSave == expected
             let editorSourcePreserved = try Data(contentsOf: videoURL) == Data(contentsOf: library.disk.url(for: edited)!)
             results["editorSave"] = library.state.item(edited.id)?.videoEdit?.start == 0.4 && editorSourcePreserved
+            await pause(0.5)
+            let editorManifestURL = library.disk.manifest
+            let previousManifest = try Data(contentsOf: editorManifestURL)
+            let previousThumbnail = library.thumbnails[edited.id]
+            try FileManager.default.removeItem(at: editorManifestURL)
+            try FileManager.default.createDirectory(at: editorManifestURL, withIntermediateDirectories: false)
+            var manifestRestored = false
+            defer {
+                if !manifestRestored {
+                    try? FileManager.default.removeItem(at: editorManifestURL)
+                    try? previousManifest.write(to: editorManifestURL, options: .atomic)
+                }
+            }
+            saveModel.draft.videoEdit?.start = 0.5
+            saveModel.draft.videoEdit?.thumbnail = 0.55
+            expectingEditorSaveError = true
+            saveModel.save()
+            expectingEditorSaveError = false
+            let failedSaveKeepsDraft = saveModel.error != nil && saveModel.status.isEmpty
+                && saveModel.draft.videoEdit?.start == 0.5 && saveModel.draft.videoEdit?.thumbnail == 0.55
+                && library.state.item(edited.id) == expected
+            saveEditorWindow.window.orderBack(nil)
+            await pause(0.5)
+            let editorFailureScreenshot = out.appendingPathComponent("Flua-editor-save-failure.png")
+            captureView(saveEditorWindow.window, to: editorFailureScreenshot)
+            results["editorSaveFailureWindowVisible"] = saveEditorWindow.window.isVisible
+                && saveModel.error != nil && FileManager.default.fileExists(atPath: editorFailureScreenshot.path)
+            await pause(0.5)
+            let failedSaveKeepsThumbnail = library.thumbnails[edited.id] === previousThumbnail
+            try FileManager.default.removeItem(at: editorManifestURL)
+            try previousManifest.write(to: editorManifestURL, options: .atomic)
+            manifestRestored = true
+            let savedAfterCancel = library.save()
+            let persistedAfterCancel = try library.disk.load().item(edited.id)
+            let failedDraftWasDiscarded = savedAfterCancel && library.state.item(edited.id) == expected
+                && persistedAfterCancel == expected
+            saveModel.save()
+            var retriedExpected = expected
+            retriedExpected.videoEdit = saveModel.draft.videoEdit
+            let persistedEditorRetry = try library.disk.load().item(edited.id)
+            results["editorSaveFailureRetry"] = failedSaveKeepsDraft && failedSaveKeepsThumbnail && failedDraftWasDiscarded
+                && saveModel.error == nil && saveModel.status == "Saved to your library. The original video is preserved."
+                && library.state.item(edited.id) == retriedExpected && persistedEditorRetry == retriedExpected
+            expected = retriedExpected
             saveModel.draft.videoEdit?.start = information.duration + 1
             saveModel.save()
             results["editorRejectsInvalidDraft"] = saveModel.error != nil && library.state.item(edited.id) == expected
@@ -1143,6 +1192,7 @@ enum SmokeRunner {
             results["editorRejectsMissingWallpaper"] = saveModel.error != nil
                 && library.state.item(saveModel.draft.id) == nil && library.state.item(edited.id) == expected
             saveModel.close()
+            saveEditorWindow.window.close()
             library.edit(edited)
             results["editorPersistence"] = try library.disk.load().item(edited.id)?.videoEdit == edited.videoEdit
             let editorWindow = VideoEditorWindow(wallpaper: edited, source: library.disk.url(for: edited)!, library: library)
@@ -1471,7 +1521,7 @@ enum SmokeRunner {
                 !window.isVisible || window.alphaValue == 0
             }
             if results["nonPlaybackWindowsHidden"] as? Bool != true { failures.append("nonPlaybackWindowsHidden") }
-            let required = [ "libraryWindowChrome", "instantInspectorResize", "independentPlaylistTimers", "linkedPlaylistAdvancesOnce", "configurationDraftPreviewUsesLivePlaylist", "configurationDraftPreservesPlaylistProgress", "configurationDraftPreservesRemoval", "applySelectedSurfaceOnly", "applyLockScreenOnly", "surfaceControlsApplyHiddenMode", "configurePickerLinkedNormalizesToDesktop", "fileDrop", "fileDropUndo", "blockedImportRevealed", "importRevealsAdded", "editorCancel", "editorSave", "editorPreservesNewerEdits", "editorRejectsInvalidDraft", "editorRejectsMissingWallpaper", "playlistFileImport", "importUndo", "playlistExistingAdd", "inspectorSceneInteraction", "inspectorVideoInteraction", "explicitSystemAccent", "systemAccentDefault", "accentSelection", "unknownAccentFallback", "systemAccentReset", "importFacts", "rotatedFacts", "missingFacts", "legacyBackfill", "staleEditPreservesFacts", "unknownColorBackfill", "unknownColorRoundTrip", "blockedDiscover", "tagFiltering", "combinedBrowsing", "clearFiltersPreservesBlockedTags", "clearFilters", "imageImport", "imageExportCancellation", "imageExportReplacement", "imageExportPreservesSource", "videoImport", "symlinkImportIsIndependent", "videoReady", "videoPlaying", "videoLooped", "videoPaused", "videoResumed", "liveAdjustmentPreservesTime", "liveAdjustmentSpeed", "stillHeld", "stillIgnoresResume", "stillPreservesSource", "sceneStillMode", "desktopStill", "desktopStillSurvivesPause", "playlistPauseStatus", "playlistResumeStatus", "desktopStillPersisted", "desktopStillPreservesSource", "render_image", "render_aurora", "render_cosmos", "render_ocean", "render_ember", "systemWallpaperPreserved", "libraryAssignmentValidated", "nativeDescriptorValidation", "nativeDescriptorValidationRejectsMissing", "nativeCatalogMismatchRejected", "backgroundLaunch", "videoPreviewWindowVisible", "scenePreviewWindowVisible", "scenePreviewReshownWindowVisible", "playlistStart", "playlistNext", "libraryStop", "libraryRoundTrip", "discoverWindow", "windowSnapshot", "videoInformation", "trimmedPlayback", "trimmedExport", "thumbnailExport", "rejectInvalidTrim", "preserveSourceOnExport", "packageRoundTrip", "editorPersistence", "editorWindow", "silentExport", "desktopPlaylistPreservesLockScreen", "desktopStopPreservesLockScreen", "surfaceAssignmentsPersisted"]
+            let required = [ "libraryWindowChrome", "instantInspectorResize", "independentPlaylistTimers", "linkedPlaylistAdvancesOnce", "configurationDraftPreviewUsesLivePlaylist", "configurationDraftPreservesPlaylistProgress", "configurationDraftPreservesRemoval", "applySelectedSurfaceOnly", "applyLockScreenOnly", "surfaceControlsApplyHiddenMode", "configurePickerLinkedNormalizesToDesktop", "fileDrop", "fileDropUndo", "blockedImportRevealed", "importRevealsAdded", "editorCancel", "editorSave", "editorSaveFailureRetry", "editorSaveFailureWindowVisible", "editorPreservesNewerEdits", "editorRejectsInvalidDraft", "editorRejectsMissingWallpaper", "playlistFileImport", "importUndo", "playlistExistingAdd", "inspectorSceneInteraction", "inspectorVideoInteraction", "explicitSystemAccent", "systemAccentDefault", "accentSelection", "unknownAccentFallback", "systemAccentReset", "importFacts", "rotatedFacts", "missingFacts", "legacyBackfill", "staleEditPreservesFacts", "unknownColorBackfill", "unknownColorRoundTrip", "blockedDiscover", "tagFiltering", "combinedBrowsing", "clearFiltersPreservesBlockedTags", "clearFilters", "imageImport", "imageExportCancellation", "imageExportReplacement", "imageExportPreservesSource", "videoImport", "symlinkImportIsIndependent", "videoReady", "videoPlaying", "videoLooped", "videoPaused", "videoResumed", "liveAdjustmentPreservesTime", "liveAdjustmentSpeed", "stillHeld", "stillIgnoresResume", "stillPreservesSource", "sceneStillMode", "desktopStill", "desktopStillSurvivesPause", "playlistPauseStatus", "playlistResumeStatus", "desktopStillPersisted", "desktopStillPreservesSource", "render_image", "render_aurora", "render_cosmos", "render_ocean", "render_ember", "systemWallpaperPreserved", "libraryAssignmentValidated", "nativeDescriptorValidation", "nativeDescriptorValidationRejectsMissing", "nativeCatalogMismatchRejected", "backgroundLaunch", "videoPreviewWindowVisible", "scenePreviewWindowVisible", "scenePreviewReshownWindowVisible", "playlistStart", "playlistNext", "libraryStop", "libraryRoundTrip", "discoverWindow", "windowSnapshot", "videoInformation", "trimmedPlayback", "trimmedExport", "thumbnailExport", "rejectInvalidTrim", "preserveSourceOnExport", "packageRoundTrip", "editorPersistence", "editorWindow", "silentExport", "desktopPlaylistPreservesLockScreen", "desktopStopPreservesLockScreen", "surfaceAssignmentsPersisted"]
             for key in required + ["compactWindow"] where results[key] as? Bool != true { failures.append(key) }
             for (key, value) in results where key.hasPrefix("surfaceControls") && value as? Bool != true { failures.append(key) }
         } catch { failures.append(String(reflecting: error)) }
