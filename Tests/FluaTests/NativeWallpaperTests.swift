@@ -545,6 +545,66 @@ import Foundation
         precondition(!NativeWallpaperStore.applicationMatches(applicationAssignments, mirrored: false,
             expected: applicationExpected, in: Data("not a plist".utf8)))
         let mirroredExpected = try NativeWallpaperStore.applying(applicationAssignments, mirrored: true, to: encode(applicationBase))
+        var sparseBase = applicationBase
+        let linkedOld = ["Type": "linked", "Linked": old["Desktop"] as! [String: Any]] as [String: Any]
+        sparseBase["SystemDefault"] = linkedOld
+        sparseBase["AllSpacesAndDisplays"] = linkedOld
+        sparseBase["Displays"] = ["display": linkedOld, "untargeted": ["Type": "individual"]]
+        sparseBase["Spaces"] = ["space": ["Default": linkedOld, "Displays": ["display": linkedOld, "untargeted": ["Type": "individual"], "space-only": ["Type": "individual"]]]]
+        let sparseAssignments = ["display": NativeWallpaperStore.Assignment(desktop: choice, lockScreen: choice)]
+        let sparseMirrored = try NativeWallpaperStore.applying(sparseAssignments, mirrored: true, to: encode(sparseBase))
+        let sparseStopped = try NativeWallpaperStore.stopping(displays: ["display"], provider: "local.flua.desktop.wallpaper",
+            in: sparseMirrored, baseline: encode(sparseBase), mirrored: true)
+        let sparseResult = try decoded(sparseStopped)
+        let sparseUntargetedDisplays = sparseResult["Displays"] as! [String: Any]
+        let inheritedUntargeted = sparseUntargetedDisplays["untargeted"] as! [String: Any]
+        precondition(spaceChoiceProvider(inheritedUntargeted, surface: "Desktop") == "local.flua.desktop.wallpaper",
+                     "Stopping one display must preserve the provider choice inherited by untargeted displays")
+        precondition(spaceChoiceProvider(inheritedUntargeted, surface: "Idle") == "local.flua.desktop.wallpaper",
+                     "Stopping one display must preserve both inherited surface choices")
+        let sparseSpace = (sparseResult["Spaces"] as! [String: Any])["space"] as! [String: Any]
+        let sparseSpaceDisplays = sparseSpace["Displays"] as! [String: Any]
+        let inheritedSpaceDisplay = sparseSpaceDisplays["untargeted"] as! [String: Any]
+        precondition(spaceChoiceProvider(inheritedSpaceDisplay, surface: "Desktop") == "local.flua.desktop.wallpaper",
+                     "Stopping one display must preserve the provider choice inherited by untargeted Space displays")
+        precondition(spaceChoiceProvider(inheritedSpaceDisplay, surface: "Idle") == "local.flua.desktop.wallpaper",
+                     "Stopping one display must preserve both inherited Space surface choices")
+        let inheritedSpaceOnlyDisplay = sparseSpaceDisplays["space-only"] as! [String: Any]
+        precondition(spaceChoiceProvider(inheritedSpaceOnlyDisplay, surface: "Desktop") == "local.flua.desktop.wallpaper" &&
+                     spaceChoiceProvider(inheritedSpaceOnlyDisplay, surface: "Idle") == "local.flua.desktop.wallpaper",
+                     "Stopping one display must preserve choices for IDs present only in Space overrides")
+        var sparsePartialSpaceDefault = try decoded(sparseMirrored)
+        var sparsePartialSpaces = sparsePartialSpaceDefault["Spaces"] as! [String: Any]
+        var sparsePartialSpace = sparsePartialSpaces["space"] as! [String: Any]
+        var partialDefault = sparsePartialSpace["Default"] as! [String: Any]
+        partialDefault.removeValue(forKey: "Idle")
+        sparsePartialSpace["Default"] = partialDefault
+        sparsePartialSpaces["space"] = sparsePartialSpace
+        sparsePartialSpaceDefault["Spaces"] = sparsePartialSpaces
+        let partialDefaultStopped = try NativeWallpaperStore.stopping(displays: ["display"], provider: "local.flua.desktop.wallpaper",
+            in: encode(sparsePartialSpaceDefault), baseline: encode(sparseBase), mirrored: true)
+        let partialDefaultResult = try decoded(partialDefaultStopped)
+        let partialDefaultDisplays = ((partialDefaultResult["Spaces"] as! [String: Any])["space"] as! [String: Any])["Displays"] as! [String: Any]
+        let inheritedPartialDefault = partialDefaultDisplays["untargeted"] as! [String: Any]
+        precondition(spaceChoiceProvider(inheritedPartialDefault, surface: "Desktop") == "local.flua.desktop.wallpaper" &&
+                     spaceChoiceProvider(inheritedPartialDefault, surface: "Idle") == "local.flua.desktop.wallpaper",
+                     "A partial Space default must inherit its missing surface before shared defaults are restored")
+        var sparseWithoutSpaceDefault = try decoded(sparseMirrored)
+        var sparseWithoutDefaultSpaces = sparseWithoutSpaceDefault["Spaces"] as! [String: Any]
+        var sparseWithoutDefaultSpace = sparseWithoutDefaultSpaces["space"] as! [String: Any]
+        sparseWithoutDefaultSpace.removeValue(forKey: "Default")
+        sparseWithoutDefaultSpaces["space"] = sparseWithoutDefaultSpace
+        sparseWithoutSpaceDefault["Spaces"] = sparseWithoutDefaultSpaces
+        let noSpaceDefaultStopped = try NativeWallpaperStore.stopping(displays: ["display"], provider: "local.flua.desktop.wallpaper",
+            in: encode(sparseWithoutSpaceDefault), baseline: encode(sparseBase), mirrored: true)
+        let noSpaceDefaultResult = try decoded(noSpaceDefaultStopped)
+        let noSpaceDefault = ((noSpaceDefaultResult["Spaces"] as! [String: Any])["space"] as! [String: Any])
+        precondition(noSpaceDefault["Default"] == nil)
+        let noSpaceDefaultDisplays = noSpaceDefault["Displays"] as! [String: Any]
+        let inheritedWithoutDefault = noSpaceDefaultDisplays["untargeted"] as! [String: Any]
+        precondition(spaceChoiceProvider(inheritedWithoutDefault, surface: "Desktop") == "local.flua.desktop.wallpaper" &&
+                     spaceChoiceProvider(inheritedWithoutDefault, surface: "Idle") == "local.flua.desktop.wallpaper",
+                     "A missing Space default must fall back to the current global provider choices")
         var mirroredFixture = try decoded(mirroredExpected)
         var mirroredDefaults = mirroredFixture["SystemDefault"] as! [String: Any]
         let oldDesktopChoice = ((old["Desktop"] as! [String: Any])["Content"] as! [String: Any])["Choices"] as! [[String: Any]]

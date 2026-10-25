@@ -326,6 +326,32 @@ enum NativeWallpaperStore {
             }
             return result
         }
+        func preservingInheritedProviderChoices(in current: [String: Any]?, from source: [String: Any]) throws -> [String: Any]? {
+            var result = current ?? ["Type": "individual"]
+            guard let type = result["Type"] as? String, ["individual", "linked", "desktop", "idle"].contains(type) else { throw unsupported() }
+            var inheritedSurfaces: [(String, [String: Any])] = []
+            for key in ["Desktop", "Idle"] where surface(key, in: result) == nil {
+                if let choice = surface(key, in: source), owned(choice) { inheritedSurfaces.append((key, choice)) }
+            }
+            guard !inheritedSurfaces.isEmpty else { return current }
+            if result["Type"] as? String == "linked", let linked = result["Linked"] as? [String: Any] {
+                result["Desktop"] = linked
+                result["Idle"] = linked
+                result.removeValue(forKey: "Linked")
+            }
+            for (key, choice) in inheritedSurfaces { result[key] = choice }
+            result["Type"] = "individual"
+            return result
+        }
+        func inheritedSource(_ preferred: [String: Any]?, over fallback: [String: Any]?) -> [String: Any] {
+            var result: [String: Any] = ["Type": "individual"]
+            for key in ["Desktop", "Idle"] {
+                if let choice = preferred.flatMap({ surface(key, in: $0) }) ?? fallback.flatMap({ surface(key, in: $0) }) {
+                    result[key] = choice
+                }
+            }
+            return result
+        }
         let savedFallback = saved.flatMap { try? fallback($0) }
         var changed = false
         var targetIDs = Set(targets)
@@ -358,6 +384,32 @@ enum NativeWallpaperStore {
         }
         let hasProvider = try containsProvider(provider, in: data)
         if captureBaseline || mirrored || hasProvider {
+            // Save the effective provider choices before restoring defaults that untargeted displays inherit.
+            let currentFallback = try fallback(store)
+            var untargetedIDs = Set(displays.keys)
+            for value in spaces.values {
+                guard let space = value as? [String: Any], let overrides = space["Displays"] as? [String: Any] else { throw unsupported() }
+                untargetedIDs.formUnion(overrides.keys)
+            }
+            untargetedIDs.subtract(targetIDs)
+            for id in displays.keys where !targetIDs.contains(id) {
+                guard let current = displays[id] as? [String: Any] else { throw unsupported() }
+                if let preserved = try preservingInheritedProviderChoices(in: current, from: currentFallback) { displays[id] = preserved }
+            }
+            for (spaceID, value) in spaces {
+                guard var space = value as? [String: Any], var overrides = space["Displays"] as? [String: Any] else { throw unsupported() }
+                let spaceDefault = space["Default"] as? [String: Any]
+                for id in untargetedIDs {
+                    guard overrides[id] == nil || overrides[id] is [String: Any] else { throw unsupported() }
+                    let displaySource = inheritedSource(displays[id] as? [String: Any], over: currentFallback)
+                    let source = inheritedSource(spaceDefault, over: displaySource)
+                    if let preserved = try preservingInheritedProviderChoices(in: overrides[id] as? [String: Any], from: source) {
+                        overrides[id] = preserved
+                    }
+                }
+                space["Displays"] = overrides
+                spaces[spaceID] = space
+            }
             for key in ["SystemDefault", "AllSpacesAndDisplays"] {
                 if let current = store[key] as? [String: Any], !current.isEmpty {
                     let previous = saved?[key] as? [String: Any]
