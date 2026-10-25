@@ -7,6 +7,10 @@ import Combine
 
 /// Runs opt-in isolated runtime checks and writes outputs only to their supplied directories.
 enum SmokeRunner {
+    @MainActor private final class AccessibilityAuditWindow: NSWindow {
+        // Native inspector resizing must not move opaque audit hosts back onto a display.
+        override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect { frameRect }
+    }
     private static var running = false
     private static var toolbarFrames: [[String: Any]] = []
     @MainActor private static func hasVisibleToolbarBackdrop(_ view: NSView) -> Bool {
@@ -45,11 +49,17 @@ enum SmokeRunner {
             park(window)
         }
     }
-    /// Keeps verification windows out of sight; accessibility inspection needs minimal opacity.
+    /// Keeps verification windows offscreen while audit hosts follow the active Space.
     @MainActor static func park(_ window: NSWindow) {
-        window.alphaValue = ProcessInfo.processInfo.arguments.contains("--accessibility-audit") ? 0.01 : 0
+        if window is AccessibilityAuditWindow {
+            window.alphaValue = 1
+        } else {
+            window.alphaValue = ProcessInfo.processInfo.arguments.contains("--accessibility-audit") ? 0.01 : 0
+        }
         window.ignoresMouseEvents = true
-        window.collectionBehavior = [.stationary, .ignoresCycle]
+        if window is AccessibilityAuditWindow {
+            window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .canJoinAllApplications, .stationary, .ignoresCycle]
+        } else { window.collectionBehavior = [.stationary, .ignoresCycle] }
         window.setFrameOrigin(NSPoint(x: -20000, y: -20000))
     }
     @MainActor static func runAuditIfRequested(library: Library) async {
@@ -57,17 +67,17 @@ enum SmokeRunner {
         guard let i = args.firstIndex(of: "--accessibility-audit"), args.indices.contains(i + 1) else { return }
         let destination = URL(fileURLWithPath: args[i + 1])
         try? FileManager.default.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
-        for window in NSApp.windows { park(window); window.orderBack(nil) }
+        for window in NSApp.windows { park(window); window.orderOut(nil) }
         await pause(0.4)
-        for window in NSApp.windows { park(window); window.orderBack(nil) }
-        let hosted = NSWindow(contentRect: NSRect(x: -20000, y: -20000, width: 1320, height: 840), styleMask: [.titled], backing: .buffered, defer: false)
+        for window in NSApp.windows { park(window); window.orderOut(nil) }
+        let hosted = AccessibilityAuditWindow(contentRect: NSRect(x: -20000, y: -20000, width: 1320, height: 840), styleMask: [.titled], backing: .buffered, defer: false)
         hosted.title = "Flua Library Audit"
         hosted.isReleasedWhenClosed = false
         hosted.contentView = NSHostingView(rootView: LibraryView().environmentObject(library).frame(width: 1320, height: 840).preferredColorScheme(.dark))
         park(hosted)
         hosted.orderBack(nil)
         await pause(0.4)
-        var missing = missingNames("Flua Library Audit", [
+        let libraryNames = [
             "Playback type: All", "Playback type: Animated", "Playback type: Still",
             "Display Mode: Mirrored", "Display Mode: Per Display", "Configure: Lock Screen", "Mirror all displays",
             "Rendering mode: Animated", "Rendering mode: Still", "Mirror Desktop and Lock Screen",
@@ -75,34 +85,41 @@ enum SmokeRunner {
             "Add favorite: Northern lights", "Add favorite: Deep space", "Wallpaper name", "Tags", "Category",
             "Color", "Motion intensity",
             "Speed", "Dim", "Previous in playlist", "Next in playlist", "Stop on selected displays", "Create playlist"
-        ])
+        ]
+        var missing = await missingAuditNames(hosted.title, libraryNames)
+        func requireAudit(_ failure: String, _ condition: () -> Bool) async {
+            if !(await waitForAudit(condition)) { missing.append(failure) }
+        }
         let auditTitle = "Flua Library Audit"
         let filterNames = ["Category", "Color", "Motion", "Resolution", "Aspect"]
+        func filterValue(_ name: String) -> String? {
+            auditElement(auditTitle, named: name + " filter").map { ax($0, kAXValueAttribute) }
+        }
         for name in filterNames {
-            if auditElement(auditTitle, named: name + " filter").map({ ax($0, kAXValueAttribute) }) != "All" {
-                missing.append(name + " filter must announce All")
-            }
+            await requireAudit(name + " filter must announce All") { filterValue(name) == "All" }
         }
         if let favorite = auditElement(auditTitle, named: "Add favorite: Northern lights") {
             if AXUIElementPerformAction(favorite, kAXPressAction as CFString) != .success {
                 missing.append("Favorite accessibility action")
             }
-            await pause(0.3)
-            missing += missingNames(auditTitle, ["Remove favorite: Northern lights"])
-            if library.state.item("aurora")?.favorite != true { missing.append("Favorite action must save its state") }
+            await requireAudit("Favorite action updates its accessibility name and saved state") {
+                missingNames(auditTitle, ["Remove favorite: Northern lights"]).isEmpty
+                    && library.state.item("aurora")?.favorite == true
+            }
             if let remove = auditElement(auditTitle, named: "Remove favorite: Northern lights") {
                 if AXUIElementPerformAction(remove, kAXPressAction as CFString) != .success {
                     missing.append("Remove favorite accessibility action")
                 }
             }
-            await pause(0.3)
-            missing += missingNames(auditTitle, ["Add favorite: Northern lights"])
-            if library.state.item("aurora")?.favorite != false { missing.append("Remove favorite must save its state") }
+            await requireAudit("Remove favorite updates its accessibility name and saved state") {
+                missingNames(auditTitle, ["Add favorite: Northern lights"]).isEmpty
+                    && library.state.item("aurora")?.favorite == false
+            }
         } else { missing.append("Favorite accessibility target") }
         if let playlistLibrary = try? Library(root: destination.deletingLastPathComponent().appendingPathComponent("PlaylistControlValidation"), systemPlaybackEnabled: false),
            let key = playlistLibrary.screens.first.map(displayID) {
             // Keep the main audit's accessibility tree attached while testing another library.
-            let playlistWindow = NSWindow(contentRect: NSRect(x: -20000, y: -20000, width: 1320, height: 840), styleMask: [.titled], backing: .buffered, defer: false)
+            let playlistWindow = AccessibilityAuditWindow(contentRect: NSRect(x: -20000, y: -20000, width: 1320, height: 840), styleMask: [.titled], backing: .buffered, defer: false)
             playlistWindow.title = "Flua Playlist Control Audit"
             playlistWindow.isReleasedWhenClosed = false
             playlistWindow.contentView = NSHostingView(rootView: LibraryView().environmentObject(playlistLibrary).frame(width: 1320, height: 840))
@@ -116,26 +133,29 @@ enum SmokeRunner {
             playlistLibrary.state.shuffle = false
             playlistLibrary.state.assign("ember", display: key)
             let desktop = playlistLibrary.state.displays[key]?.desktop
-            func checkPlaylistControls(_ enabled: Bool, context: String) async {
-                await pause(0.3)
-                for (name, expected) in [("Previous in playlist", enabled), ("Next in playlist", enabled), ("Stop on selected displays", true)] {
-                    guard let button = auditElement(auditTitle, named: name) else {
-                        missing.append(context + ": missing " + name)
-                        continue
-                    }
-                    var value: CFTypeRef?
-                    if AXUIElementCopyAttributeValue(button, kAXEnabledAttribute as CFString, &value) != .success
-                        || (value as? NSNumber)?.boolValue != expected {
-                        missing.append(context + ": incorrect availability of " + name)
+            func playlistControlEnabled(_ name: String) -> Bool? {
+                guard let button = auditElement(auditTitle, named: name) else { return nil }
+                var value: CFTypeRef?
+                guard AXUIElementCopyAttributeValue(button, kAXEnabledAttribute as CFString, &value) == .success else { return nil }
+                return (value as? NSNumber)?.boolValue
+            }
+            func checkPlaylistControls(_ enabled: Bool, context: String, captureTo: URL? = nil) async {
+                let controls = [("Previous in playlist", enabled), ("Next in playlist", enabled), ("Stop on selected displays", true)]
+                for (name, expected) in controls {
+                    await requireAudit(context + ": missing or incorrect availability of " + name) {
+                        playlistControlEnabled(name) == expected
                     }
                 }
+                if let captureTo {
+                    captureView(playlistWindow, to: captureTo)
+                    let settled = await waitForAudit { controls.allSatisfy { playlistControlEnabled($0.0) == $0.1 } }
+                    if !settled { missing.append(context + ": controls settle after snapshot") }
+                }
             }
-            await checkPlaylistControls(false, context: "Single wallpaper")
-            captureView(hosted, to: destination.deletingLastPathComponent().appendingPathComponent("Flua-transport-inactive.png"))
+            await checkPlaylistControls(false, context: "Single wallpaper", captureTo: destination.deletingLastPathComponent().appendingPathComponent("Flua-transport-inactive.png"))
             playlistLibrary.surface = .lockScreen
             playlistLibrary.startPlaylist("ambient")
-            await checkPlaylistControls(true, context: "Active Lock Screen playlist")
-            captureView(hosted, to: destination.deletingLastPathComponent().appendingPathComponent("Flua-transport-active.png"))
+            await checkPlaylistControls(true, context: "Active Lock Screen playlist", captureTo: destination.deletingLastPathComponent().appendingPathComponent("Flua-transport-active.png"))
             playlistLibrary.togglePlaylistPause()
             await checkPlaylistControls(true, context: "Paused playlist")
             playlistLibrary.togglePlaylistPause()
@@ -145,16 +165,20 @@ enum SmokeRunner {
             var controlsPassed = playlistLibrary.state.displays[key]?.lockScreen?.wallpaperID == "aurora"
                 && playlistLibrary.state.displays[key]?.desktop == desktop
             for (name, expected) in [("Next in playlist", "ocean"), ("Previous in playlist", "aurora")] {
-                await pause(0.3)
+                let ready = await waitForAudit { playlistControlEnabled(name) == true }
+                controlsPassed = controlsPassed && ready
                 if let button = auditElement(auditTitle, named: name) {
                     controlsPassed = AXUIElementPerformAction(button, kAXPressAction as CFString) == .success && controlsPassed
                 } else { controlsPassed = false }
-                await pause(0.3)
-                controlsPassed = controlsPassed && playlistLibrary.state.displays[key]?.lockScreen?.wallpaperID == expected
-                    && playlistLibrary.state.displays[key]?.desktop == desktop
+                let advanced = await waitForAudit {
+                    playlistLibrary.state.displays[key]?.lockScreen?.wallpaperID == expected
+                        && playlistLibrary.state.displays[key]?.desktop == desktop
+                }
+                controlsPassed = controlsPassed && advanced
             }
             if !controlsPassed { missing.append("Lock Screen playlist Previous/Next preserve Desktop") }
             playlistLibrary.state.nativePlayback[key] = true
+            await requireAudit("Stop control is available") { playlistControlEnabled("Stop on selected displays") == true }
             if let stop = auditElement(auditTitle, named: "Stop on selected displays") {
                 if AXUIElementPerformAction(stop, kAXPressAction as CFString) != .success {
                     missing.append("Stop accessibility action")
@@ -171,100 +195,137 @@ enum SmokeRunner {
         } else { missing.append("Lock Screen playlist verification library") }
         let selectedBeforeSettings = library.selection
         let windowsBeforeSettings = NSApp.windows.count
+        await requireAudit("Settings sidebar button") { auditElement(auditTitle, named: "Settings") != nil }
         if let settingsButton = auditElement(auditTitle, named: "Settings") {
             if AXUIElementPerformAction(settingsButton, kAXPressAction as CFString) != .success {
                 missing.append("Open internal Settings action")
             }
         } else { missing.append("Settings sidebar button") }
-        await pause(0.65)
-        captureView(hosted, to: destination.deletingLastPathComponent().appendingPathComponent("Flua-settings-navigation.png"))
-        missing += missingNames(auditTitle, ["Accent color", "Blocked tags", "Show window on startup"])
-        if auditElement(auditTitle, named: "Display mode") != nil { missing.append("Settings exposes global Display mode") }
-        if auditElement(auditTitle, named: "Shuffle playlists") != nil { missing.append("Settings exposes global Shuffle playlists") }
-        if library.section != "settings" { missing.append("Settings sidebar opens internal page") }
+        func settingsReady() -> Bool {
+            library.section == "settings"
+                && missingNames(auditTitle, ["Accent color", "Blocked tags", "Show window on startup"]).isEmpty
+                && auditElement(auditTitle, named: "Set Wallpapers") == nil
+                && auditElement(auditTitle, named: "Wallpaper name") == nil
+                && auditElement(auditTitle, named: "Display mode") == nil
+                && auditElement(auditTitle, named: "Shuffle playlists") == nil
+        }
+        await requireAudit("Settings replaces browsing, inspector and global controls", settingsReady)
         if NSApp.windows.count > windowsBeforeSettings { missing.append("Settings must not open another window") }
-        if auditElement(auditTitle, named: "Set Wallpapers") != nil { missing.append("Settings hides playback controls") }
-        if auditElement(auditTitle, named: "Wallpaper name") != nil { missing.append("Settings hides wallpaper inspector") }
+        captureView(hosted, to: destination.deletingLastPathComponent().appendingPathComponent("Flua-settings-navigation.png"))
+        let settingsSnapshotSettled = await waitForAudit(settingsReady)
+        if !settingsSnapshotSettled { missing.append("Settings controls settle after snapshot") }
         library.navigate(to: "all")
-        await pause(0.65)
-        missing += missingNames(auditTitle, ["Set Wallpapers", "Wallpaper name"])
+        missing += await missingAuditNames(auditTitle, ["Set Wallpapers", "Wallpaper name"])
         if library.selection != selectedBeforeSettings { missing.append("Settings preserves wallpaper selection") }
         library.filter.categories = ["Nature"]
         library.filter.colors = ["Green", "Purple"]
         library.filter.motions = ["Low"]
         library.filter.resolutions = ["4K"]
         library.filter.aspects = ["16:9"]
-        await pause(0.3)
-        for (name, expected) in zip(filterNames, ["Nature", "Green, Purple", "Low", "4K", "16:9"]) {
-            if auditElement(auditTitle, named: name + " filter").map({ ax($0, kAXValueAttribute) }) != expected {
-                missing.append(name + " filter must announce " + expected)
-            }
+        let filterValues = Array(zip(filterNames, ["Nature", "Green, Purple", "Low", "4K", "16:9"]))
+        for (name, expected) in filterValues {
+            await requireAudit(name + " filter must announce " + expected) { filterValue(name) == expected }
         }
         library.clearFilters()
-        await pause(0.3)
-        let inspectorNames = spokenNames(titled: "Flua Library Audit")
-        if inspectorNames.contains(where: { $0.hasPrefix("Filter by ") }) {
-            missing.append("Inspector must not show duplicate tag buttons")
+        await requireAudit("Cleared filters retain the inspector without duplicate tag buttons") {
+            let names = spokenNames(titled: auditTitle)
+            return filterNames.allSatisfy { filterValue($0) == "All" }
+                && names.contains("Wallpaper name") && !names.contains(where: { $0.hasPrefix("Filter by ") })
         }
         library.query = "no-match"
         library.filterTag("ambient")
         library.blockTags("test")
-        await pause(0.4)
-        for window in NSApp.windows { park(window); window.orderBack(nil) }
-        missing += missingNames("Flua Library Audit", ["Clear search", "Clear filters", "Remove ambient filter"])
+        for window in NSApp.windows { park(window) }
+        let resetNames = ["Clear search", "Clear filters", "Remove ambient filter"]
+        missing += await missingAuditNames(hosted.title, resetNames)
         let settings = hosted
         library.section = "settings"
-        await pause(0.4)
-        missing += missingNames(settings.title, ["Accent color", "Blocked tags", "Block", "Unblock test", "Show in menu bar", "Hide from Dock"])
-        let settingsAX = AXUIElementCreateApplication(ProcessInfo.processInfo.processIdentifier)
-        var settingsWindowsRef: CFTypeRef?
-        AXUIElementCopyAttributeValue(settingsAX, kAXWindowsAttribute as CFString, &settingsWindowsRef)
-        let settingsWindow = (settingsWindowsRef as? [AXUIElement])?.first { ax($0, kAXTitleAttribute) == settings.title }
-        var startupControlPassed = checkboxValue(settings.title, named: "Show window on startup") == true
+        let settingsNames = ["Accent color", "Blocked tags", "Block", "Unblock test", "Show in menu bar", "Hide from Dock"]
+        missing += await missingAuditNames(settings.title, settingsNames)
+        var startupControlPassed = await waitForAudit {
+            checkboxValue(settings.title, named: "Show window on startup") == true
+                && checkboxValue(settings.title, named: "Pause in Low Power Mode") == true
+                && checkboxValue(settings.title, named: "Pause when battery is low") == true
+        }
         for shown in [false, true] {
-            if let settingsWindow, let checkbox = findCheckbox(settingsWindow, "Show window on startup", 0) {
+            if let checkbox = checkboxElement(settings.title, named: "Show window on startup") {
                 startupControlPassed = AXUIElementPerformAction(checkbox, kAXPressAction as CFString) == .success && startupControlPassed
             } else {
                 startupControlPassed = false
             }
-            await pause(0.2)
-            startupControlPassed = startupControlPassed && checkboxValue(settings.title, named: "Show window on startup") == shown
-                && (try? library.disk.load())?.showWindowOnStartup == shown
+            let saved = await waitForAudit {
+                checkboxValue(settings.title, named: "Show window on startup") == shown
+                    && (try? library.disk.load())?.showWindowOnStartup == shown
+            }
+            startupControlPassed = startupControlPassed && saved
         }
         if !startupControlPassed { missing.append("Startup window control saves both states") }
+        func powerControlsReady(_ lowPower: Bool, _ lowBattery: Bool) -> Bool {
+            let saved = try? library.disk.load()
+            return saved?.pauseOnLowPower == lowPower && saved?.pauseOnLowBattery == lowBattery
+                && checkboxValue(settings.title, named: "Pause in Low Power Mode") == lowPower
+                && checkboxValue(settings.title, named: "Pause when battery is low") == lowBattery
+        }
         var powerControlsPassed = true
         for (name, lowPower, lowBattery) in [("Pause in Low Power Mode", false, true),
                                              ("Pause when battery is low", false, false),
                                              ("Pause in Low Power Mode", true, false),
                                              ("Pause when battery is low", true, true)] {
-            if let settingsWindow, let checkbox = findCheckbox(settingsWindow, name, 0) {
+            await requireAudit(name + " is available") {
+                checkboxValue(settings.title, named: name) != nil && checkboxEnabled(settings.title, named: name) == true
+            }
+            if let checkbox = checkboxElement(settings.title, named: name) {
                 powerControlsPassed = AXUIElementPerformAction(checkbox, kAXPressAction as CFString) == .success && powerControlsPassed
             } else {
                 powerControlsPassed = false
             }
-            await pause(0.2)
-            let saved = try? library.disk.load()
-            powerControlsPassed = powerControlsPassed && saved?.pauseOnLowPower == lowPower && saved?.pauseOnLowBattery == lowBattery
-            powerControlsPassed = powerControlsPassed && checkboxValue(settings.title, named: "Pause in Low Power Mode") == lowPower
-                && checkboxValue(settings.title, named: "Pause when battery is low") == lowBattery
+            let saved = await waitForAudit { powerControlsReady(lowPower, lowBattery) }
+            powerControlsPassed = powerControlsPassed && saved
             captureView(settings, to: destination.deletingLastPathComponent().appendingPathComponent("Flua-settings-power-\(lowPower)-\(lowBattery).png"))
+            let settled = await waitForAudit { powerControlsReady(lowPower, lowBattery) }
+            if !settled { missing.append("Power controls settle after snapshot") }
         }
         if !powerControlsPassed { missing.append("Independent Low Power Mode and low battery controls") }
-        let menuShown = checkboxValue(settings.title, named: "Show in menu bar") == true
-        let dockHidden = checkboxValue(settings.title, named: "Hide from Dock") == false
-        let dockEnabled = checkboxEnabled(settings.title, named: "Hide from Dock") == true
-        if !menuShown || !dockHidden || !dockEnabled { missing.append("Hide from Dock while menu bar is shown") }
+        await requireAudit("Hide from Dock while menu bar is shown") {
+            checkboxValue(settings.title, named: "Show in menu bar") == true
+                && checkboxValue(settings.title, named: "Hide from Dock") == false
+                && checkboxEnabled(settings.title, named: "Hide from Dock") == true
+        }
         library.state.setShowsMenuBar(false)
-        await pause(0.3)
-        let dockStaysOff = checkboxValue(settings.title, named: "Hide from Dock") == false
-        let dockDisabled = checkboxEnabled(settings.title, named: "Hide from Dock") == false
-        if !dockStaysOff || !dockDisabled { missing.append("Hide from Dock while menu bar is hidden") }
+        await requireAudit("Hide from Dock while menu bar is hidden") {
+            checkboxValue(settings.title, named: "Hide from Dock") == false
+                && checkboxEnabled(settings.title, named: "Hide from Dock") == false
+        }
         library.state.setShowsMenuBar(true)
         let report: [String: Any] = ["passed": missing.isEmpty, "missing": missing]
         if let data = try? JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys]) {
             try? data.write(to: destination)
         }
         exit(missing.isEmpty ? 0 : 1)
+    }
+    @MainActor private static func missingAuditNames(_ title: String, _ required: [String]) async -> [String] {
+        if await waitForAudit({ missingNames(title, required).isEmpty }) { return [] }
+        let missing = missingNames(title, required)
+        return missing.isEmpty ? ["Accessibility names did not settle in " + title] : missing
+    }
+    @MainActor private static func refreshAuditLayout() {
+        for window in NSApp.windows where ["Flua Library Audit", "Flua Playlist Control Audit"].contains(window.title) {
+            window.contentView?.layoutSubtreeIfNeeded()
+            window.displayIfNeeded()
+        }
+    }
+    @discardableResult @MainActor private static func waitForAudit(_ condition: () -> Bool) async -> Bool {
+        let deadline = Date().addingTimeInterval(5)
+        var readySince: Date?
+        while Date() < deadline {
+            refreshAuditLayout()
+            if condition() {
+                if let readySince, Date().timeIntervalSince(readySince) >= 0.2 { return true }
+                readySince = readySince ?? Date()
+            } else { readySince = nil }
+            await pause(0.05)
+        }
+        return false
     }
     @MainActor static func runPreviewSmokeIfRequested() async {
         let args = ProcessInfo.processInfo.arguments
@@ -374,13 +435,16 @@ enum SmokeRunner {
     private static func checkboxEnabled(_ title: String, named name: String) -> Bool? {
         checkboxAttribute(title, named: name, kAXEnabledAttribute)
     }
-    private static func checkboxAttribute(_ title: String, named name: String, _ attribute: String) -> Bool? {
+    private static func checkboxElement(_ title: String, named name: String) -> AXUIElement? {
         let app = AXUIElementCreateApplication(ProcessInfo.processInfo.processIdentifier)
         var windowsRef: CFTypeRef?
         guard AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString, &windowsRef) == .success,
               let windows = windowsRef as? [AXUIElement],
-              let window = windows.first(where: { ax($0, kAXTitleAttribute) == title }),
-              let box = findCheckbox(window, name, 0) else { return nil }
+              let window = windows.first(where: { ax($0, kAXTitleAttribute) == title }) else { return nil }
+        return findCheckbox(window, name, 0)
+    }
+    private static func checkboxAttribute(_ title: String, named name: String, _ attribute: String) -> Bool? {
+        guard let box = checkboxElement(title, named: name) else { return nil }
         var value: CFTypeRef?
         guard AXUIElementCopyAttributeValue(box, attribute as CFString, &value) == .success else { return nil }
         if let enabled = value as? Bool { return enabled }
@@ -894,7 +958,16 @@ enum SmokeRunner {
             await pause(0.2)
             results["hiddenVideoPreviewPaused"] = surface.playbackRate == 0 && abs(surface.playbackTime - hiddenVideoTime) < 0.08
             surface.isHidden = false
-            await pause(0.3)
+            var resumeSamples: [[String: Any]] = []
+            let hiddenResumeDeadline = Date().addingTimeInterval(3)
+            while Date() < hiddenResumeDeadline {
+                resumeSamples.append(["rate": surface.playbackRate, "ready": surface.mediaReady,
+                    "occlusion": testWindow.occlusionState.rawValue, "hidden": surface.isHiddenOrHasHiddenAncestor,
+                    "visibleRect": NSStringFromRect(surface.visibleRect)])
+                if surface.playbackRate > 0 { break }
+                await pause(0.05)
+            }
+            results["hiddenVideoResumeSamples"] = resumeSamples
             results["hiddenVideoPreviewResumed"] = surface.playbackRate > 0
             for check in ["hiddenVideoPreviewPaused", "hiddenVideoPreviewResumed"] {
                 if results[check] as? Bool != true { failures.append(check) }
@@ -907,7 +980,16 @@ enum SmokeRunner {
             surface.updateParameters(adjusted)
             results["liveAdjustmentPreservesTime"] = abs(surface.playbackTime - beforeAdjustment) < 0.03
             surface.setPaused(false)
-            await pause(0.1)
+            var adjustmentSamples: [[String: Any]] = []
+            let adjustmentDeadline = Date().addingTimeInterval(3)
+            while Date() < adjustmentDeadline {
+                adjustmentSamples.append(["rate": surface.playbackRate, "ready": surface.mediaReady,
+                    "occlusion": testWindow.occlusionState.rawValue, "hidden": surface.isHiddenOrHasHiddenAncestor,
+                    "visibleRect": NSStringFromRect(surface.visibleRect)])
+                if abs(surface.playbackRate - 1.5) < 0.01 { break }
+                await pause(0.05)
+            }
+            results["liveAdjustmentSamples"] = adjustmentSamples
             results["liveAdjustmentSpeed"] = abs(surface.playbackRate - 1.5) < 0.01
             capture(testWindow, to: out.appendingPathComponent("Flua-video-playback.png"))
             let information = try await VideoInformation.load(videoURL)
@@ -980,7 +1062,6 @@ enum SmokeRunner {
             library.surface = previousSurface
             if previousLinked { library.setSurfacesLinked(false) }
             testWindow.setContentSize(NSSize(width: 380, height: 900))
-            testWindow.title = "Flua inspector verification"
             testWindow.contentView = NSHostingView(rootView: InspectorView().environmentObject(library))
             library.selection = video.id
             library.surface = .desktop
@@ -999,6 +1080,16 @@ enum SmokeRunner {
                 }
                 return testWindow.contentView.flatMap(find)
             }
+            func inspectorDiagnostics() -> [String: Any] {
+                let preview = inspectorPreview()
+                return ["occlusion": testWindow.occlusionState.rawValue, "windowFrame": NSStringFromRect(testWindow.frame),
+                    "appActive": NSApp.isActive, "holdsStill": preview?.holdsStill ?? false,
+                    "rate": preview?.playbackRate ?? -1, "visibleRect": preview.map { NSStringFromRect($0.visibleRect) } ?? "missing",
+                    "hidden": preview?.isHiddenOrHasHiddenAncestor ?? true, "scenePaused": preview?.sceneIsPaused ?? true,
+                    "frames": preview?.sceneFrameCount ?? -1,
+                    "screenRect": preview.map { NSStringFromRect(testWindow.convertToScreen($0.convert($0.bounds, to: nil))) } ?? "missing",
+                    "screenVisibleFrame": testWindow.screen.map { NSStringFromRect($0.visibleFrame) } ?? "missing"]
+            }
             var previewConfiguration = coverVideo
             previewConfiguration.speed = 1.5
             previewConfiguration.dimming = 0.2
@@ -1007,6 +1098,9 @@ enum SmokeRunner {
             while inspectorPreview()?.showsStillImage != true && Date() < previewDeadline { await pause(0.05) }
             let videoStillPreview = inspectorPreview()
             results["inspectorVideoStillPreview"] = videoStillPreview?.holdsStill == true && videoStillPreview?.showsStillImage == true
+            results["inspectorPreviewOnScreen"] = videoStillPreview.flatMap { preview in
+                testWindow.screen?.visibleFrame.contains(testWindow.convertToScreen(preview.convert(preview.bounds, to: nil)))
+            } == true
             results["inspectorVideoStillFrameClamped"] = stillFrameTime(edit: coverVideo.videoEdit,
                 duration: coverVideo.mediaFacts?.sourceDuration) == 0.25
             capture(testWindow, to: out.appendingPathComponent("Flua-inspector-video-still.png"))
@@ -1030,6 +1124,7 @@ enum SmokeRunner {
             previewDeadline = Date().addingTimeInterval(3)
             while (inspectorPreview()?.playbackRate ?? 0) <= 0 && Date() < previewDeadline { await pause(0.05) }
             results["inspectorVideoPreviewResumed"] = inspectorPreview()?.holdsStill == false && (inspectorPreview()?.playbackRate ?? 0) > 0
+            results["inspectorVideoResumeDiagnostics"] = inspectorDiagnostics()
             let resumedVideoTime = inspectorPreview()?.playbackTime ?? 0
             await pause(0.12)
             results["inspectorVideoTimeAdvancesAfterResume"] = (inspectorPreview()?.playbackTime ?? 0) > resumedVideoTime + 0.02
@@ -1047,6 +1142,7 @@ enum SmokeRunner {
             results["inspectorSceneFrameProgress"] = sceneFramesAfterResume > sceneFramesBeforeResume + 2
             results["inspectorScenePreviewResumed"] = sceneStillPreview?.holdsStill == false
                 && sceneStillPreview?.sceneIsPaused == false && sceneFramesAfterResume > sceneFramesBeforeResume + 2
+            results["inspectorSceneResumeDiagnostics"] = inspectorDiagnostics()
             capture(testWindow, to: out.appendingPathComponent("Flua-inspector-scene-animated.png"))
             library.selection = previousSelection
             library.edit(video)
@@ -1524,7 +1620,7 @@ enum SmokeRunner {
                 !window.isVisible || window.alphaValue == 0
             }
             if results["nonPlaybackWindowsHidden"] as? Bool != true { failures.append("nonPlaybackWindowsHidden") }
-            let required = [ "libraryWindowChrome", "instantInspectorResize", "independentPlaylistTimers", "linkedPlaylistAdvancesOnce", "configurationDraftPreviewUsesLivePlaylist", "configurationDraftPreservesPlaylistProgress", "configurationDraftPreservesRemoval", "applySelectedSurfaceOnly", "applyLockScreenOnly", "surfaceControlsApplyHiddenMode", "configurePickerLinkedNormalizesToDesktop", "fileDrop", "fileDropUndo", "blockedImportRevealed", "importRevealsAdded", "editorCancel", "editorSave", "editorSaveFailureRetry", "editorSaveFailureWindowVisible", "editorPreservesNewerEdits", "editorRejectsInvalidDraft", "editorRejectsMissingWallpaper", "playlistFileImport", "importUndo", "playlistExistingAdd", "inspectorSceneInteraction", "inspectorVideoInteraction", "explicitSystemAccent", "systemAccentDefault", "accentSelection", "unknownAccentFallback", "systemAccentReset", "importFacts", "rotatedFacts", "missingFacts", "legacyBackfill", "staleEditPreservesFacts", "unknownColorBackfill", "unknownColorRoundTrip", "blockedDiscover", "tagFiltering", "combinedBrowsing", "clearFiltersPreservesBlockedTags", "clearFilters", "imageImport", "imageExportCancellation", "imageExportReplacement", "imageExportPreservesSource", "videoImport", "symlinkImportIsIndependent", "videoReady", "videoPlaying", "videoLooped", "videoPaused", "videoResumed", "liveAdjustmentPreservesTime", "liveAdjustmentSpeed", "stillHeld", "stillIgnoresResume", "stillPreservesSource", "sceneStillMode", "desktopStill", "desktopStillSurvivesPause", "playlistPauseStatus", "playlistResumeStatus", "desktopStillPersisted", "desktopStillPreservesSource", "render_image", "render_aurora", "render_cosmos", "render_ocean", "render_ember", "systemWallpaperPreserved", "libraryAssignmentValidated", "nativeDescriptorValidation", "nativeDescriptorValidationRejectsMissing", "nativeCatalogMismatchRejected", "backgroundLaunch", "videoPreviewWindowVisible", "scenePreviewWindowVisible", "scenePreviewReshownWindowVisible", "playlistStart", "playlistNext", "libraryStop", "libraryRoundTrip", "discoverWindow", "windowSnapshot", "videoInformation", "trimmedPlayback", "trimmedExport", "thumbnailExport", "rejectInvalidTrim", "preserveSourceOnExport", "packageRoundTrip", "editorPersistence", "editorWindow", "silentExport", "desktopPlaylistPreservesLockScreen", "desktopStopPreservesLockScreen", "surfaceAssignmentsPersisted"]
+            let required = [ "libraryWindowChrome", "instantInspectorResize", "independentPlaylistTimers", "linkedPlaylistAdvancesOnce", "configurationDraftPreviewUsesLivePlaylist", "configurationDraftPreservesPlaylistProgress", "configurationDraftPreservesRemoval", "applySelectedSurfaceOnly", "applyLockScreenOnly", "surfaceControlsApplyHiddenMode", "configurePickerLinkedNormalizesToDesktop", "fileDrop", "fileDropUndo", "blockedImportRevealed", "importRevealsAdded", "editorCancel", "editorSave", "editorSaveFailureRetry", "editorSaveFailureWindowVisible", "editorPreservesNewerEdits", "editorRejectsInvalidDraft", "editorRejectsMissingWallpaper", "playlistFileImport", "importUndo", "playlistExistingAdd", "inspectorSceneInteraction", "inspectorVideoInteraction", "explicitSystemAccent", "systemAccentDefault", "accentSelection", "unknownAccentFallback", "systemAccentReset", "importFacts", "rotatedFacts", "missingFacts", "legacyBackfill", "staleEditPreservesFacts", "unknownColorBackfill", "unknownColorRoundTrip", "blockedDiscover", "tagFiltering", "combinedBrowsing", "clearFiltersPreservesBlockedTags", "clearFilters", "imageImport", "imageExportCancellation", "imageExportReplacement", "imageExportPreservesSource", "videoImport", "symlinkImportIsIndependent", "videoReady", "videoPlaying", "videoLooped", "videoPaused", "videoResumed", "liveAdjustmentPreservesTime", "liveAdjustmentSpeed", "stillHeld", "stillIgnoresResume", "stillPreservesSource", "sceneStillMode", "desktopStill", "desktopStillSurvivesPause", "playlistPauseStatus", "playlistResumeStatus", "desktopStillPersisted", "desktopStillPreservesSource", "render_image", "render_aurora", "render_cosmos", "render_ocean", "render_ember", "systemWallpaperPreserved", "libraryAssignmentValidated", "nativeDescriptorValidation", "nativeDescriptorValidationRejectsMissing", "nativeCatalogMismatchRejected", "backgroundLaunch", "videoPreviewWindowVisible", "inspectorPreviewOnScreen", "scenePreviewWindowVisible", "scenePreviewReshownWindowVisible", "playlistStart", "playlistNext", "libraryStop", "libraryRoundTrip", "discoverWindow", "windowSnapshot", "videoInformation", "trimmedPlayback", "trimmedExport", "thumbnailExport", "rejectInvalidTrim", "preserveSourceOnExport", "packageRoundTrip", "editorPersistence", "editorWindow", "silentExport", "desktopPlaylistPreservesLockScreen", "desktopStopPreservesLockScreen", "surfaceAssignmentsPersisted"]
             for key in required + ["compactWindow"] where results[key] as? Bool != true { failures.append(key) }
             for (key, value) in results where key.hasPrefix("surfaceControls") && value as? Bool != true { failures.append(key) }
         } catch { failures.append(String(reflecting: error)) }
@@ -1827,7 +1923,7 @@ enum SmokeRunner {
         return png
     }
     @MainActor static func capture(_ window: NSWindow, to url: URL) {
-        guard window.alphaValue > 0.01, CGPreflightScreenCaptureAccess() else { return }
+        guard !(window is AccessibilityAuditWindow), window.alphaValue > 0.01, CGPreflightScreenCaptureAccess() else { return }
         let task = Process()
         task.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
         task.arguments = ["-x", "-o", "-l", String(window.windowNumber), url.path]
@@ -1844,16 +1940,23 @@ enum SmokeRunner {
     @discardableResult @MainActor private static func waitUntilVisible(_ window: NSWindow) async -> Bool {
         if let previous = presentedPlaybackWindow, previous !== window { previous.orderOut(nil) }
         presentedPlaybackWindow = window
-        await pause(0.15)
-        if !window.occlusionState.contains(.visible) {
-            // Only live playback needs an exposed surface, including over an active fullscreen app.
-            window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .canJoinAllApplications, .stationary, .ignoresCycle]
-            window.level = .statusBar
-            window.orderFrontRegardless()
+        // Playback assertions need a stable exposed surface, including after inspector resizing.
+        if let screen = window.screen ?? NSScreen.main {
+            window.setFrameTopLeftPoint(NSPoint(x: screen.visibleFrame.minX + 20, y: screen.visibleFrame.maxY - 20))
         }
+        window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .canJoinAllApplications, .stationary, .ignoresCycle]
+        window.level = .statusBar
+        window.orderFrontRegardless()
         let deadline = Date().addingTimeInterval(5)
-        while !window.occlusionState.contains(.visible) && Date() < deadline { await pause(0.05) }
-        return window.occlusionState.contains(.visible)
+        var visibleSince = Date()
+        while Date() < deadline {
+            if !window.occlusionState.contains(.visible) {
+                visibleSince = Date()
+                window.orderFrontRegardless()
+            } else if Date().timeIntervalSince(visibleSince) >= 0.2 { return true }
+            await pause(0.05)
+        }
+        return false
     }
     static func pause(_ seconds: Double) async { try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000)) }
     static func makeAudioVideo(video: URL, directory: URL) async throws -> URL {

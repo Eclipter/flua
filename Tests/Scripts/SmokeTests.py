@@ -7,19 +7,27 @@ import tempfile
 
 source = Path(__file__).resolve().parents[2]
 smoke_runner = (source / 'Sources/Flua/SmokeRunner.swift').read_text()
+park_source = smoke_runner.split('@MainActor static func park', 1)[1].split('@MainActor static func runAuditIfRequested', 1)[0]
+audit_policy = next(line.strip() for line in park_source.splitlines() if line.strip().startswith('window.collectionBehavior ='))
+audit_policy = audit_policy.replace('window.collectionBehavior =', 'let auditBehavior: NSWindow.CollectionBehavior =')
 required_checks = next(line.strip() for line in smoke_runner.splitlines() if line.strip().startswith('let required = ['))
 aggregation = next(line.strip() for line in smoke_runner.splitlines() if line.strip().startswith('for key in required +'))
 passed_assignment = next(line.strip() for line in smoke_runner.splitlines() if line.strip() == 'results["passed"] = failures.isEmpty')
 regression_checks = [
     'libraryWindowChrome',
     'instantInspectorResize',
+    'inspectorPreviewOnScreen',
     'desktopPlaylistPreservesLockScreen',
     'desktopStopPreservesLockScreen',
     'surfaceAssignmentsPersisted',
 ]
 for check in regression_checks:
     assert f'"{check}"' in required_checks
-swift_source = f'''import Foundation
+swift_source = f'''import AppKit
+{audit_policy}
+precondition(auditBehavior.contains(.canJoinAllSpaces))
+precondition(auditBehavior.contains(.fullScreenAuxiliary))
+precondition(auditBehavior.contains(.canJoinAllApplications))
 func evaluate(_ check: String, _ value: Bool?) -> (Bool, [String]) {{
     var results: [String: Any] = [:]
     var failures: [String] = []
@@ -44,7 +52,7 @@ with tempfile.TemporaryDirectory(prefix='flua-required-smoke-checks-') as tempor
     swift_file = Path(temporary) / 'RequiredSmokeChecks.swift'
     executable = Path(temporary) / 'required-smoke-checks'
     swift_file.write_text(swift_source)
-    subprocess.run(['swiftc', str(swift_file), '-o', str(executable)], check=True)
+    subprocess.run(['swiftc', '-target', 'arm64-apple-macosx27.0', str(swift_file), '-o', str(executable)], check=True)
     subprocess.run([str(executable)], check=True)
 
 with tempfile.TemporaryDirectory(prefix='flua-smoke-tests-') as temporary:
