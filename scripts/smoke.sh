@@ -17,6 +17,27 @@ app="$PWD/build/Flua.app"
 FLUA_APP_PATH="$app" \
     FLUA_CATALOG_PATH="$run_dir/library/catalog.json" \
     ./scripts/build.sh
+mkdir -p "$run_dir/results"
+bound_library="$run_dir/library"
+mkdir -p "$bound_library"
+print -rn -- "Disposable catalog must remain unopened." > "$bound_library/verification-sentinel"
+if "$app/Contents/MacOS/Flua" \
+    --accessibility-audit "$run_dir/results/missing-data-audit.json" \
+    2>"$run_dir/results/missing-data-audit.stderr"; then
+    print -u2 "Accessibility audit unexpectedly launched without --data-dir."
+    exit 1
+fi
+if ! /usr/bin/grep -q "requires an isolated --data-dir" "$run_dir/results/missing-data-audit.stderr"; then
+    print -u2 "Accessibility audit failed without the expected isolated --data-dir error."
+    exit 1
+fi
+if [[ "$(cat "$bound_library/verification-sentinel")" != "Disposable catalog must remain unopened." \
+    || -e "$bound_library/Media" || -e "$bound_library/library.json" || -e "$bound_library/catalog.json" ]]; then
+    print -u2 "Accessibility audit accessed the bound catalog without --data-dir."
+    exit 1
+fi
+rm "$bound_library/verification-sentinel"
+rmdir "$bound_library"
 # Offscreen accessibility names. Launching the binary directly does not activate the app.
 "$app/Contents/MacOS/Flua" \
     --data-dir "$run_dir/accessibility-library" \

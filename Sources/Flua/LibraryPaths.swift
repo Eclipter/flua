@@ -9,4 +9,15 @@ enum LibraryPaths {
         }
         return base.appendingPathComponent("Flua", isDirectory: true)
     }
+
+    static func isIsolatedVerificationRoot(_ root: URL, applicationSupport: URL) -> Bool {
+        let protected = resolve(applicationSupport: applicationSupport).standardizedFileURL.resolvingSymlinksInPath().path
+        let candidate = root.standardizedFileURL.resolvingSymlinksInPath().path
+        return !contains(protected, candidate) && !contains(candidate, protected)
+    }
+
+    private static func contains(_ parent: String, _ child: String) -> Bool {
+        child.compare(parent, options: .caseInsensitive) == .orderedSame
+            || child.range(of: parent.hasSuffix("/") ? parent : parent + "/", options: [.anchored, .caseInsensitive]) != nil
+    }
 }

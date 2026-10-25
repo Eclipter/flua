@@ -71,6 +71,9 @@ cat > "$FLUA_APP_PATH/Contents/MacOS/Flua" <<'PYTHON'
 import json
 from pathlib import Path
 import sys
+if '--accessibility-audit' in sys.argv and '--data-dir' not in sys.argv:
+    print('Smoke verification requires an isolated --data-dir.', file=sys.stderr)
+    sys.exit(1)
 if '--startup-smoke' in sys.argv:
     library = Path(sys.argv[sys.argv.index('--data-dir') + 1])
     state = json.loads((library / 'library.json').read_text())

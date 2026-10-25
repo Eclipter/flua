@@ -449,12 +449,17 @@ extension View {
 enum AppContext {
     static let library: Library = {
         let args = ProcessInfo.processInfo.arguments
-        let isolatedVerification = args.contains("--smoke-test") || args.contains("--startup-smoke") || args.contains("--scroll-benchmark")
+        let isolatedVerification = args.contains("--smoke-test") || args.contains("--startup-smoke") || args.contains("--scroll-benchmark") || args.contains("--accessibility-audit")
         do {
             if isolatedVerification {
                 guard let i = args.firstIndex(of: "--data-dir"), args.indices.contains(i + 1),
                       !args[i + 1].isEmpty, !args[i + 1].hasPrefix("--") else {
                     throw NativeWallpaperError("Smoke verification requires an isolated --data-dir.")
+                }
+                let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+                let root = URL(fileURLWithPath: args[i + 1], isDirectory: true)
+                guard LibraryPaths.isIsolatedVerificationRoot(root, applicationSupport: support) else {
+                    throw NativeWallpaperError("Verification --data-dir must not overlap the Flua Application Support library.")
                 }
             }
             let root: URL
