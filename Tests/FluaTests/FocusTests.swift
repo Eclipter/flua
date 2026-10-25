@@ -75,7 +75,22 @@ import SwiftUI
         }
     }
 
-    static func main() {
+    static func main() throws {
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let helper = root.appendingPathComponent("scripts/system-test-lock.py")
+        let check = Process()
+        check.executableURL = helper
+        check.arguments = ["--is-locked"]
+        try check.run()
+        check.waitUntilExit()
+        if check.terminationStatus != 0 {
+            let locked = Process()
+            locked.executableURL = helper
+            locked.arguments = ["focus verification", URL(fileURLWithPath: CommandLine.arguments[0]).path] + CommandLine.arguments.dropFirst()
+            try locked.run()
+            locked.waitUntilExit()
+            exit(locked.terminationStatus)
+        }
         let app = NSApplication.shared
         _ = app
 

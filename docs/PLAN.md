@@ -21,7 +21,6 @@ Update capability claims only after the relevant checks pass. Keep untested OS v
 - **Medium:** Include `--preview-smoke` in [AppContext verification isolation](../Sources/Flua/App.swift). Add regressions for missing and overlapping `--data-dir` arguments before library access, and ensure verification disables native operations.
 - **Medium:** Fix unresolved smoke failures in [scripts/smoke.sh](../scripts/smoke.sh) and [SmokeRunner.swift](../Sources/Flua/SmokeRunner.swift): the accessibility gate failed on two runs, and a separate full application run reported `hiddenVideoPreviewResumed`, `videoResumed`, `liveAdjustmentSpeed`, and “Smoke verification activated Flua.” Diagnose and restore green smoke without weakening assertions; these observations do not establish separate product bugs.
 - **Medium:** Replace the duplicate `FocusClearView` and picker implementation in [FocusTests.swift](../Tests/FluaTests/FocusTests.swift) with coverage of production code, so production regressions cannot pass because the test compiles only its own copy.
-- **Medium:** Move GUI coverage from [FocusTests.swift](../Tests/FluaTests/FocusTests.swift) under [scripts/system-test-lock.py](../scripts/system-test-lock.py). The current test calls `makeKeyAndOrderFront` outside the shared lock and can interfere with focus or activation.
 
 ## Performance and provider behavior
 
