@@ -67,7 +67,7 @@ For release tooling changes, run `python3 Tests/Scripts/ReleaseTests.py` (also i
 
 - `Sources/Flua/`: main application, rendering, persistence, media inspection, importer and editor.
 - `Tests/FluaTests/`: deterministic model, library path and package validation tests.
-- `Resources/`: bundle metadata and original application icon.
+- `Resources/`: bundle metadata, the application icon, and the README header images.
 - `scripts/`: reproducible build, test and release entry points.
 - `docs/`: architecture and feature status.
 - `Sources/WallpaperExtension/`: wallpaper provider, compiled separately and embedded by `make build`.
