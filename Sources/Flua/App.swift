@@ -115,6 +115,14 @@ extension Library {
         }
     }
 
+    func applyTheme() {
+        NSApp.appearance = switch state.theme {
+        case "light": NSAppearance(named: .aqua)
+        case "dark": NSAppearance(named: .darkAqua)
+        default: nil
+        }
+    }
+
     var accent: Color { accentOverride ?? AppAccent.system.color }
     // Apply only to accent controls; a container tint also restyles neutral buttons.
     var accentOverride: Color? {
@@ -494,6 +502,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
     func applicationWillFinishLaunching(_ notification: Notification) {
+        AppContext.library.applyTheme()
         let arguments = ProcessInfo.processInfo.arguments
         if arguments.contains("--accessibility-audit") || arguments.contains("--preview-smoke") || arguments.contains("--smoke-test") {
             if arguments.contains("--accessibility-audit") { NSApp.setActivationPolicy(.accessory) }
@@ -530,6 +539,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         Window("Flua", id: "library") {
             LibraryView().environmentObject(library)
+                .onChange(of: library.state.theme) { _, _ in library.applyTheme() }
                 .toolbar(removing: .title)
                 .windowToolbarFullScreenVisibility(.visible)
                 .frame(minWidth: 700, minHeight: 440)
@@ -1389,6 +1399,14 @@ struct SettingsView: View {
     var body: some View {
         Form {
             Section("Appearance") {
+                Picker("Theme", selection: Binding(
+                    get: { library.state.theme },
+                    set: { library.state.theme = $0; library.save() }
+                )) {
+                    Text("System").tag(String?.none)
+                    Text("Light").tag(String?.some("light"))
+                    Text("Dark").tag(String?.some("dark"))
+                }.fluaMenuPicker()
                 Picker("Accent color", selection: Binding(
                     get: { AppAccent(rawValue: library.state.accentColor ?? "") ?? .system },
                     set: { library.state.accentColor = $0 == .system ? nil : $0.rawValue; library.save() }

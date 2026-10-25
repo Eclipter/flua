@@ -249,6 +249,7 @@ struct LibraryState: Codable {
     var paused: Bool = false
     var displayMode: String?
     var accentColor: String?
+    var theme: String?
     var nativePlayback: [String: Bool] = [:]
     var nativeCleanupDisplays: Set<String> = []
     var blockedTags: [String] = []
@@ -301,7 +302,7 @@ struct LibraryState: Codable {
 
     private enum CodingKeys: String, CodingKey {
         case wallpapers, playlists, displays, interval, shuffle, pauseOnBattery, pauseOnLowPower, pauseOnLowBattery
-        case lowPowerThreshold, pauseOnFullscreen, paused, displayMode, blockedTags, accentColor, nativePlayback, nativeCleanupDisplays
+        case lowPowerThreshold, pauseOnFullscreen, paused, displayMode, blockedTags, accentColor, theme, nativePlayback, nativeCleanupDisplays
         case showInMenuBar, hideFromDock, showWindowOnStartup
     }
 
@@ -322,6 +323,7 @@ struct LibraryState: Codable {
         nativePlayback = try c.decodeIfPresent([String: Bool].self, forKey: .nativePlayback) ?? [:]
         nativeCleanupDisplays = try c.decodeIfPresent(Set<String>.self, forKey: .nativeCleanupDisplays) ?? []
         accentColor = try c.decodeIfPresent(String.self, forKey: .accentColor)
+        theme = try c.decodeIfPresent(String.self, forKey: .theme)
         blockedTags = normalizedTags((try c.decodeIfPresent([String].self, forKey: .blockedTags) ?? []).joined(separator: ","))
         showInMenuBar = try c.decodeIfPresent(Bool.self, forKey: .showInMenuBar)
         hideFromDock = try c.decodeIfPresent(Bool.self, forKey: .hideFromDock)

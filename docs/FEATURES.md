@@ -4,7 +4,7 @@ Flua is a local wallpaper library for macOS 27+ on Apple Silicon. Playback uses 
 
 | Area | Support | Limitations |
 | --- | --- | --- |
-| Appearance | System or eight macOS accent colors, frosted surfaces, pressed shrink feedback on glass buttons (honors Reduce Motion), Reduce Transparency, adaptive narrow layout | Inspector hides below 1000 points wide; resize-driven panel changes are immediate |
+| Appearance | System (default), Light or Dark theme; System or eight macOS accent colors, frosted surfaces, pressed shrink feedback on glass buttons (honors Reduce Motion), Reduce Transparency, adaptive narrow layout | Inspector hides below 1000 points wide; resize-driven panel changes are immediate |
 | Menu bar | Sakura template icon; optional Dock hiding while the menu bar icon is enabled | Disabling the menu bar icon also clears Dock hiding |
 | Window controls | The library retains standard window controls and native fullscreen/tiling, including when Hide from Dock is enabled; its sidebar button stays in the native toolbar, including in fullscreen. Fullscreen headers and all three panels share the system window background; decorative toolbar backgrounds and separators are cleared before the first fullscreen draw | The green-button hover popup has not yet been confirmed with a physical pointer |
 | Wallpapers | Local images, looping videos and four built-in scenes: aurora, cosmos, ocean and ember | Interactive and audio-reactive runtimes are unsupported |

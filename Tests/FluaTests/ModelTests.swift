@@ -245,6 +245,23 @@ import Foundation
             && legacyNativeState.wallpapers == state.wallpapers)
         print("PASS: native playback and cleanup intent persist and default safely for legacy libraries")
 
+        precondition(state.theme == nil)
+        var themeState = state
+        for theme in ["light", "dark"] {
+            themeState.theme = theme
+            try disk.save(themeState)
+            let restoredTheme = try disk.load()
+            precondition(restoredTheme.theme == theme && restoredTheme.wallpapers == state.wallpapers)
+        }
+        themeState.theme = nil
+        let systemThemeData = try JSONEncoder().encode(themeState)
+        let systemThemeJSON = try JSONSerialization.jsonObject(with: systemThemeData) as! [String: Any]
+        precondition(systemThemeJSON["theme"] == nil)
+        let legacyTheme = try JSONDecoder().decode(LibraryState.self, from: systemThemeData)
+        precondition(legacyTheme.theme == nil && legacyTheme.wallpapers == state.wallpapers)
+        try disk.save(state)
+        print("PASS: light and dark themes persist and missing preferences follow the system")
+
         var accentState = state
         accentState.accentColor = "Purple"
         try disk.save(accentState)

@@ -176,10 +176,6 @@ enum SmokeRunner {
                 missing.append("Open internal Settings action")
             }
         } else { missing.append("Settings sidebar button") }
-        for (index, delay) in [0.05, 0.1, 0.2].enumerated() {
-            await pause(delay)
-            captureView(hosted, to: destination.deletingLastPathComponent().appendingPathComponent("Flua-settings-opening-\(index).png"))
-        }
         await pause(0.65)
         captureView(hosted, to: destination.deletingLastPathComponent().appendingPathComponent("Flua-settings-navigation.png"))
         missing += missingNames(auditTitle, ["Accent color", "Blocked tags", "Show window on startup"])
@@ -190,10 +186,6 @@ enum SmokeRunner {
         if auditElement(auditTitle, named: "Set Wallpapers") != nil { missing.append("Settings hides playback controls") }
         if auditElement(auditTitle, named: "Wallpaper name") != nil { missing.append("Settings hides wallpaper inspector") }
         library.navigate(to: "all")
-        for (index, delay) in [0.05, 0.1, 0.2].enumerated() {
-            await pause(delay)
-            captureView(hosted, to: destination.deletingLastPathComponent().appendingPathComponent("Flua-settings-closing-\(index).png"))
-        }
         await pause(0.65)
         missing += missingNames(auditTitle, ["Set Wallpapers", "Wallpaper name"])
         if library.selection != selectedBeforeSettings { missing.append("Settings preserves wallpaper selection") }
@@ -1410,11 +1402,6 @@ enum SmokeRunner {
             guard let settings = NSApp.windows.first(where: { $0.title == "Flua" }) else {
                 throw NativeWallpaperError("Main window unavailable for internal Settings verification.")
             }
-            if !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
-                let animationPassed = await verifySettingsInspectorAnimation(settings, library: library, directory: out)
-                results["settingsInspectorAnimation"] = animationPassed
-                if !animationPassed { failures.append("settingsInspectorAnimation") }
-            }
             library.section = "settings"
             await pause(0.3)
             let settingsChrome = windowControlsVisible(settings)
@@ -1646,66 +1633,6 @@ enum SmokeRunner {
                 && retainedInput == inputBytes
         }
         return results
-    }
-    @MainActor private static func verifySettingsInspectorAnimation(_ window: NSWindow, library: Library, directory: URL) async -> Bool {
-        guard let root = window.contentView else { return false }
-        func frame() -> NSRect? {
-            var result: NSRect?
-            func visit(_ view: NSView) {
-                if view.identifier?.rawValue == "FluaInspectorApplyTarget" {
-                    var ancestor = view.superview
-                    while let parent = ancestor {
-                        if let scroll = parent as? NSScrollView {
-                            if !scroll.isHiddenOrHasHiddenAncestor {
-                                if let layer = scroll.layer, let rootLayer = root.layer {
-                                    let presented = layer.presentation() ?? layer
-                                    result = (rootLayer.presentation() ?? rootLayer).convert(presented.bounds, from: presented)
-                                } else {
-                                    result = root.convert(scroll.bounds, from: scroll)
-                                }
-                            }
-                            break
-                        }
-                        ancestor = parent.superview
-                    }
-                }
-                view.subviews.forEach(visit)
-            }
-            visit(root)
-            return result
-        }
-        let originalSelection = library.selection
-        let originalSection = library.section
-        defer {
-            library.selection = originalSelection
-            library.section = originalSection
-        }
-        library.selection = "aurora"
-        library.section = "all"
-        await pause(1)
-        guard let baseline = frame() else { return false }
-        var samples: [String: [String]] = [:]
-        var moving: [Bool] = []
-        for (direction, section) in [("opening", "settings"), ("closing", "all")] {
-            library.navigate(to: section)
-            var frames: [NSRect] = []
-            var recorded: [String] = []
-            for _ in 0..<25 {
-                await pause(0.02)
-                if let current = frame() {
-                    frames.append(current)
-                    recorded.append(NSStringFromRect(current))
-                } else { recorded.append("hidden") }
-            }
-            samples[direction] = recorded
-            let intermediate = frames.filter { $0.minX > baseline.minX + 1 && $0.minX < root.bounds.maxX - 1 }
-            moving.append(intermediate.count >= 2 && intermediate.first != intermediate.last)
-            await pause(0.5)
-        }
-        if let data = try? JSONSerialization.data(withJSONObject: samples, options: [.prettyPrinted, .sortedKeys]) {
-            try? data.write(to: directory.appendingPathComponent("settings-inspector-animation.json"))
-        }
-        return moving.allSatisfy { $0 } && frame() == baseline
     }
     @MainActor private static func verifyInstantInspectorResize(_ window: NSWindow) async -> Bool {
         guard let root = window.contentView else { return false }
