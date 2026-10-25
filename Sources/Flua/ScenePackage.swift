@@ -39,7 +39,7 @@ struct ScenePackage {
     private static let maxMember = 512 * 1_024 * 1_024
     private static let maxEntries = 4_096
     private static let maxManifest = 1_024 * 1_024
-    private static let fm = FileManager.default
+    private static var fm: FileManager { FileManager.default }
 
     static func inspect(_ url: URL) throws -> ScenePackageContents {
         var staging: URL?

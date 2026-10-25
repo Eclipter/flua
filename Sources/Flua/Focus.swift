@@ -33,8 +33,10 @@ final class FocusClearView: NSView {
             object: window,
             queue: .main
         ) { [weak self, weak window] _ in
-            guard let self, let window else { return }
-            self.clearFocus(in: window)
+            MainActor.assumeIsolated {
+                guard let self, let window else { return }
+                self.clearFocus(in: window)
+            }
         }
 
         closeObserver = NotificationCenter.default.addObserver(
@@ -42,7 +44,7 @@ final class FocusClearView: NSView {
             object: window,
             queue: .main
         ) { [weak window] _ in
-            window?.makeFirstResponder(nil)
+            MainActor.assumeIsolated { _ = window?.makeFirstResponder(nil) }
         }
 
         mouseMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown]) { [weak self] event in
@@ -82,7 +84,7 @@ final class FocusClearView: NSView {
         }
     }
 
-    deinit {
+    isolated deinit {
         cleanObservers()
     }
 }

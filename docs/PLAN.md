@@ -21,7 +21,3 @@ Use disposable libraries and matching catalog builds. Follow the [integration an
 - Currently blocked: verify HDR output on suitable hardware. A dedicated HDR display is unavailable; the built-in display's limited HDR capability is insufficient for full HDR validation.
 
 Update capability claims only after the relevant checks pass. Keep untested OS versions and hardware explicitly unverified.
-
-## Tooling and concurrency
-
-- **Low:** Mark UI ownership explicitly with `@MainActor` and define worker boundaries in [Library.swift](../Sources/Flua/Library.swift) and related code. Make opt-in strict concurrency checking clean on the supported toolchain; the audit build passed with 99 warnings, including 52 in `Library.swift`.

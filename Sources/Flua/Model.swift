@@ -8,7 +8,7 @@ func initialDisplaySelection(mode: String?, displayIDs: [String]) -> String {
     resolvedDisplayMode(mode) == "perDisplay" ? displayIDs.first ?? "all" : "all"
 }
 
-struct Wallpaper: Codable, Identifiable, Equatable {
+struct Wallpaper: Codable, Identifiable, Equatable, Sendable {
     var id: String = UUID().uuidString
     var title: String
     var kind: String
@@ -69,7 +69,7 @@ struct PlaybackPolicy: Codable, Equatable, Sendable {
     }
 }
 
-struct VideoEdit: Codable, Equatable {
+struct VideoEdit: Codable, Equatable, Sendable {
     var start: Double = 0
     var end: Double?
     var thumbnail: Double = 0
@@ -110,7 +110,7 @@ func stillStamp(for wallpaper: Wallpaper) -> String {
     return "scene \(wallpaper.kind)"
 }
 
-struct SceneMetadata: Codable, Equatable {
+struct SceneMetadata: Codable, Equatable, Sendable {
     var details: String = ""
     var category: String = ""
     var creditTitle: String = ""
@@ -640,7 +640,7 @@ final class LibraryDisk {
             publishCatalog(state) { continuation.resume(returning: $0) }
         }
     }
-    func finishCatalogWrites() async {
+    @MainActor func finishCatalogWrites() async {
         await catalogWriter.finish()
     }
     func url(for wallpaper: Wallpaper) -> URL? {

@@ -39,7 +39,7 @@ final class AmbientSceneView: NSView {
     }
 
     required init?(coder: NSCoder) { fatalError() }
-    deinit {
+    isolated deinit {
         if let occlusionObserver {
             NotificationCenter.default.removeObserver(occlusionObserver)
         }
@@ -72,7 +72,7 @@ final class AmbientSceneView: NSView {
                 object: window,
                 queue: .main
             ) { [weak self] _ in
-                self?.updatePlayback()
+                MainActor.assumeIsolated { self?.updatePlayback() }
             }
         }
         updatePlayback()

@@ -14,6 +14,18 @@ make wallpaper-test # isolated wallpaper extension tests, no OS activation
 
 `Package.swift` supports SwiftPM and opening the source package in Xcode. Use `make build` for a runnable `.app`; `swift build` alone only produces an executable. Model/package tests are standalone executables run by `make test`, not XCTest targets. Smoke builds `build/Flua.app` with its provider catalog pointing to the fresh test library, replacing any previous build at that path. The smoke script acquires a shared per-user lock before checking for a running Flua, building, or launching the test app, whether started through `make smoke` or directly; concurrent smoke and native-host checks wait for the lock. Do not run a separate `make build` before `make smoke`. Quit any running Flua before smoke verification. Agents may gracefully quit it, including a normal library session, when needed without separate confirmation; wait for it to exit and do not force-quit a normal library session. The script refuses to start alongside another Flua process, runs its accessibility audit and background application check sequentially, and writes test data only to a fresh directory under `build/verification/`. Focus tests compile the production focus-clearing view and segmented-picker tab-target helper from `Sources/Flua/Focus.swift`. They acquire the same lock before creating their keyboard and mouse focus window, even when their executable is run directly. GPU scene tests in `make test` render offscreen without launching Flua.
 
+Opt-in strict concurrency checking must compile without warnings on the supported toolchain:
+
+```sh
+swift build \
+    -c debug \
+    --triple arm64-apple-macosx27.0 \
+    -Xswiftc -strict-concurrency=complete \
+    -Xswiftc -warn-concurrency
+```
+
+Use a fresh `--scratch-path` when recording a full diagnostic check; an incremental build that compiles nothing does not establish this. UI state and AppKit lifecycle are main-actor owned. Background work receives immutable values or frozen property-list snapshots; see [architecture](ARCHITECTURE.md#previews-editing-and-imports) for the preview worker boundary. Native assignment tests check that snapshots retain surface choices and cannot share mutable Foundation values with the caller.
+
 Run other GUI verification and native wallpaper procedures through `scripts/system-test-lock.py`, keeping the lock for the complete procedure, including restoration:
 
 ```sh

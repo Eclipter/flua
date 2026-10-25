@@ -181,7 +181,7 @@ final class EditorFrameView: NSView {
             if let asset = player?.currentItem?.asset, let track = try? await asset.loadTracks(withMediaType: .video).first,
                let transform = try? await track.load(.preferredTransform) { self?.transform = transform }
         }
-        timer = Timer.scheduledTimer(withTimeInterval: 1.0 / 24, repeats: true) { [weak self] _ in self?.drawFrame() }
+        timer = Timer.scheduledTimer(withTimeInterval: 1.0 / 24, repeats: true) { [weak self] _ in MainActor.assumeIsolated { self?.drawFrame() } }
         RunLoop.main.add(timer!, forMode: .common)
     }
     required init?(coder: NSCoder) { fatalError() }
@@ -195,7 +195,7 @@ final class EditorFrameView: NSView {
         CATransaction.commit()
     }
     func cleanup() { timer?.invalidate(); timer = nil; item?.remove(output); item = nil }
-    deinit { timer?.invalidate() }
+    isolated deinit { timer?.invalidate() }
 }
 
 struct VideoEditorView: View {

@@ -35,11 +35,11 @@ final class MediaSurface: NSView {
         visibilityObservers.removeAll()
         if let window {
             visibilityObservers.append(NotificationCenter.default.addObserver(forName: NSWindow.didChangeOcclusionStateNotification,
-                object: window, queue: .main) { [weak self] _ in self?.updatePlaybackState() })
+                object: window, queue: .main) { [weak self] _ in MainActor.assumeIsolated { self?.updatePlaybackState() } })
             if let clip = enclosingScrollView?.contentView {
                 clip.postsBoundsChangedNotifications = true
                 visibilityObservers.append(NotificationCenter.default.addObserver(forName: NSView.boundsDidChangeNotification,
-                    object: clip, queue: .main) { [weak self] _ in self?.updatePlaybackState() })
+                    object: clip, queue: .main) { [weak self] _ in MainActor.assumeIsolated { self?.updatePlaybackState() } })
             }
         }
         updatePlaybackState()
@@ -80,7 +80,7 @@ final class MediaSurface: NSView {
             layer?.addSublayer(vl)
             videoLayer = vl
             readyObservation = player.observe(\.currentItem?.status, options: [.new, .initial]) { [weak self] p, _ in
-                DispatchQueue.main.async {
+                Task { @MainActor [weak self] in
                     guard let self, self.queue === p else { return }
                     if p.currentItem?.status == .failed {
                         self.onError?(p.currentItem?.error?.localizedDescription ?? "Video playback failed.")
@@ -179,7 +179,7 @@ final class MediaSurface: NSView {
         imageLayer = il
         if holdsStill { showsStillImage = il.contents != nil }
     }
-    deinit {
+    isolated deinit {
         visibilityObservers.forEach { NotificationCenter.default.removeObserver($0) }
         queue?.pause()
         looper?.disableLooping()

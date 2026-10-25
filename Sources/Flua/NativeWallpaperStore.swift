@@ -64,6 +64,28 @@ enum NativeWallpaperStore {
         var lockScreen: [String: Any]?
     }
 
+    /// Freezes property-list dictionaries so worker tasks never share Foundation objects with the UI.
+    struct AssignmentSnapshot: Sendable {
+        private let data: Data
+
+        init(_ assignments: [String: Assignment]) throws {
+            let values = assignments.mapValues { assignment in
+                var value: [String: Any] = [:]
+                value["desktop"] = assignment.desktop
+                value["lockScreen"] = assignment.lockScreen
+                return value
+            }
+            data = try PropertyListSerialization.data(fromPropertyList: values, format: .binary, options: 0)
+        }
+
+        func assignments() throws -> [String: Assignment] {
+            guard let values = try PropertyListSerialization.propertyList(from: data, options: [], format: nil) as? [String: [String: Any]] else {
+                throw NativeWallpaperError("The saved wallpaper choices could not be decoded.")
+            }
+            return values.mapValues { Assignment(desktop: $0["desktop"] as? [String: Any], lockScreen: $0["lockScreen"] as? [String: Any]) }
+        }
+    }
+
     static func assignments(from state: LibraryState, displays: [String], root: URL, provider: String, surface: WallpaperSurface? = nil) throws -> [String: Assignment] {
         let catalog = providerCatalog(from: state)
         var result: [String: Assignment] = [:]

@@ -2,6 +2,27 @@ import Foundation
 
 @main struct NativeWallpaperTests {
     static func main() throws {
+        let mutable = NSMutableDictionary(dictionary: ["name": "original"])
+        let snapshot = try NativeWallpaperStore.AssignmentSnapshot([
+            "desktop": .init(desktop: ["nested": mutable, "bytes": Data([1, 2]), "enabled": true], lockScreen: nil),
+            "lock": .init(desktop: nil, lockScreen: ["number": 1.25]),
+            "empty": .init(desktop: nil, lockScreen: nil)
+        ])
+        mutable["name"] = "changed"
+        let snapshotAssignments = try snapshot.assignments()
+        precondition((snapshotAssignments["desktop"]?.desktop?["nested"] as? [String: String])?["name"] == "original")
+        precondition(snapshotAssignments["desktop"]?.desktop?["bytes"] as? Data == Data([1, 2]))
+        precondition(snapshotAssignments["desktop"]?.desktop?["enabled"] as? Bool == true)
+        precondition(snapshotAssignments["desktop"]?.lockScreen == nil && snapshotAssignments["lock"]?.desktop == nil)
+        precondition(snapshotAssignments["lock"]?.lockScreen?["number"] as? Double == 1.25)
+        precondition(snapshotAssignments["empty"] != nil && snapshotAssignments["empty"]?.desktop == nil)
+        let emptySnapshot = try NativeWallpaperStore.AssignmentSnapshot([:]).assignments()
+        precondition(emptySnapshot.isEmpty)
+        do {
+            _ = try NativeWallpaperStore.AssignmentSnapshot(["bad": .init(desktop: ["object": NSObject()], lockScreen: nil)])
+            preconditionFailure("Non-property-list objects must not cross worker boundaries")
+        } catch {}
+        print("PASS: native assignment snapshots isolate mutable values and preserve missing surfaces")
         precondition(NativeWallpaper.agentPID("gui/501/com.apple.wallpaper.agent = {\n\tpid = 1234\n}") == 1234)
         for value in ["", "last exit reason = pid = 1234", "pid = 0", "pid = 1", "pid = -20", "pid = bad", "pid = 999999999999"] {
             precondition(NativeWallpaper.agentPID(value) == nil, value)

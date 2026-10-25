@@ -2,7 +2,7 @@ import SwiftUI
 import AppKit
 import Combine
 
-final class ViewState: ObservableObject {
+@MainActor final class ViewState: ObservableObject {
     @Published var playlistPicker: String?
     @Published var pickerSelected = Set<String>()
     @Published var pickerQuery = ""
@@ -199,8 +199,8 @@ private struct GlassPressEffect: ButtonStyle {
     }
 }
 
-struct FluaGlassTextFieldStyle: TextFieldStyle {
-    func _body(configuration: TextField<Self._Label>) -> some View {
+struct FluaGlassTextFieldStyle: @MainActor TextFieldStyle {
+    @MainActor func _body(configuration: TextField<Self._Label>) -> some View {
         configuration.textFieldStyle(.plain).multilineTextAlignment(.leading)
             .padding(.horizontal, 10).padding(.vertical, 7)
             .fluaGlass(clear: true, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
@@ -380,7 +380,7 @@ extension View {
     }
 }
 
-enum AppContext {
+@MainActor enum AppContext {
     static let library: Library = {
         let args = ProcessInfo.processInfo.arguments
         let isolatedVerification = LibraryPaths.isVerification(arguments: args)

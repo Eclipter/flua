@@ -11,8 +11,8 @@ enum SmokeRunner {
         // Native inspector resizing must not move opaque audit hosts back onto a display.
         override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect { frameRect }
     }
-    private static var running = false
-    private static var toolbarFrames: [[String: Any]] = []
+    @MainActor private static var running = false
+    @MainActor private static var toolbarFrames: [[String: Any]] = []
     @MainActor private static func hasVisibleToolbarBackdrop(_ view: NSView) -> Bool {
         if view.accessibilityRole() == .toolbar { return false }
         let emptyGlass = (view as? NSGlassEffectView).map { $0.contentView == nil } == true
@@ -588,10 +588,10 @@ enum SmokeRunner {
                 var transitionSamples = 0
                 var transitionLineHidden = true
                 let willEnterObserver = NotificationCenter.default.addObserver(forName: NSWindow.willEnterFullScreenNotification, object: window, queue: .main) { _ in
-                    transitionPrepared = window.titlebarSeparatorStyle == .none
+                    MainActor.assumeIsolated { transitionPrepared = window.titlebarSeparatorStyle == .none }
                 }
-                let enterObserver = NotificationCenter.default.addObserver(forName: NSWindow.didEnterFullScreenNotification, object: window, queue: .main) { _ in enteredNotification = true }
-                let exitObserver = NotificationCenter.default.addObserver(forName: NSWindow.didExitFullScreenNotification, object: window, queue: .main) { _ in exitedNotification = true }
+                let enterObserver = NotificationCenter.default.addObserver(forName: NSWindow.didEnterFullScreenNotification, object: window, queue: .main) { _ in MainActor.assumeIsolated { enteredNotification = true } }
+                let exitObserver = NotificationCenter.default.addObserver(forName: NSWindow.didExitFullScreenNotification, object: window, queue: .main) { _ in MainActor.assumeIsolated { exitedNotification = true } }
                 func checkTransitionLines() {
                     func check(_ root: NSView, bottom: CGFloat) {
                         transitionSamples += 1
@@ -700,7 +700,7 @@ enum SmokeRunner {
         results["systemPlayback"] = "Not exercised: saved assignments and provider descriptors are validated without OS integration."
         results["backgroundLaunch"] = !NSApp.isActive
         let activationObserver = NotificationCenter.default.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { _ in
-            failures.append("Smoke verification activated Flua")
+            MainActor.assumeIsolated { failures.append("Smoke verification activated Flua") }
         }
         defer { NotificationCenter.default.removeObserver(activationObserver) }
         var expectingEditorSaveError = false

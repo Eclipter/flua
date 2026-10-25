@@ -5,7 +5,7 @@ import CoreImage
 import ServiceManagement
 import UniformTypeIdentifiers
 
-final class Library: ObservableObject {
+@MainActor final class Library: ObservableObject {
     @Published var state: LibraryState
     @Published private var configurationDraft = ConfigurationDraft()
     @Published private var wallpaperDrafts: [String: Wallpaper] = [:]
@@ -28,6 +28,8 @@ final class Library: ObservableObject {
     private let systemPlaybackEnabled: Bool
     var tick: Timer?
     private var screenObserver: NSObjectProtocol?
+    private var presenceObserver: NSObjectProtocol?
+    private var presenceRevision = 0
     private var saveBlocked = false
     private var catalogRevision = 0
     private var nativeRefreshTask: Task<Void, Never>?
@@ -48,16 +50,18 @@ final class Library: ObservableObject {
         selection = state.wallpapers.first(where: { !state.isBlocked($0) })?.id
         display = initialDisplaySelection(mode: state.displayMode, displayIDs: screens.map(displayID))
         screenObserver = NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main) { [weak self] _ in
-            guard let self else { return }
-            let previousDisplays = self.screens.map(displayID)
-            self.screens = NSScreen.screens
-            let reconnected = self.state.nativeRestorationDisplays(connected: self.screens.map(displayID), previouslyConnected: previousDisplays)
-            if self.display != "all" && !self.screens.contains(where: { displayID($0) == self.display }) {
-                self.display = self.playbackMode == "perDisplay" ? self.screens.first.map(displayID) ?? "all" : "all"
-            }
-            if self.restoreAssignments() { self.save() }
-            if !reconnected.isEmpty {
-                Task { @MainActor [weak self] in self?.restoreNativeAssignments(displays: reconnected) }
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                let previousDisplays = self.screens.map(displayID)
+                self.screens = NSScreen.screens
+                let reconnected = self.state.nativeRestorationDisplays(connected: self.screens.map(displayID), previouslyConnected: previousDisplays)
+                if self.display != "all" && !self.screens.contains(where: { displayID($0) == self.display }) {
+                    self.display = self.playbackMode == "perDisplay" ? self.screens.first.map(displayID) ?? "all" : "all"
+                }
+                if self.restoreAssignments() { self.save() }
+                if !reconnected.isEmpty {
+                    Task { @MainActor [weak self] in self?.restoreNativeAssignments(displays: reconnected) }
+                }
             }
         }
         tick = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
@@ -395,7 +399,8 @@ final class Library: ObservableObject {
             let mirrored = resolvedDisplayMode(state.displayMode) == "mirrored" && Set(displays) == Set(screens.map(displayID))
             let root = disk.root
             do {
-                try await Task.detached { try NativeWallpaper.apply(assignments, targeting: displays, mirrored: mirrored, root: root, reloadUnchanged: reloadUnchanged, clearingUnassigned: clearingUnassigned) }.value
+                let snapshot = try NativeWallpaperStore.AssignmentSnapshot(assignments)
+                try await Task.detached { try NativeWallpaper.apply(snapshot.assignments(), targeting: displays, mirrored: mirrored, root: root, reloadUnchanged: reloadUnchanged, clearingUnassigned: clearingUnassigned) }.value
                 if clearingUnassigned { state.nativeCleanupDisplays.subtract(displays) }
                 rememberNativeAssignments(assignments, displays: displays)
                 activity = assignments.isEmpty
@@ -522,7 +527,8 @@ final class Library: ObservableObject {
                 if !displays.isEmpty {
                     let assignments = try self.savedNativeAssignments(for: displays)
                     let mirrored = resolvedDisplayMode(self.state.displayMode) == "mirrored" && Set(displays) == Set(self.screens.map(displayID))
-                    try await Task.detached { try NativeWallpaper.apply(assignments, targeting: displays, mirrored: mirrored, root: root, clearingUnassigned: true) }.value
+                    let snapshot = try NativeWallpaperStore.AssignmentSnapshot(assignments)
+                    try await Task.detached { try NativeWallpaper.apply(snapshot.assignments(), targeting: displays, mirrored: mirrored, root: root, clearingUnassigned: true) }.value
                     self.state.nativeCleanupDisplays.subtract(displays)
                     self.rememberNativeAssignments(assignments, displays: displays)
                 }
@@ -804,23 +810,26 @@ final class Library: ObservableObject {
         let keyWindow = NSApp.keyWindow
         let mainWindow = NSApp.mainWindow
         let windows = NSApp.windows.filter { $0.isVisible && $0.level == .normal && !$0.ignoresMouseEvents }
-        var resignObserver: NSObjectProtocol?
+        presenceRevision += 1
+        let revision = presenceRevision
+        clearPresenceObserver()
         if wasActive {
             // Changing activation policy causes macOS to asynchronously deactivate the application.
             // Reactivate on didResignActive so the active window remains in front.
-            resignObserver = NotificationCenter.default.addObserver(
+            presenceObserver = NotificationCenter.default.addObserver(
                 forName: NSApplication.didResignActiveNotification,
                 object: nil,
                 queue: .main
-            ) { _ in
-                if let obs = resignObserver {
-                    NotificationCenter.default.removeObserver(obs)
-                    resignObserver = nil
-                }
-                DispatchQueue.main.async {
-                    NSApp.activate(ignoringOtherApps: true)
-                    for window in windows { window.orderFrontRegardless() }
-                    (keyWindow ?? mainWindow)?.makeKeyAndOrderFront(nil)
+            ) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    guard let self, self.presenceRevision == revision else { return }
+                    self.clearPresenceObserver()
+                    DispatchQueue.main.async { [weak self] in
+                        guard let self, self.presenceRevision == revision else { return }
+                        NSApp.activate(ignoringOtherApps: true)
+                        for window in windows { window.orderFrontRegardless() }
+                        (keyWindow ?? mainWindow)?.makeKeyAndOrderFront(nil)
+                    }
                 }
             }
         }
@@ -829,13 +838,15 @@ final class Library: ObservableObject {
             NSApp.activate(ignoringOtherApps: true)
             for window in windows { window.orderFrontRegardless() }
             (keyWindow ?? mainWindow)?.makeKeyAndOrderFront(nil)
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                if let obs = resignObserver {
-                    NotificationCenter.default.removeObserver(obs)
-                    resignObserver = nil
-                }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+                guard let self, self.presenceRevision == revision else { return }
+                self.clearPresenceObserver()
             }
         }
+    }
+    private func clearPresenceObserver() {
+        if let presenceObserver { NotificationCenter.default.removeObserver(presenceObserver) }
+        presenceObserver = nil
     }
     func loginEnabled() -> Bool { SMAppService.mainApp.status == .enabled }
     func setLogin(_ enabled: Bool) {
@@ -845,5 +856,5 @@ final class Library: ObservableObject {
             objectWillChange.send()
         } catch { self.error = "Login item: \(error.localizedDescription)" }
     }
-    deinit { tick?.invalidate(); if let o = screenObserver { NotificationCenter.default.removeObserver(o) } }
+    isolated deinit { clearPresenceObserver(); tick?.invalidate(); if let o = screenObserver { NotificationCenter.default.removeObserver(o) } }
 }
