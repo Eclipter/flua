@@ -1,0 +1,18 @@
+name: Swift formatting policy
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test the policy checker
+        run: python3 Tests/Scripts/LintTests.py
+      - name: Check Swift whitespace
+        run: make lint SHELL=/bin/sh

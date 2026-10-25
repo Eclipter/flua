@@ -1,7 +1,9 @@
 SHELL := /bin/zsh
-.PHONY: build test smoke run release wallpaper-test scroll-test clean
+.PHONY: build test smoke run release wallpaper-test scroll-test lint clean
 build:
 	@./scripts/build.sh
+lint:
+	@python3 scripts/lint.py
 test:
 	@./scripts/test.sh
 smoke:

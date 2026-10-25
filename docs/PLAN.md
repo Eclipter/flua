@@ -31,4 +31,3 @@ Update capability claims only after the relevant checks pass. Keep untested OS v
 ## Tooling and concurrency
 
 - **Low:** Mark UI ownership explicitly with `@MainActor` and define worker boundaries in [Library.swift](../Sources/Flua/Library.swift) and related code. Make opt-in strict concurrency checking clean on the supported toolchain; the audit build passed with 99 warnings, including 52 in `Library.swift`.
-- **Low:** Choose and document a Swift formatting policy, then add a repeatable lint target and CI check. `.editorconfig` and `git diff --check` pass, but there is no formatter configuration, lint target, or CI check. Advisory Apple `swift-format` with four-space indentation and a 120-column limit reported 2,865 differences; do not mix mass cosmetic formatting into correctness fixes.

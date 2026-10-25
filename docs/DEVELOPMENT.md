@@ -4,6 +4,7 @@ Requires macOS 27+, Apple Silicon and Apple Swift command-line tools (`xcode-sel
 
 ```sh
 make build          # Flua.app with the wallpaper extension, ad-hoc signature
+make lint           # Swift whitespace policy, no source rewriting
 make test           # model, library path, package security tests
 make smoke          # builds Flua.app for an isolated library, tests, then exits
 make run            # open the app
@@ -111,6 +112,14 @@ This calls native actions; it does not simulate a physical pointer or verify the
 ### Wallpaper-grid resizing
 
 On 2026-10-25, the user reported that the sluggish wallpaper-grid rearrangement during direct resizing and side-to-bottom tiling was no longer occurring. No code change or targeted performance measurement was made for this follow-up; this records the user's observation only.
+
+## Swift formatting policy
+
+Keep Swift source hand-formatted in the surrounding style: four spaces per block level, with aligned continuation lines allowed. Use UTF-8, LF line endings, a final newline for nonempty files, no tabs and no trailing spaces. `.editorconfig` supplies the editor settings. There is no hard line-length limit; wrap long expressions for readability during review.
+
+Run `make lint` before committing. It checks every tracked `*.swift` file, including `Package.swift` and tests, without modifying files. Stage newly added files first so Git includes them in the check. Deleted files are skipped. The GitHub **Swift formatting policy** workflow runs this target with `SHELL=/bin/sh` on Linux and its disposable-fixture regression tests on pushes and pull requests. Run the checker tests locally with `python3 Tests/Scripts/LintTests.py`.
+
+The automated gate enforces encoding and whitespace only; block indentation, continuation alignment and wrapping remain code-review checks. Apple `swift-format` is not the project formatter: its broader rewrites differ substantially from existing source. Do not apply it across the repository or mix cosmetic reformatting into correctness fixes.
 
 ## Git workflow
 
