@@ -3,6 +3,9 @@ import AVFoundation
 import CoreGraphics
 import CoreVideo
 import Dispatch
+import AppKit
+import ImageIO
+import UniformTypeIdentifiers
 
 // Standalone `swiftc` executables do not synthesize `Bundle.module`; provide a
 // test-only stand-in so the rendering types Library.swift references can
@@ -67,6 +70,7 @@ extension Bundle {
         try FileManager.default.createDirectory(at: support, withIntermediateDirectories: true)
         let root = LibraryPaths.resolve(applicationSupport: support)
         try saveCommitTests(dir.appendingPathComponent("save-commit", isDirectory: true))
+        try await importImageDecoderTests(dir.appendingPathComponent("image-import", isDirectory: true))
         try await importReferenceMovieTests(dir.appendingPathComponent("video-import", isDirectory: true))
 
         let library = try Library(root: root, systemPlaybackEnabled: false)
@@ -359,6 +363,52 @@ extension Bundle {
         precondition(removedState.nativeCleanupDisplays.contains("disconnected"), "Disconnected displays must retain pending cleanup")
         print("PASS: active wallpaper removal persists pending native cleanup")
         print("PASS: clearFilters resets filters, query, and sort type to default (name) with only sorting changed (favorites/recent)")
+    }
+
+    @MainActor
+    static func importImageDecoderTests(_ root: URL) async throws {
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let svg = root.appendingPathComponent("unsupported.svg")
+        let svgData = Data("<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"16\" height=\"16\"><rect width=\"16\" height=\"16\" fill=\"red\"/></svg>".utf8)
+        try svgData.write(to: svg)
+        precondition(NSImage(contentsOf: svg) != nil, "SVG must reproduce AppKit's broader decoder support")
+        let library = try Library(root: root.appendingPathComponent("Library", isDirectory: true), systemPlaybackEnabled: false)
+        let originalCount = library.state.wallpapers.count
+        library.importMedia([svg])
+        await waitForImport(library)
+        precondition(library.state.wallpapers.count == originalCount, "Import accepted unsupported SVG")
+        precondition(library.error?.contains("Choose a supported image") == true)
+        let rejectedSourceData = try Data(contentsOf: svg)
+        precondition(rejectedSourceData == svgData, "Rejected import changed its source")
+        let rejectedFiles = try FileManager.default.contentsOfDirectory(atPath: library.disk.assets.path)
+        precondition(rejectedFiles.isEmpty, "Rejected SVG was copied into the library")
+
+        let context = CGContext(data: nil, width: 16, height: 16, bitsPerComponent: 8, bytesPerRow: 64,
+                                space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+        context.setFillColor(CGColor(red: 1, green: 0, blue: 0, alpha: 1))
+        context.fill(CGRect(x: 0, y: 0, width: 16, height: 16))
+        let image = context.makeImage()!
+        for type in [UTType.png, .jpeg, .tiff] {
+            let source = root.appendingPathComponent("supported." + type.preferredFilenameExtension!)
+            let destination = CGImageDestinationCreateWithURL(source as CFURL, type.identifier as CFString, 1, nil)!
+            CGImageDestinationAddImage(destination, image, nil)
+            precondition(CGImageDestinationFinalize(destination))
+            let sourceData = try Data(contentsOf: source)
+            library.error = nil
+            library.importMedia([source])
+            await waitForImport(library)
+            precondition(library.error == nil, "Supported raster import failed")
+            let imported = library.state.wallpapers.last!
+            precondition(imported.kind == "image")
+            let importedURL = library.disk.url(for: imported)!
+            precondition(importedURL != source)
+            let importedData = try Data(contentsOf: importedURL)
+            let preservedSourceData = try Data(contentsOf: source)
+            precondition(importedData == sourceData, "Import changed copied raster data")
+            precondition(preservedSourceData == sourceData, "Import changed the original raster source")
+        }
+        precondition(library.state.wallpapers.count == originalCount + 3)
+        print("PASS: image import rejects SVG, accepts PNG/JPEG/TIFF, and preserves source bytes")
     }
 
     @MainActor

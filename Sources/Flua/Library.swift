@@ -1,6 +1,7 @@
 import AppKit
 import AVFoundation
 import Combine
+import CoreImage
 import ServiceManagement
 import UniformTypeIdentifiers
 
@@ -591,8 +592,13 @@ final class Library: ObservableObject {
                     }
                     let type = UTType(filenameExtension: mediaURL.pathExtension)
                     let kind: String
-                    if type?.conforms(to: .image) == true, NSImage(contentsOf: mediaURL) != nil { kind = "image" }
-                    else {
+                    if type?.conforms(to: .image) == true {
+                        // Match the native wallpaper renderer rather than AppKit's broader image support.
+                        guard CIImage(contentsOf: mediaURL, options: [.applyOrientationProperty: true]) != nil else {
+                            throw LibraryError.unreadableMedia(url.lastPathComponent)
+                        }
+                        kind = "image"
+                    } else {
                         let asset = AVURLAsset(url: mediaURL, options: [AVURLAssetReferenceRestrictionsKey: AVAssetReferenceRestrictions.forbidAll.rawValue])
                         let tracks = try await asset.loadTracks(withMediaType: .video)
                         guard !tracks.isEmpty else { throw LibraryError.unreadableMedia(url.lastPathComponent) }
