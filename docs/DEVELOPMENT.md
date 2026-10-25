@@ -87,6 +87,25 @@ On macOS 27.0.1 (26A434), an active disposable Flua window exposed Left, Right, 
 
 A follow-up disposable launch compared the same app build with `hideFromDock` false and true. The regular launch used activation policy `.regular` and its library window had `.fullScreenPrimary`; the Hide from Dock launch used `.accessory` and its window had `.fullScreenNone`, while the green zoom button remained enabled and visible. This explains the user's report that green-button zoom maximized the window instead of entering fullscreen. Normal library windows now explicitly opt in to fullscreen, while smoke and preview windows remain disabled. The startup smoke checks both activation policies and requires visible library windows to remain fullscreen eligible. Its Hide from Dock variant passed with `.fullScreenPrimary` and without `.fullScreenNone`; the previous `.automatic` behavior failed the same check. The A/B captures and runtime reports are preserved at `/tmp/flua-window-policy-ab-20261025/`. This verifies the native fullscreen eligibility that enables macOS window management, but the hover popup itself still needs a physical-pointer check.
 
+### Fullscreen toolbar
+
+The sidebar button stays in the native toolbar, which remains visible in fullscreen. Page titles stay above the library scroll view and Settings. Fullscreen uses the same system window-background color for the toolbar, sidebar, library and inspector; the inspector title sits below the toolbar. Separator cleanup starts before the enter animation and follows native toolbar resizing. A transparent view in the sidebar button also prepares its toolbar window before drawing: AppKit can draw that window before assigning its library parent, so window notifications alone arrive too late for the first frame. Native panel-header material backdrops are hidden separately from the toolbar controls, using the split-view column edges. Returning to windowed mode restores the accent backdrop, translucent side panels and original native decorations. `make smoke` checks windowed controls, including hidden ancestors and empty visible bounds, through startup and Settings navigation; the accessibility audit requires the sidebar button.
+
+The separate opt-in fullscreen check activates its disposable window and changes Spaces using AppKit's fullscreen action. It checks separator preparation before entry, the toolbar's first draw (including while unparented), and native toolbar baselines during the transition, then waits for completed transition notifications. It verifies toolbar visibility on the active Space, separator removal on the main window and its native chrome children, hidden native material backdrops outside the controls, matching rendered header/content backgrounds in all three columns, the absence of the sidebar header line, and restoration of windowed controls. It saves content and native-toolbar snapshots for visual inspection; without screen-recording access these are rendered from the app's own views. Those view renders omit some compositor effects, so an actual onscreen capture must also be inspected. The default appearance is Dark Aqua; add `--fullscreen-light` for Aqua. This affects only the disposable process. Add `--fullscreen-observe` to leave the verified window open for manual inspection, then quit it to release the test lock. Window restoration is disabled for this check. Run it after building, with no other Flua running:
+
+```sh
+check_dir=$(mktemp -d "$PWD/build/verification/fullscreen.XXXXXX")
+./scripts/system-test-lock.py \
+    'fullscreen chrome' \
+    open -g -W build/Flua.app \
+    --args \
+    --data-dir "$check_dir/library" \
+    --startup-smoke "$check_dir/results.json" \
+    --fullscreen-chrome
+```
+
+This calls native actions; it does not simulate a physical pointer or verify the green-button hover popup.
+
 ### Wallpaper-grid resizing
 
 On 2026-10-25, the user reported that the sluggish wallpaper-grid rearrangement during direct resizing and side-to-bottom tiling was no longer occurring. No code change or targeted performance measurement was made for this follow-up; this records the user's observation only.

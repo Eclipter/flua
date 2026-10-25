@@ -8,6 +8,32 @@ import Combine
 /// Runs opt-in isolated runtime checks and writes outputs only to their supplied directories.
 enum SmokeRunner {
     private static var running = false
+    private static var toolbarFrames: [[String: Any]] = []
+    @MainActor private static func hasVisibleToolbarBackdrop(_ view: NSView) -> Bool {
+        if view.accessibilityRole() == .toolbar { return false }
+        let emptyGlass = (view as? NSGlassEffectView).map { $0.contentView == nil } == true
+        if (view is NSVisualEffectView || emptyGlass), !view.isHiddenOrHasHiddenAncestor { return true }
+        return view.subviews.contains(where: hasVisibleToolbarBackdrop)
+    }
+    @MainActor private static func hasVisibleToolbarLine(_ view: NSView, in root: NSView, bottom: CGFloat) -> Bool {
+        let frame = view.convert(view.bounds, to: root)
+        let distance = root.isFlipped ? abs(frame.maxY - bottom) : abs(frame.minY - bottom)
+        if !(view is NSControl), view.subviews.isEmpty, frame.width > 1,
+           frame.height > 0, frame.height <= 1, distance < 1,
+           !view.isHiddenOrHasHiddenAncestor, view.alphaValue > 0 { return true }
+        return view.subviews.contains { hasVisibleToolbarLine($0, in: root, bottom: bottom) }
+    }
+    @MainActor static func observeToolbarWindow(_ window: NSWindow, phase: String) {
+        guard ProcessInfo.processInfo.arguments.contains("--fullscreen-chrome"),
+              window.frame.height > 0, window.frame.height < 200, window.frame.width >= 700,
+              !toolbarFrames.contains(where: { $0["window"] as? Int == window.windowNumber && $0["phase"] as? String == phase }),
+              let root = window.contentView else { return }
+        let bottom = root.isFlipped ? root.bounds.maxY : root.bounds.minY
+        let prepared = !hasVisibleToolbarBackdrop(root) && !hasVisibleToolbarLine(root, in: root, bottom: bottom)
+        toolbarFrames.append(["window": window.windowNumber, "phase": phase,
+            "parent": window.parent?.identifier?.rawValue ?? "none", "frame": NSStringFromRect(window.frame),
+            "prepared": prepared])
+    }
     @MainActor static func configureVerificationWindow(_ window: NSWindow, playback: Bool = false) {
         let args = ProcessInfo.processInfo.arguments
         guard ["--smoke-test", "--preview-smoke", "--accessibility-audit"].contains(where: args.contains) else { return }
@@ -45,7 +71,7 @@ enum SmokeRunner {
             "Playback type: All", "Playback type: Animated", "Playback type: Still",
             "Display Mode: Mirrored", "Display Mode: Per Display", "Configure: Lock Screen", "Mirror all displays",
             "Rendering mode: Animated", "Rendering mode: Still", "Mirror Desktop and Lock Screen",
-            "Search", "Category filter", "Color filter", "Motion filter", "Resolution filter", "Aspect filter",
+            "Hide Sidebar", "Search", "Category filter", "Color filter", "Motion filter", "Resolution filter", "Aspect filter",
             "Add favorite: Northern lights", "Add favorite: Deep space", "Wallpaper name", "Tags", "Category",
             "Color", "Motion intensity",
             "Speed", "Dim", "Previous in playlist", "Next in playlist", "Stop on selected displays", "Create playlist"
@@ -75,8 +101,15 @@ enum SmokeRunner {
         } else { missing.append("Favorite accessibility target") }
         if let playlistLibrary = try? Library(root: destination.deletingLastPathComponent().appendingPathComponent("PlaylistControlValidation"), systemPlaybackEnabled: false),
            let key = playlistLibrary.screens.first.map(displayID) {
-            let originalContent = hosted.contentView
-            hosted.contentView = NSHostingView(rootView: LibraryView().environmentObject(playlistLibrary).frame(width: 1320, height: 840))
+            // Keep the main audit's accessibility tree attached while testing another library.
+            let playlistWindow = NSWindow(contentRect: NSRect(x: -20000, y: -20000, width: 1320, height: 840), styleMask: [.titled], backing: .buffered, defer: false)
+            playlistWindow.title = "Flua Playlist Control Audit"
+            playlistWindow.isReleasedWhenClosed = false
+            playlistWindow.contentView = NSHostingView(rootView: LibraryView().environmentObject(playlistLibrary).frame(width: 1320, height: 840))
+            park(playlistWindow)
+            playlistWindow.orderBack(nil)
+            defer { playlistWindow.close() }
+            let auditTitle = playlistWindow.title
             playlistLibrary.tick?.invalidate()
             playlistLibrary.state.displayMode = "perDisplay"
             playlistLibrary.display = key
@@ -135,7 +168,6 @@ enum SmokeRunner {
             await checkPlaylistControls(false, context: "Native setup busy")
             playlistLibrary.nativeSetupBusy = false
             if let error = playlistLibrary.error { missing.append("Lock Screen playlist verification: " + error) }
-            hosted.contentView = originalContent
         } else { missing.append("Lock Screen playlist verification library") }
         let selectedBeforeSettings = library.selection
         let windowsBeforeSettings = NSApp.windows.count
@@ -436,18 +468,49 @@ enum SmokeRunner {
         let text = "\(value)".replacingOccurrences(of: "\n", with: " ")
         return text.count > 140 ? String(text.prefix(140)) : text
     }
+    @MainActor private static func windowControlsVisible(_ window: NSWindow) -> Bool {
+        [.closeButton, .miniaturizeButton, .zoomButton].allSatisfy { (kind: NSWindow.ButtonType) in
+            guard let button = window.standardWindowButton(kind), button.window === window,
+                  !button.isHiddenOrHasHiddenAncestor, !button.visibleRect.isEmpty else { return false }
+            var ancestor: NSView? = button
+            while let view = ancestor {
+                if view.alphaValue <= 0.01 { return false }
+                ancestor = view.superview
+            }
+            return true
+        }
+    }
     @MainActor static func runIfRequested(library: Library) async {
         let args = ProcessInfo.processInfo.arguments
         if let i = args.firstIndex(of: "--startup-smoke"), args.indices.contains(i + 1), args.contains("--data-dir") {
             await pause(1)
             let window = NSApp.windows.first { $0.identifier?.rawValue == "library" }
+            if args.contains("--fullscreen-chrome"), let window {
+                let appearance = NSAppearance(named: args.contains("--fullscreen-light") ? .aqua : .darkAqua)
+                NSApp.appearance = appearance
+                window.appearance = appearance
+                window.contentView?.appearance = appearance
+                await pause(0.3)
+                window.collectionBehavior.insert(.moveToActiveSpace)
+                window.makeKeyAndOrderFront(nil)
+                NSApp.activate(ignoringOtherApps: true)
+                await pause(0.3)
+                if window.styleMask.contains(.fullScreen) {
+                    window.toggleFullScreen(nil)
+                    let deadline = Date().addingTimeInterval(5)
+                    while Date() < deadline && (window.styleMask.contains(.fullScreen) || !windowControlsVisible(window)) {
+                        await pause(0.1)
+                    }
+                }
+            }
             let visible = window?.isVisible == true
             let fullScreenPrimary = window?.collectionBehavior.contains(.fullScreenPrimary) == true
             let fullScreenNone = window?.collectionBehavior.contains(.fullScreenNone) == true
             let fullScreenEligible = fullScreenPrimary && !fullScreenNone
-            let passed = visible == library.state.showWindowOnStartup
-                && (!visible || fullScreenEligible)
-            let report: [String: Any] = [
+            let controlsVisible = visible && window.map(windowControlsVisible) == true
+            var passed = visible == library.state.showWindowOnStartup
+                && (!visible || (fullScreenEligible && controlsVisible))
+            var report: [String: Any] = [
                 "passed": passed,
                 "windowVisible": visible,
                 "showWindowOnStartup": library.state.showWindowOnStartup,
@@ -455,11 +518,119 @@ enum SmokeRunner {
                 "activationPolicy": NSApp.activationPolicy().rawValue,
                 "fullScreenPrimary": fullScreenPrimary,
                 "fullScreenNone": fullScreenNone,
-                "fullScreenEligible": fullScreenEligible
+                "fullScreenEligible": fullScreenEligible,
+                "windowControlsVisible": controlsVisible
             ]
+            if args.contains("--fullscreen-chrome"), let window, visible {
+                // This opt-in check changes Spaces; ordinary smoke stays in the background.
+                var enteredNotification = false
+                var exitedNotification = false
+                var transitionPrepared = false
+                var transitionSamples = 0
+                var transitionLineHidden = true
+                let willEnterObserver = NotificationCenter.default.addObserver(forName: NSWindow.willEnterFullScreenNotification, object: window, queue: .main) { _ in
+                    transitionPrepared = window.titlebarSeparatorStyle == .none
+                }
+                let enterObserver = NotificationCenter.default.addObserver(forName: NSWindow.didEnterFullScreenNotification, object: window, queue: .main) { _ in enteredNotification = true }
+                let exitObserver = NotificationCenter.default.addObserver(forName: NSWindow.didExitFullScreenNotification, object: window, queue: .main) { _ in exitedNotification = true }
+                func checkTransitionLines() {
+                    func check(_ root: NSView, bottom: CGFloat) {
+                        transitionSamples += 1
+                        transitionLineHidden = transitionLineHidden && !hasVisibleToolbarLine(root, in: root, bottom: bottom)
+                    }
+                    if let root = window.contentView?.superview {
+                        check(root, bottom: root.convert(NSPoint(x: 0, y: window.contentLayoutRect.maxY), from: nil).y)
+                    }
+                    for chrome in window.childWindows ?? [] where !chrome.isSheet && chrome.frame.height < window.frame.height {
+                        guard let root = chrome.contentView else { continue }
+                        check(root, bottom: root.isFlipped ? root.bounds.maxY : root.bounds.minY)
+                    }
+                }
+                defer {
+                    NotificationCenter.default.removeObserver(willEnterObserver)
+                    NotificationCenter.default.removeObserver(enterObserver)
+                    NotificationCenter.default.removeObserver(exitObserver)
+                }
+                window.toggleFullScreen(nil)
+                var deadline = Date().addingTimeInterval(5)
+                while Date() < deadline && !enteredNotification {
+                    checkTransitionLines()
+                    await pause(0.1)
+                }
+                await pause(0.3)
+                let entered = enteredNotification && window.styleMask.contains(.fullScreen)
+                let chromeWindows = (window.childWindows ?? []).filter { !$0.isSheet }
+                let backdropsHidden = !chromeWindows.isEmpty && chromeWindows.allSatisfy {
+                    $0.contentView.map { !hasVisibleToolbarBackdrop($0) } == true
+                }
+                let separatorHidden = window.titlebarSeparatorStyle == .none
+                    && !chromeWindows.isEmpty && chromeWindows.allSatisfy { $0.titlebarSeparatorStyle == .none }
+                let toolbarVisible = window.toolbar?.isVisible == true
+                let onActiveSpace = window.isOnActiveSpace
+                let firstFrames = toolbarFrames.filter { $0["phase"] as? String == "draw" }
+                let firstDrawPrepared = !firstFrames.isEmpty && firstFrames.allSatisfy { $0["prepared"] as? Bool == true }
+                report["fullscreenEntered"] = entered
+                report["fullscreenTransitionPrepared"] = transitionPrepared
+                report["fullscreenTransitionSamples"] = transitionSamples
+                report["fullscreenTransitionLineHidden"] = transitionLineHidden && transitionSamples > 0
+                report["fullscreenBackdropsHidden"] = backdropsHidden
+                report["fullscreenToolbarFrames"] = toolbarFrames
+                report["fullscreenToolbarFirstDrawPrepared"] = firstDrawPrepared
+                report["fullscreenSeparatorHidden"] = separatorHidden
+                report["fullscreenToolbarVisible"] = toolbarVisible
+                report["fullscreenWindowOnActiveSpace"] = onActiveSpace
+                report["fullscreenAppActive"] = NSApp.isActive
+                let snapshot = URL(fileURLWithPath: args[i + 1]).deletingPathExtension().appendingPathExtension("png")
+                captureView(window, to: snapshot)
+                var backgroundMatches = false
+                var sidebarLineHidden = false
+                if let chrome = chromeWindows.first {
+                    let toolbarSnapshot = snapshot.deletingPathExtension().appendingPathExtension("toolbar.png")
+                    captureView(chrome, to: toolbarSnapshot)
+                    if let headerData = try? Data(contentsOf: toolbarSnapshot), let contentData = try? Data(contentsOf: snapshot),
+                       let header = NSBitmapImageRep(data: headerData), let content = NSBitmapImageRep(data: contentData) {
+                        func colorsMatch(_ first: NSColor?, _ second: NSColor?) -> Bool {
+                            guard let a = first?.usingColorSpace(.sRGB), let b = second?.usingColorSpace(.sRGB) else { return false }
+                            return abs(a.redComponent - b.redComponent) <= 2.0 / 255
+                                && abs(a.greenComponent - b.greenComponent) <= 2.0 / 255
+                                && abs(a.blueComponent - b.blueComponent) <= 2.0 / 255
+                        }
+                        let scale = CGFloat(header.pixelsWide) / chrome.frame.width
+                        let contentScale = CGFloat(content.pixelsWide) / window.frame.width
+                        backgroundMatches = [CGFloat(15), chrome.frame.width / 2, chrome.frame.width - 20].allSatisfy { x in
+                            colorsMatch(header.colorAt(x: Int(x * scale), y: Int(10 * scale)),
+                                content.colorAt(x: Int(x * contentScale), y: Int(10 * contentScale)))
+                        }
+                        let toolbarBottom = min(header.pixelsHigh, Int(chrome.frame.height * scale)) - 1
+                        sidebarLineHidden = colorsMatch(header.colorAt(x: Int(15 * scale), y: toolbarBottom),
+                            header.colorAt(x: Int(15 * scale), y: toolbarBottom - 3))
+                    }
+                }
+                report["fullscreenBackgroundMatches"] = backgroundMatches
+                report["fullscreenSidebarLineHidden"] = sidebarLineHidden
+                if entered { window.toggleFullScreen(nil) }
+                deadline = Date().addingTimeInterval(5)
+                while Date() < deadline && (!exitedNotification || window.styleMask.contains(.fullScreen) || window.titlebarSeparatorStyle != .automatic || !windowControlsVisible(window)) {
+                    await pause(0.1)
+                }
+                let restored = !window.styleMask.contains(.fullScreen)
+                    && window.titlebarSeparatorStyle == .automatic && windowControlsVisible(window)
+                report["windowedChromeRestored"] = restored
+                report["stillFullscreen"] = window.styleMask.contains(.fullScreen)
+                report["windowedSeparator"] = window.titlebarSeparatorStyle.rawValue
+                passed = passed && entered && transitionPrepared && transitionLineHidden && transitionSamples > 0
+                    && firstDrawPrepared && backdropsHidden && separatorHidden && toolbarVisible && restored && onActiveSpace
+                    && backgroundMatches && sidebarLineHidden
+                report["passed"] = passed
+                if !args.contains("--fullscreen-observe") { window.close() }
+            } else if args.contains("--fullscreen-chrome") {
+                passed = false
+                report["passed"] = false
+            }
             if let data = try? JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys]) {
                 try? data.write(to: URL(fileURLWithPath: args[i + 1]))
             }
+            if passed && args.contains("--fullscreen-chrome") && args.contains("--fullscreen-observe") { return }
             exit(passed ? 0 : 1)
         }
         guard !running, let i = args.firstIndex(of: "--smoke-test"), args.indices.contains(i + 1) else { return }
@@ -576,9 +747,7 @@ enum SmokeRunner {
             if results["libraryVisibleOnLaunch"] as? Bool != true { failures.append("libraryVisibleOnLaunch") }
             if let window = NSApp.windows.first(where: { $0.title == "Flua" }) {
                 results["libraryWindowChrome"] = window.titleVisibility == .hidden
-                    && [.closeButton, .miniaturizeButton, .zoomButton].allSatisfy {
-                        window.standardWindowButton($0)?.isHidden == false
-                    }
+                    && windowControlsVisible(window)
             }
             if results["libraryWindowChrome"] as? Bool != true { failures.append("libraryWindowChrome") }
             results["discoverSystemScrollers"] = verifySystemScrollers()
@@ -1168,10 +1337,13 @@ enum SmokeRunner {
             }
             library.section = "settings"
             await pause(0.3)
+            let settingsChrome = windowControlsVisible(settings)
             captureView(settings, to: out.appendingPathComponent("Flua-settings.png"))
             await captureAppearances(settings, stem: "Flua-settings", directory: out)
             library.section = "all"
             await pause(0.3)
+            results["libraryWindowChrome"] = results["libraryWindowChrome"] as? Bool == true
+                && settingsChrome && windowControlsVisible(settings)
             captureView(settings, to: out.appendingPathComponent("Flua-library-system.png"))
             library.section = "settings"
             results["systemAccentDefault"] = library.state.accentColor == nil && library.accent == AppAccent.system.color && library.accentOverride == nil
@@ -1285,7 +1457,7 @@ enum SmokeRunner {
                 !window.isVisible || window.alphaValue == 0
             }
             if results["nonPlaybackWindowsHidden"] as? Bool != true { failures.append("nonPlaybackWindowsHidden") }
-            let required = [ "instantInspectorResize", "independentPlaylistTimers", "linkedPlaylistAdvancesOnce", "configurationDraftPreviewUsesLivePlaylist", "configurationDraftPreservesPlaylistProgress", "configurationDraftPreservesRemoval", "applySelectedSurfaceOnly", "applyLockScreenOnly", "surfaceControlsApplyHiddenMode", "configurePickerLinkedNormalizesToDesktop", "fileDrop", "fileDropUndo", "blockedImportRevealed", "importRevealsAdded", "editorCancel", "editorSave", "editorPreservesNewerEdits", "editorRejectsInvalidDraft", "editorRejectsMissingWallpaper", "playlistFileImport", "importUndo", "playlistExistingAdd", "inspectorSceneInteraction", "inspectorVideoInteraction", "explicitSystemAccent", "systemAccentDefault", "accentSelection", "unknownAccentFallback", "systemAccentReset", "importFacts", "rotatedFacts", "missingFacts", "legacyBackfill", "staleEditPreservesFacts", "unknownColorBackfill", "unknownColorRoundTrip", "blockedDiscover", "tagFiltering", "combinedBrowsing", "clearFiltersPreservesBlockedTags", "clearFilters", "imageImport", "videoImport", "symlinkImportIsIndependent", "videoReady", "videoPlaying", "videoLooped", "videoPaused", "videoResumed", "liveAdjustmentPreservesTime", "liveAdjustmentSpeed", "stillHeld", "stillIgnoresResume", "stillPreservesSource", "sceneStillMode", "desktopStill", "desktopStillSurvivesPause", "playlistPauseStatus", "playlistResumeStatus", "desktopStillPersisted", "desktopStillPreservesSource", "render_image", "render_aurora", "render_cosmos", "render_ocean", "render_ember", "systemWallpaperPreserved", "libraryAssignmentValidated", "nativeDescriptorValidation", "nativeDescriptorValidationRejectsMissing", "nativeCatalogMismatchRejected", "backgroundLaunch", "videoPreviewWindowVisible", "scenePreviewWindowVisible", "scenePreviewReshownWindowVisible", "playlistStart", "playlistNext", "libraryStop", "libraryRoundTrip", "discoverWindow", "windowSnapshot", "videoInformation", "trimmedPlayback", "trimmedExport", "thumbnailExport", "rejectInvalidTrim", "preserveSourceOnExport", "packageRoundTrip", "editorPersistence", "editorWindow", "silentExport", "desktopPlaylistPreservesLockScreen", "desktopStopPreservesLockScreen", "surfaceAssignmentsPersisted"]
+            let required = [ "libraryWindowChrome", "instantInspectorResize", "independentPlaylistTimers", "linkedPlaylistAdvancesOnce", "configurationDraftPreviewUsesLivePlaylist", "configurationDraftPreservesPlaylistProgress", "configurationDraftPreservesRemoval", "applySelectedSurfaceOnly", "applyLockScreenOnly", "surfaceControlsApplyHiddenMode", "configurePickerLinkedNormalizesToDesktop", "fileDrop", "fileDropUndo", "blockedImportRevealed", "importRevealsAdded", "editorCancel", "editorSave", "editorPreservesNewerEdits", "editorRejectsInvalidDraft", "editorRejectsMissingWallpaper", "playlistFileImport", "importUndo", "playlistExistingAdd", "inspectorSceneInteraction", "inspectorVideoInteraction", "explicitSystemAccent", "systemAccentDefault", "accentSelection", "unknownAccentFallback", "systemAccentReset", "importFacts", "rotatedFacts", "missingFacts", "legacyBackfill", "staleEditPreservesFacts", "unknownColorBackfill", "unknownColorRoundTrip", "blockedDiscover", "tagFiltering", "combinedBrowsing", "clearFiltersPreservesBlockedTags", "clearFilters", "imageImport", "videoImport", "symlinkImportIsIndependent", "videoReady", "videoPlaying", "videoLooped", "videoPaused", "videoResumed", "liveAdjustmentPreservesTime", "liveAdjustmentSpeed", "stillHeld", "stillIgnoresResume", "stillPreservesSource", "sceneStillMode", "desktopStill", "desktopStillSurvivesPause", "playlistPauseStatus", "playlistResumeStatus", "desktopStillPersisted", "desktopStillPreservesSource", "render_image", "render_aurora", "render_cosmos", "render_ocean", "render_ember", "systemWallpaperPreserved", "libraryAssignmentValidated", "nativeDescriptorValidation", "nativeDescriptorValidationRejectsMissing", "nativeCatalogMismatchRejected", "backgroundLaunch", "videoPreviewWindowVisible", "scenePreviewWindowVisible", "scenePreviewReshownWindowVisible", "playlistStart", "playlistNext", "libraryStop", "libraryRoundTrip", "discoverWindow", "windowSnapshot", "videoInformation", "trimmedPlayback", "trimmedExport", "thumbnailExport", "rejectInvalidTrim", "preserveSourceOnExport", "packageRoundTrip", "editorPersistence", "editorWindow", "silentExport", "desktopPlaylistPreservesLockScreen", "desktopStopPreservesLockScreen", "surfaceAssignmentsPersisted"]
             for key in required + ["compactWindow"] where results[key] as? Bool != true { failures.append(key) }
             for (key, value) in results where key.hasPrefix("surfaceControls") && value as? Bool != true { failures.append(key) }
         } catch { failures.append(String(reflecting: error)) }
@@ -1504,7 +1676,9 @@ enum SmokeRunner {
         guard let window = NSApp.windows.first(where: { $0.title == "Flua" }),
               let root = window.contentView else { return false }
         var scrollViews: [NSScrollView] = []
+        var header: NSView?
         func collect(_ view: NSView) {
+            if view.identifier?.rawValue == "FluaLibraryHeader" { header = view }
             if let scrollView = view as? NSScrollView, scrollView.hasVerticalScroller,
                scrollView.bounds.width > 260 {
                 scrollViews.append(scrollView)
@@ -1512,19 +1686,32 @@ enum SmokeRunner {
             for child in view.subviews { collect(child) }
         }
         collect(root)
+        guard let header else { return false }
+        let headerFrame = header.convert(header.bounds, to: nil)
         return scrollViews.count == 2 && scrollViews.allSatisfy { scrollView in
             let frame = scrollView.convert(scrollView.bounds, to: nil)
+            let isLibrary = frame.width > root.bounds.width / 2
+            let expectedTop = isLibrary ? headerFrame.minY : window.frame.height
             guard scrollView.scrollerStyle == NSScroller.preferredScrollerStyle,
-                  abs(frame.minY) < 1, abs(frame.maxY - window.frame.height) < 1 else {
-                print("Scroll view does not span the window: \(frame), window height: \(window.frame.height)")
+                  abs(frame.minY) < 1, abs(frame.maxY - expectedTop) < 1 else {
+                print("Scroll view does not fill its pane: \(frame), expected top: \(expectedTop)")
                 return false
             }
             if let scroller = scrollView.verticalScroller, !scroller.isHidden {
                 let track = scroller.convert(scroller.bounds, to: nil)
-                guard abs(track.minY) < 1, abs(track.maxY - window.frame.height) < 1 else {
-                    print("Scrollbar does not span the window: \(track), window height: \(window.frame.height)")
+                guard abs(track.minY - frame.minY) < 1, abs(track.maxY - frame.maxY) < 1 else {
+                    print("Scrollbar does not fill its scroll view: \(track), scroll view: \(frame)")
                     return false
                 }
+            }
+            if isLibrary {
+                let originalOrigin = scrollView.contentView.bounds.origin
+                scrollView.contentView.scroll(to: NSPoint(x: originalOrigin.x, y: originalOrigin.y + 100))
+                scrollView.reflectScrolledClipView(scrollView.contentView)
+                let pinned = header.convert(header.bounds, to: nil) == headerFrame
+                scrollView.contentView.scroll(to: originalOrigin)
+                scrollView.reflectScrolledClipView(scrollView.contentView)
+                return pinned
             }
             return true
         }
@@ -1719,6 +1906,15 @@ struct InspectorApplyTarget: NSViewRepresentable {
     func makeNSView(context: Context) -> NSView {
         let view = NSView()
         view.identifier = NSUserInterfaceItemIdentifier("FluaInspectorApplyTarget")
+        return view
+    }
+    func updateNSView(_ view: NSView, context: Context) {}
+}
+
+struct LibraryHeaderTarget: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        view.identifier = NSUserInterfaceItemIdentifier("FluaLibraryHeader")
         return view
     }
     func updateNSView(_ view: NSView, context: Context) {}

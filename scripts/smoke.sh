@@ -60,6 +60,7 @@ for shown in (False, True):
     assert result['passed'] is True and result['windowVisible'] is shown, result
     assert result['showWindowOnStartup'] is shown and result['hidesDockIcon'] is False, result
     assert result['fullScreenEligible'] is shown, result
+    assert result['windowControlsVisible'] is shown, result
     assert result['activationPolicy'] == 0, result
 print('PASS: normal startup honors both startup window settings')
 PYTHON
@@ -82,6 +83,6 @@ import json, sys
 result = json.load(open(sys.argv[1]))
 assert result['passed'] is True and result['windowVisible'] is True, result
 assert result['hidesDockIcon'] is True and result['activationPolicy'] == 1, result
-assert result['fullScreenEligible'] is True, result
+assert result['fullScreenEligible'] is True and result['windowControlsVisible'] is True, result
 print('PASS: Hide from Dock preserves fullscreen eligibility')
 PYTHON

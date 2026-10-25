@@ -7,6 +7,7 @@ final class ViewState: ObservableObject {
     @Published var pickerSelected = Set<String>()
     @Published var pickerQuery = ""
     @Published var columnVisibility: NavigationSplitViewVisibility = .all
+    @Published var isFullScreen = false
     @Published var transportHeight: CGFloat = 0
     @Published var creatingPlaylist = false
     @Published var playlistName = ""
@@ -17,6 +18,89 @@ final class ViewState: ObservableObject {
     @Published var draftCategory = ""
     @Published var blockedTagDraft = ""
     @Published var confirmingNativeRemoval = false
+
+    struct FullscreenChrome {
+        weak var window: NSWindow?
+        let separator: NSTitlebarSeparatorStyle
+        let transparent: Bool
+        let background: NSColor
+    }
+    struct FullscreenDecoration {
+        weak var view: NSView?
+        let alpha: CGFloat
+        let hidden: Bool
+    }
+    var fullscreenChrome: [FullscreenChrome] = []
+    var fullscreenDecorations: [FullscreenDecoration] = []
+
+    func restoreFullscreenChrome() {
+        for style in fullscreenChrome {
+            style.window?.titlebarSeparatorStyle = style.separator
+            style.window?.titlebarAppearsTransparent = style.transparent
+            style.window?.backgroundColor = style.background
+        }
+        for decoration in fullscreenDecorations {
+            decoration.view?.alphaValue = decoration.alpha
+            decoration.view?.isHidden = decoration.hidden
+        }
+        fullscreenChrome.removeAll()
+        fullscreenDecorations.removeAll()
+    }
+
+    @MainActor func fullscreenColumns(in window: NSWindow) -> [(CGFloat, CGFloat)] {
+        var columnEdges: Set<CGFloat> = [0, window.frame.width]
+        if let content = window.contentView {
+            func collectColumns(_ view: NSView) {
+                if let split = view as? NSSplitView, split.isVertical {
+                    for pane in split.arrangedSubviews where !pane.isHiddenOrHasHiddenAncestor {
+                        let frame = pane.convert(pane.bounds, to: content)
+                        for edge in [frame.minX, frame.maxX] where edge >= 0 && edge <= content.bounds.width {
+                            columnEdges.insert(edge)
+                        }
+                    }
+                }
+                view.subviews.forEach(collectColumns)
+            }
+            collectColumns(content)
+        }
+        // Split content can underlap adjacent panes, so use its edges to recover the columns.
+        let edges = columnEdges.sorted()
+        return Array(zip(edges, edges.dropFirst()))
+    }
+
+    @MainActor func hideFullscreenDecorations(_ view: NSView, in root: NSView, bottom: CGFloat,
+                                              height: CGFloat, columns: [(CGFloat, CGFloat)]) {
+        func containsMaterial(_ view: NSView) -> Bool {
+            view is NSVisualEffectView || view.subviews.contains(where: containsMaterial)
+        }
+        func containsControl(_ view: NSView) -> Bool {
+            view is NSControl || view.accessibilityRole() == .toolbar || view.subviews.contains(where: containsControl)
+        }
+        let frame = view.convert(view.bounds, to: root)
+        let atBottom = root.isFlipped ? abs(frame.maxY - bottom) < 1 : abs(frame.minY - bottom) < 1
+        let baseline = !(view is NSControl) && view.subviews.isEmpty
+            && frame.height > 0 && frame.height <= 1
+        let sidebarGlass = !(view is NSControl) && view.subviews.contains {
+            ($0 as? NSGlassEffectView).map { $0.contentView == nil } == true
+        } && abs(frame.height - height) < 1
+            && abs(frame.minX - root.bounds.minX) < 1 && frame.width < root.bounds.width / 2
+        let columnBackdrop = abs(frame.height - height) < 1 && columns.contains {
+            abs($0.0 - frame.minX) < 1 && abs($0.1 - frame.maxX) < 1
+        } && containsMaterial(view) && !containsControl(view)
+        let backdrop = sidebarGlass || columnBackdrop
+        // Remove decorative titlebar materials and baselines without touching controls.
+        if frame.width > 1, atBottom, baseline || backdrop,
+           backdrop ? !view.isHidden : view.alphaValue > 0 {
+            if !fullscreenDecorations.contains(where: { $0.view === view }) {
+                fullscreenDecorations.append(.init(view: view, alpha: view.alphaValue, hidden: view.isHidden))
+            }
+            if backdrop { view.isHidden = true }
+            else { view.alphaValue = 0 }
+        }
+        view.subviews.forEach {
+            hideFullscreenDecorations($0, in: root, bottom: bottom, height: height, columns: columns)
+        }
+    }
 }
 
 
@@ -112,6 +196,36 @@ struct FluaGlassTextFieldStyle: TextFieldStyle {
         configuration.textFieldStyle(.plain).multilineTextAlignment(.leading)
             .padding(.horizontal, 10).padding(.vertical, 7)
             .fluaGlass(clear: true, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+}
+
+private struct ToolbarWindowObserver: NSViewRepresentable {
+    let prepare: (NSWindow) -> Void
+    func makeNSView(context: Context) -> Anchor { Anchor(prepare: prepare) }
+    func updateNSView(_ nsView: Anchor, context: Context) { nsView.prepare = prepare }
+
+    final class Anchor: NSView {
+        var prepare: (NSWindow) -> Void
+        init(prepare: @escaping (NSWindow) -> Void) {
+            self.prepare = prepare
+            super.init(frame: .zero)
+        }
+        required init?(coder: NSCoder) { fatalError("init(coder:) is unavailable") }
+        override var canBecomeKeyView: Bool { false }
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            if let window {
+                prepare(window)
+                SmokeRunner.observeToolbarWindow(window, phase: "attached")
+            }
+        }
+        override func viewWillDraw() {
+            if let window {
+                prepare(window)
+                SmokeRunner.observeToolbarWindow(window, phase: "draw")
+            }
+            super.viewWillDraw()
+        }
     }
 }
 
@@ -411,10 +525,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         Window("Flua", id: "library") {
             LibraryView().environmentObject(library)
+                .toolbar(removing: .title)
+                .windowToolbarFullScreenVisibility(.visible)
                 .frame(minWidth: 700, minHeight: 440)
                 .windowFullScreenBehavior(ProcessInfo.processInfo.arguments.contains("--smoke-test") || ProcessInfo.processInfo.arguments.contains("--preview-smoke") ? .disabled : .enabled)
         }
         .defaultSize(width: 1320, height: 840)
+        .restorationBehavior(ProcessInfo.processInfo.arguments.contains("--fullscreen-chrome") ? .disabled : .automatic)
         // Smoke tests exercise explicit launch handling; background startup leaves the window closed.
         .defaultLaunchBehavior(ProcessInfo.processInfo.arguments.contains("--smoke-test") || ProcessInfo.processInfo.arguments.contains("--preview-smoke") || !library.state.showWindowOnStartup ? .suppressed : .presented)
         .windowToolbarStyle(.unified)
@@ -473,47 +590,54 @@ struct LibraryView: View {
             } detail: {
                 if library.section == "settings" {
                     VStack(alignment: .leading, spacing: 0) {
-                        Text("Settings")
-                            .font(.system(size: 32, weight: .bold, design: .serif))
-                            .padding(.horizontal, 24)
-                            .padding(.top, 8)
+                        HStack(spacing: 12) {
+                            Text("Settings")
+                                .font(.system(size: 32, weight: .bold, design: .serif))
+                            Spacer()
+                        }
+                        .padding(.horizontal, 24)
+                        .padding(.top, 24)
                         SettingsView()
                     }
                     .frame(maxWidth: 760)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
                     GeometryReader { geometry in
-                        ScrollViewReader { proxy in
-                        ScrollView {
-                            Group {
-                                libraryContent(width: geometry.size.width)
-                            }
-                            .padding(.top, geometry.safeAreaInsets.top)
-                            .padding(.bottom, ui.transportHeight)
-                        }
-                        .ignoresSafeArea(.container, edges: .top)
-                        .overlay(alignment: .bottom) {
-                            transport(stackedControls: geometry.size.width < 380)
-                                .frame(maxWidth: .infinity)
-                                .fluaGlass(in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-                                .padding(12)
-                                .padding(.trailing, NSScroller.scrollerWidth(for: .regular, scrollerStyle: NSScroller.preferredScrollerStyle))
-                                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: {
-                                    if abs(ui.transportHeight - $0) > 0.5 { ui.transportHeight = $0 }
+                        let isCompact = geometry.size.width < 650
+                        VStack(spacing: 0) {
+                            pageHeader(compact: isCompact)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.horizontal, 24)
+                                .padding(.top, 24)
+                                .background(LibraryHeaderTarget().allowsHitTesting(false))
+                            ScrollViewReader { proxy in
+                                ScrollView {
+                                    libraryContent(width: geometry.size.width)
+                                        .padding(.bottom, ui.transportHeight)
                                 }
-                        }
-                        .onChange(of: library.lastImportIDs) { _, ids in
-                            if !ids.isEmpty {
-                                DispatchQueue.main.async { if let id = library.selection { proxy.scrollTo(id, anchor: .top) } }
+                                .overlay(alignment: .bottom) {
+                                    transport(stackedControls: geometry.size.width < 380)
+                                        .frame(maxWidth: .infinity)
+                                        .fluaGlass(in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                                        .padding(12)
+                                        .padding(.trailing, NSScroller.scrollerWidth(for: .regular, scrollerStyle: NSScroller.preferredScrollerStyle))
+                                        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: {
+                                            if abs(ui.transportHeight - $0) > 0.5 { ui.transportHeight = $0 }
+                                        }
+                                }
+                                .onChange(of: library.lastImportIDs) { _, ids in
+                                    if !ids.isEmpty {
+                                        DispatchQueue.main.async { if let id = library.selection { proxy.scrollTo(id, anchor: .top) } }
+                                    }
+                                }
                             }
-                        }
                         }
                     }
                     .navigationSplitViewColumnWidth(min: 280, ideal: 800)
                 }
             }
             .inspector(isPresented: .constant(library.section != "settings" && windowGeometry.size.width >= 1000)) {
-                InspectorView().inspectorColumnWidth(min: 220, ideal: 280, max: 360)
+                InspectorView(fullScreen: ui.isFullScreen).inspectorColumnWidth(min: 220, ideal: 280, max: 360)
             }
             // Keep the inspector from starting a separate transition after a window resize.
             .transaction(value: windowGeometry.size.width) { transaction in
@@ -523,22 +647,69 @@ struct LibraryView: View {
         .sheet(isPresented: Binding(get: { ui.playlistPicker != nil }, set: { if !$0 { ui.playlistPicker = nil } })) {
             if let id = ui.playlistPicker { PlaylistWallpaperPicker(playlistID: id).environmentObject(library) }
         }
-        .toolbar(removing: .title)
         .toolbar {
             ToolbarItem(placement: .navigation) {
-                Button {
-                    withAnimation { ui.columnVisibility = ui.columnVisibility == .detailOnly ? .all : .detailOnly }
-                } label: {
-                    Image(systemName: "sidebar.left")
-                }
-                .fluaGlassButton()
-                .help(ui.columnVisibility == .detailOnly ? "Show Sidebar" : "Hide Sidebar")
-                .accessibilityLabel(ui.columnVisibility == .detailOnly ? "Show Sidebar" : "Hide Sidebar")
+                sidebarToggle
             }
             .sharedBackgroundVisibility(.hidden)
         }
-        .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
+        .toolbarBackground(Color(nsColor: .windowBackgroundColor), for: .windowToolbar)
+        .toolbarBackgroundVisibility(ui.isFullScreen ? .visible : .hidden, for: .windowToolbar)
+        .scrollEdgeEffectHidden(ui.isFullScreen, for: .top)
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.willEnterFullScreenNotification)
+            .merge(with: NotificationCenter.default.publisher(for: NSWindow.didEnterFullScreenNotification),
+                   NotificationCenter.default.publisher(for: NSWindow.didExitFullScreenNotification),
+                   NotificationCenter.default.publisher(for: NSWindow.didResizeNotification),
+                   NotificationCenter.default.publisher(for: NSWindow.didUpdateNotification))) { notification in
+            guard let changedWindow = notification.object as? NSWindow,
+                  let window = changedWindow.identifier?.rawValue == "library" ? changedWindow : changedWindow.parent,
+                  window.identifier?.rawValue == "library" else { return }
+            let updating = notification.name == NSWindow.didUpdateNotification || notification.name == NSWindow.didResizeNotification
+            if updating && !ui.isFullScreen { return }
+            if !updating { ui.isFullScreen = notification.name != NSWindow.didExitFullScreenNotification }
+            let fullScreen = ui.isFullScreen
+            let separator: NSTitlebarSeparatorStyle = fullScreen ? .none : .automatic
+            if window.titlebarSeparatorStyle != separator { window.titlebarSeparatorStyle = separator }
+            if fullScreen {
+                ui.fullscreenChrome.removeAll { $0.window == nil }
+                ui.fullscreenDecorations.removeAll { $0.view == nil }
+                let columns = ui.fullscreenColumns(in: window)
+                // Style the source titlebar before AppKit takes its transition snapshot.
+                if let root = window.contentView?.superview {
+                    let bottom = root.convert(NSPoint(x: 0, y: window.contentLayoutRect.maxY), from: nil).y
+                    let top = root.isFlipped ? root.bounds.minY : root.bounds.maxY
+                    ui.hideFullscreenDecorations(root, in: root, bottom: bottom, height: abs(top - bottom), columns: columns)
+                }
+                // Native fullscreen toolbar windows keep their own background and separator.
+                for chrome in window.childWindows ?? [] where !chrome.isSheet
+                    && abs(chrome.frame.minX - window.frame.minX) < 1
+                    && abs(chrome.frame.width - window.frame.width) < 1
+                    && abs(chrome.frame.maxY - window.frame.maxY) < 1
+                    && chrome.frame.height < window.frame.height {
+                    if !ui.fullscreenChrome.contains(where: { $0.window === chrome }) {
+                        ui.fullscreenChrome.append(.init(window: chrome, separator: chrome.titlebarSeparatorStyle,
+                            transparent: chrome.titlebarAppearsTransparent, background: chrome.backgroundColor))
+                    }
+                    if chrome.titlebarSeparatorStyle != .none { chrome.titlebarSeparatorStyle = .none }
+                    if !chrome.titlebarAppearsTransparent { chrome.titlebarAppearsTransparent = true }
+                    if chrome.backgroundColor != .windowBackgroundColor { chrome.backgroundColor = .windowBackgroundColor }
+                    if let root = chrome.contentView {
+                        let bottom = root.isFlipped ? root.bounds.maxY : root.bounds.minY
+                        ui.hideFullscreenDecorations(root, in: root, bottom: bottom, height: root.bounds.height, columns: columns)
+                    }
+                }
+            } else {
+                ui.restoreFullscreenChrome()
+            }
+        }
+        .onDisappear {
+            ui.isFullScreen = false
+            ui.restoreFullscreenChrome()
+        }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background {
+            if ui.isFullScreen { Color(nsColor: .windowBackgroundColor).ignoresSafeArea() }
+        }
         .fluaBackdrop(accent: library.accent)
         .fluaClearInitialFocus()
         .toggleStyle(.switch)
@@ -576,7 +747,6 @@ struct LibraryView: View {
     }
     private func libraryContent(width: CGFloat) -> some View {
         VStack(alignment: .leading, spacing: 24) {
-            pageHeader(compact: width < 650)
             browseToolbar(compact: width < 650)
             if let notice = library.importNotice {
                 HStack(spacing: 8) {
@@ -598,12 +768,37 @@ struct LibraryView: View {
             }
         }.padding(24)
     }
+    private var sidebarToggle: some View {
+        Button {
+            withAnimation { ui.columnVisibility = ui.columnVisibility == .detailOnly ? .all : .detailOnly }
+        } label: {
+            Image(systemName: "sidebar.left")
+        }
+        .fluaGlassButton()
+        .help(ui.columnVisibility == .detailOnly ? "Show Sidebar" : "Hide Sidebar")
+        .accessibilityLabel(ui.columnVisibility == .detailOnly ? "Show Sidebar" : "Hide Sidebar")
+        .background(ToolbarWindowObserver { window in
+            guard ui.isFullScreen,
+                  let libraryWindow = NSApp.windows.first(where: { $0.identifier?.rawValue == "library" }),
+                  window !== libraryWindow, !window.isSheet,
+                  window.frame.height < libraryWindow.frame.height,
+                  abs(window.frame.width - libraryWindow.frame.width) < 1,
+                  let root = window.contentView else { return }
+            // AppKit can draw this window before attaching it to the library window.
+            let bottom = root.isFlipped ? root.bounds.maxY : root.bounds.minY
+            ui.hideFullscreenDecorations(root, in: root, bottom: bottom, height: root.bounds.height,
+                                         columns: ui.fullscreenColumns(in: libraryWindow))
+        }.allowsHitTesting(false))
+    }
     private func pageHeader(compact: Bool) -> some View {
-        let layout = compact || library.section.hasPrefix("playlist:") ? AnyLayout(VStackLayout(alignment: .leading, spacing: 12)) : AnyLayout(HStackLayout(alignment: .firstTextBaseline, spacing: 8))
+        let stacked = compact || library.section.hasPrefix("playlist:")
+        let layout = stacked ? AnyLayout(VStackLayout(alignment: .leading, spacing: 12)) : AnyLayout(HStackLayout(alignment: .firstTextBaseline, spacing: 8))
         return layout {
-            Text(library.sectionTitle).font(.system(size: compact ? 26 : 32, weight: .bold, design: .serif))
-                .lineLimit(1)
-            if !compact { Spacer(minLength: 8) }
+            HStack(spacing: 12) {
+                Text(library.sectionTitle).font(.system(size: compact ? 26 : 32, weight: .bold, design: .serif))
+                    .lineLimit(1)
+            }
+            if !stacked { Spacer(minLength: 8) }
             pageHeaderActions(compact: compact)
         }
     }
@@ -732,7 +927,10 @@ struct LibraryView: View {
         }
         .listStyle(.sidebar)
         .scrollContentBackground(.hidden)
-        .background(.ultraThinMaterial)
+        .background {
+            if ui.isFullScreen { Color(nsColor: .windowBackgroundColor).ignoresSafeArea() }
+            else { Rectangle().fill(.ultraThinMaterial).ignoresSafeArea() }
+        }
         .tint(library.accent)
         .safeAreaInset(edge: .top, spacing: 0) { sidebarHeader }
         .safeAreaInset(edge: .bottom, spacing: 0) { sidebarFooter }
@@ -918,14 +1116,18 @@ struct SurfacePreview: NSViewRepresentable {
 }
 
 struct InspectorView: View {
+    var fullScreen = false
     @StateObject private var ui = ViewState()
     @EnvironmentObject var library: Library
     var body: some View {
         GeometryReader { _ in
             ScrollView { content }
         }
-        .ignoresSafeArea(.container, edges: .top)
-        .background(.ultraThinMaterial)
+        .ignoresSafeArea(.container, edges: fullScreen ? [] : .top)
+        .background {
+            if fullScreen { Color(nsColor: .windowBackgroundColor).ignoresSafeArea() }
+            else { Rectangle().fill(.ultraThinMaterial).ignoresSafeArea() }
+        }
     }
     private var content: some View {
         Group {

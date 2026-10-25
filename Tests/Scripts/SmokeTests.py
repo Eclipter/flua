@@ -11,6 +11,7 @@ required_checks = next(line.strip() for line in smoke_runner.splitlines() if lin
 aggregation = next(line.strip() for line in smoke_runner.splitlines() if line.strip().startswith('for key in required +'))
 passed_assignment = next(line.strip() for line in smoke_runner.splitlines() if line.strip() == 'results["passed"] = failures.isEmpty')
 regression_checks = [
+    'libraryWindowChrome',
     'instantInspectorResize',
     'desktopPlaylistPreservesLockScreen',
     'desktopStopPreservesLockScreen',
@@ -80,7 +81,7 @@ if '--startup-smoke' in sys.argv:
         'passed': True, 'windowVisible': shown, 'showWindowOnStartup': shown,
         'hidesDockIcon': hidden, 'activationPolicy': 1 if hidden else 0,
         'fullScreenPrimary': shown, 'fullScreenNone': False,
-        'fullScreenEligible': shown,
+        'fullScreenEligible': shown, 'windowControlsVisible': shown,
     }))
 PYTHON
 chmod +x "$FLUA_APP_PATH/Contents/MacOS/Flua"
