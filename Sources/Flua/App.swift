@@ -238,82 +238,8 @@ private struct ToolbarWindowObserver: NSViewRepresentable {
 }
 
 struct ClearInitialFocus: NSViewRepresentable {
-    func makeNSView(context: Context) -> NSView { FocusClearView() }
+    func makeNSView(context: Context) -> NSView { FocusClearView { SmokeRunner.configureVerificationWindow($0) } }
     func updateNSView(_ nsView: NSView, context: Context) {}
-}
-
-private final class FocusClearView: NSView {
-    private var closeObserver: Any?
-    private var becomeKeyObserver: Any?
-    private var mouseMonitor: Any?
-
-    override var canBecomeKeyView: Bool { false }
-    override var acceptsFirstResponder: Bool { false }
-
-    override func viewDidMoveToWindow() {
-        super.viewDidMoveToWindow()
-        cleanObservers()
-        guard let window = self.window else { return }
-        SmokeRunner.configureVerificationWindow(window)
-        clearFocus(in: window)
-
-        becomeKeyObserver = NotificationCenter.default.addObserver(
-            forName: NSWindow.didBecomeKeyNotification,
-            object: window,
-            queue: .main
-        ) { [weak self, weak window] _ in
-            guard let self, let window else { return }
-            self.clearFocus(in: window)
-        }
-
-        closeObserver = NotificationCenter.default.addObserver(
-            forName: NSWindow.willCloseNotification,
-            object: window,
-            queue: .main
-        ) { [weak window] _ in
-            window?.makeFirstResponder(nil)
-        }
-
-        mouseMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown]) { [weak self] event in
-            if let window = self?.window, event.window == window {
-                DispatchQueue.main.async { [weak window] in
-                    guard let window else { return }
-                    if !(window.firstResponder is NSTextView) {
-                        window.makeFirstResponder(nil)
-                    }
-                }
-            }
-            return event
-        }
-    }
-
-    private func clearFocus(in window: NSWindow) {
-        DispatchQueue.main.async { [weak window] in
-            guard let window else { return }
-            if !(window.firstResponder is NSTextView) {
-                window.makeFirstResponder(nil)
-            }
-        }
-    }
-
-    private func cleanObservers() {
-        if let closeObserver {
-            NotificationCenter.default.removeObserver(closeObserver)
-            self.closeObserver = nil
-        }
-        if let becomeKeyObserver {
-            NotificationCenter.default.removeObserver(becomeKeyObserver)
-            self.becomeKeyObserver = nil
-        }
-        if let mouseMonitor {
-            NSEvent.removeMonitor(mouseMonitor)
-            self.mouseMonitor = nil
-        }
-    }
-
-    deinit {
-        cleanObservers()
-    }
 }
 
 struct FluaSegmentedPicker<Value: Hashable>: View {
@@ -328,7 +254,7 @@ struct FluaSegmentedPicker<Value: Hashable>: View {
         LabeledContent {
             HStack(spacing: 2) {
                 ForEach(choices, id: \.1) { label, value in
-                    let isTabTarget = (selection == value) || (!choices.contains(where: { $0.1 == selection }) && choices.first?.1 == value)
+                    let isTabTarget = segmentedPickerTabTarget(selection: selection, choices: choices) == value
                     Button {
                         selection = value
                         if NSApp.currentEvent?.type == .keyDown || NSApp.currentEvent?.type == .keyUp {

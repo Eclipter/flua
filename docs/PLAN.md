@@ -13,10 +13,6 @@ Use disposable libraries and matching catalog builds. Follow the [integration an
 
 Update capability claims only after the relevant checks pass. Keep untested OS versions and hardware explicitly unverified.
 
-## Correctness and safe verification
-
-- **Medium:** Replace the duplicate `FocusClearView` and picker implementation in [FocusTests.swift](../Tests/FluaTests/FocusTests.swift) with coverage of production code, so production regressions cannot pass because the test compiles only its own copy.
-
 ## Performance and provider behavior
 
 - **Medium:** Avoid full catalog serialization for unchanged or favorite-only saves, and move expensive changed-catalog serialization off the UI thread with serialized writes. A synthetic 1,000-entry catalog containing a real Flua thumbnail measured 54.6 MB; repeated release-optimized saves took 143–151 ms. Verify unchanged catalog contents for favorite-only edits and responsiveness at a representative large size. See [Library.save](../Sources/Flua/Library.swift) and [LibraryDisk.saveCatalog](../Sources/Flua/Model.swift).

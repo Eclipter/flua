@@ -19,7 +19,7 @@ swiftc -target arm64-apple-macosx27.0 Sources/Flua/Model.swift Sources/Flua/Nati
 build/tests/native-wallpaper-tests
 swiftc -target arm64-apple-macosx27.0 Sources/Flua/AccentColor.swift Tests/FluaTests/AccentColorTests.swift -o build/tests/accent-color-tests
 build/tests/accent-color-tests
-swiftc -parse-as-library -target arm64-apple-macosx27.0 "$PWD/Tests/FluaTests/FocusTests.swift" -o build/tests/focus-tests
+swiftc -parse-as-library -target arm64-apple-macosx27.0 Sources/Flua/Focus.swift "$PWD/Tests/FluaTests/FocusTests.swift" -o build/tests/focus-tests
 build/tests/focus-tests
 swiftc -parse-as-library -target arm64-apple-macosx27.0 Tests/FluaTests/InstallerTests.swift -o build/tests/installer-tests
 build/tests/installer-tests

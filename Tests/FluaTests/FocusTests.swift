@@ -1,80 +1,6 @@
 import AppKit
-import SwiftUI
 
 @main struct FocusTests {
-    final class FocusClearView: NSView {
-        private var closeObserver: Any?
-        private var becomeKeyObserver: Any?
-        private var mouseMonitor: Any?
-
-        override var canBecomeKeyView: Bool { false }
-        override var acceptsFirstResponder: Bool { false }
-
-        override func viewDidMoveToWindow() {
-            super.viewDidMoveToWindow()
-            cleanObservers()
-            guard let window = self.window else { return }
-            clearFocus(in: window)
-
-            becomeKeyObserver = NotificationCenter.default.addObserver(
-                forName: NSWindow.didBecomeKeyNotification,
-                object: window,
-                queue: .main
-            ) { [weak self, weak window] _ in
-                guard let self, let window else { return }
-                self.clearFocus(in: window)
-            }
-
-            closeObserver = NotificationCenter.default.addObserver(
-                forName: NSWindow.willCloseNotification,
-                object: window,
-                queue: .main
-            ) { [weak window] _ in
-                window?.makeFirstResponder(nil)
-            }
-
-            mouseMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown]) { [weak self] event in
-                if let window = self?.window, event.window == window {
-                    DispatchQueue.main.async { [weak window] in
-                        guard let window else { return }
-                        if !(window.firstResponder is NSTextView) {
-                            window.makeFirstResponder(nil)
-                        }
-                    }
-                }
-                return event
-            }
-        }
-
-        private func clearFocus(in window: NSWindow) {
-            DispatchQueue.main.async { [weak window] in
-                guard let window else { return }
-                if !(window.firstResponder is NSTextView) {
-                    window.makeFirstResponder(nil)
-                }
-            }
-        }
-
-        private func cleanObservers() {
-            if let closeObserver {
-                NotificationCenter.default.removeObserver(closeObserver)
-                self.closeObserver = nil
-            }
-            if let becomeKeyObserver {
-                NotificationCenter.default.removeObserver(becomeKeyObserver)
-                self.becomeKeyObserver = nil
-            }
-            if let mouseMonitor {
-                NSEvent.removeMonitor(mouseMonitor)
-                self.mouseMonitor = nil
-            }
-        }
-
-        deinit {
-            cleanObservers()
-        }
-    }
-
     static func main() throws {
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
         let helper = root.appendingPathComponent("scripts/system-test-lock.py")
@@ -96,14 +22,18 @@ import SwiftUI
 
         // 1. Verify segmented picker single tab target logic
         let choices = [("All", "all"), ("Animated", "animated"), ("Still", "still")]
-        func isTabTarget(selection: String, value: String) -> Bool {
-            (selection == value) || (!choices.contains(where: { $0.1 == selection }) && choices.first?.1 == value)
+        for selection in ["all", "animated", "still"] {
+            precondition(segmentedPickerTabTarget(selection: selection, choices: choices) == selection)
         }
-        precondition(isTabTarget(selection: "animated", value: "animated") == true)
-        precondition(isTabTarget(selection: "animated", value: "all") == false)
-        precondition(isTabTarget(selection: "animated", value: "still") == false)
-        precondition(isTabTarget(selection: "nonexistent", value: "all") == true)
-        precondition(isTabTarget(selection: "nonexistent", value: "animated") == false)
+        precondition(segmentedPickerTabTarget(selection: "nonexistent", choices: choices) == "all")
+        precondition(segmentedPickerTabTarget(selection: "all", choices: []) == nil)
+
+        let optionalChoices: [(String, String?)] = [("Mixed", nil), ("Animated", "animated"), ("Still", "still")]
+        let mixedTarget = segmentedPickerTabTarget(selection: String?.none, choices: optionalChoices)
+        precondition(mixedTarget == .some(nil), "A selected nil value must remain a tab target")
+        precondition(optionalChoices.filter { mixedTarget == $0.1 }.map(\.0) == ["Mixed"])
+        let animatedTarget = segmentedPickerTabTarget(selection: String?.some("animated"), choices: optionalChoices)
+        precondition(optionalChoices.filter { animatedTarget == $0.1 }.map(\.0) == ["Animated"])
 
         final class FocusableControl: NSControl {
             override var canBecomeKeyView: Bool { true }
@@ -112,7 +42,8 @@ import SwiftUI
 
         // 2. Verify FocusClearView clears initial focus on window open
         let window = NSWindow(contentRect: NSRect(x: 100, y: 100, width: 400, height: 300), styleMask: [.titled, .closable], backing: .buffered, defer: false)
-        let clearView = FocusClearView()
+        weak var configuredWindow: NSWindow?
+        let clearView = FocusClearView { configuredWindow = $0 }
         let content = NSView(frame: NSRect(x: 0, y: 0, width: 400, height: 300))
         let control = FocusableControl(frame: NSRect(x: 20, y: 200, width: 120, height: 30))
         let textView = NSTextView(frame: NSRect(x: 20, y: 100, width: 120, height: 30))
@@ -120,6 +51,7 @@ import SwiftUI
         content.addSubview(control)
         content.addSubview(textView)
         window.contentView = content
+        precondition(configuredWindow === window, "Attaching the view must configure its window")
         window.recalculateKeyViewLoop()
 
         window.makeKeyAndOrderFront(nil)
