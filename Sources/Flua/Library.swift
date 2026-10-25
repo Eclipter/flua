@@ -252,6 +252,13 @@ final class Library: ObservableObject {
     }
     func stop() {
         guard !nativeSetupBusy else { return }
+        if systemPlaybackEnabled {
+            guard NativeWallpaper.available else { error = NativeWallpaper.explanation; return }
+            guard NativeWallpaper.catalogURL.resolvingSymlinksInPath() == disk.catalog.resolvingSymlinksInPath() else {
+                error = "This build uses a different library. Rebuild it with FLUA_CATALOG_PATH set to this library’s catalog.json."
+                return
+            }
+        }
         let ids = playbackTargets.map(displayID)
         pendingNativeAssignmentDisplays.subtract(ids)
         if nativeRoutingAvailable {

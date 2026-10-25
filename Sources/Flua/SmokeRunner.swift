@@ -795,13 +795,20 @@ enum SmokeRunner {
                 let fallback = try Library(root: root)
                 await pause(0.2)
                 results["nativeUnavailableLaunchFallback"] = fallback.state.nativePlayback[key] == true
-                fallback.stop()
+                let fallbackActivity = fallback.activity
+                let catalogMismatch = NativeWallpaper.available
+                    && NativeWallpaper.catalogURL.resolvingSymlinksInPath() != fallback.disk.catalog.resolvingSymlinksInPath()
+                if catalogMismatch { fallback.stop() }
                 let stoppedFallback = try disk.load()
-                results["nativeFallbackStopPersists"] = fallback.state.nativePlayback[key] == false
+                results["nativeCatalogMismatchStopPreservesIntent"] = catalogMismatch
+                    && fallback.state.nativePlayback[key] == true
                     && fallback.state.displays[key]?.desktop.wallpaperID == "aurora"
-                    && stoppedFallback.nativePlayback[key] == false
+                    && stoppedFallback.nativePlayback[key] == true
+                    && stoppedFallback.displays[key]?.desktop.wallpaperID == "aurora"
+                    && fallback.error?.contains("This build uses a different library") == true
+                    && fallback.activity == fallbackActivity
                 fallback.tick?.invalidate()
-                for check in ["nativeStoppedSurvivesLaunch", "nativeUnavailableLaunchFallback", "nativeFallbackStopPersists"] {
+                for check in ["nativeStoppedSurvivesLaunch", "nativeUnavailableLaunchFallback", "nativeCatalogMismatchStopPreservesIntent"] {
                     if results[check] as? Bool != true { failures.append(check) }
                 }
             }

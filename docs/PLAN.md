@@ -15,7 +15,6 @@ Update capability claims only after the relevant checks pass. Keep untested OS v
 
 ## Correctness and safe verification
 
-- **Medium:** Preserve native playback intent and report failure when [Library.stop](../Sources/Flua/Library.swift) cannot call the system stop operation because the provider is unavailable or the catalog mismatches. Cover both cases and keep isolated-verification behavior safe.
 - **Medium:** Include `--preview-smoke` in [AppContext verification isolation](../Sources/Flua/App.swift). Add regressions for missing and overlapping `--data-dir` arguments before library access, and ensure verification disables native operations.
 - **Medium:** Replace the duplicate `FocusClearView` and picker implementation in [FocusTests.swift](../Tests/FluaTests/FocusTests.swift) with coverage of production code, so production regressions cannot pass because the test compiles only its own copy.
 

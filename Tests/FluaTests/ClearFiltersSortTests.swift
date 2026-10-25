@@ -63,6 +63,58 @@ extension Bundle {
     }
 
     @MainActor
+    static func stopRoutingFailureTests(_ root: URL) throws {
+        let files = FileManager.default
+        let testBundle = URL(fileURLWithPath: files.currentDirectoryPath).appendingPathComponent("build/tests", isDirectory: true)
+        precondition(Bundle.main.bundleURL.resolvingSymlinksInPath() == testBundle.resolvingSymlinksInPath(),
+            "Stop routing fixtures must stay inside this worktree’s standalone test directory")
+        let contents = Bundle.main.bundleURL.appendingPathComponent("Contents", isDirectory: true)
+        precondition(!files.fileExists(atPath: contents.path), "Stop routing fixtures require a standalone test bundle")
+        defer { try? files.removeItem(at: contents) }
+        let library = try Library(root: root)
+        library.tick?.invalidate()
+        let ids = library.screens.map(displayID)
+        precondition(!ids.isEmpty, "Stop routing regression requires a connected display")
+        for id in ids {
+            library.state.assign("aurora", display: id)
+            library.state.nativePlayback[id] = true
+        }
+        try library.disk.save(library.state)
+        let before = library.state
+        let saved = try Data(contentsOf: library.disk.catalog)
+        let activity = library.activity
+        precondition(!NativeWallpaper.available)
+        library.stop()
+        precondition(library.error == NativeWallpaper.explanation, "Unavailable provider must report Stop failure")
+        precondition(library.state.displays == before.displays && library.state.nativePlayback == before.nativePlayback)
+        precondition(library.activity == activity, "Failed Stop must not report success")
+        let savedAfterUnavailable = try Data(contentsOf: library.disk.catalog)
+        precondition(savedAfterUnavailable == saved)
+
+        try files.createDirectory(at: NativeWallpaper.extensionURL, withIntermediateDirectories: true)
+        try files.createDirectory(at: NativeWallpaper.guardURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data().write(to: NativeWallpaper.guardURL)
+        try files.setAttributes([.posixPermissions: 0o700], ofItemAtPath: NativeWallpaper.guardURL.path)
+        precondition(NativeWallpaper.available, "Catalog mismatch regression requires an available provider fixture")
+        precondition(NativeWallpaper.catalogURL.resolvingSymlinksInPath() != library.disk.catalog.resolvingSymlinksInPath())
+        library.error = nil
+        library.stop()
+        precondition(library.error?.contains("different library") == true, "Mismatched catalog must report Stop failure")
+        precondition(library.state.displays == before.displays && library.state.nativePlayback == before.nativePlayback)
+        precondition(library.activity == activity)
+        let savedAfterMismatch = try Data(contentsOf: library.disk.catalog)
+        precondition(savedAfterMismatch == saved)
+
+        let isolated = try Library(root: root, systemPlaybackEnabled: false)
+        isolated.tick?.invalidate()
+        isolated.stop()
+        precondition(isolated.error == nil, "Isolated Stop must bypass native routing safely")
+        precondition(ids.allSatisfy { isolated.state.nativePlayback[$0] == false })
+        precondition(isolated.activity.contains("stopped"))
+        print("PASS: Stop preserves playback intent on unavailable providers and catalog mismatches; isolated Stop stays local")
+    }
+
+    @MainActor
     static func main() async throws {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("FluaClearFiltersSortTest-" + UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: dir) }
@@ -72,6 +124,8 @@ extension Bundle {
         try saveCommitTests(dir.appendingPathComponent("save-commit", isDirectory: true))
         try await importImageDecoderTests(dir.appendingPathComponent("image-import", isDirectory: true))
         try await importReferenceMovieTests(dir.appendingPathComponent("video-import", isDirectory: true))
+
+        try stopRoutingFailureTests(dir.appendingPathComponent("stop-routing", isDirectory: true))
 
         let library = try Library(root: root, systemPlaybackEnabled: false)
         let originalState = library.state
