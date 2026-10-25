@@ -2,6 +2,23 @@
 
 Current capabilities and limitations are listed in [FEATURES.md](FEATURES.md). This plan contains only unresolved implementation and validation work. Remove completed tasks instead of keeping checked entries; record verified capabilities and evidence in FEATURES.md and the relevant documentation. Community features, profiles, network services and third-party runtime dependencies are outside its scope.
 
+## Audit follow-up
+
+### Must fix
+
+- Audit 1 (High): In `ScenePackage.swift`, enforce actual per-file and total output limits during ZIP extraction instead of trusting declared sizes; verify with false-size archives that extraction stops within both limits.
+- Audit 2 (Medium): In `NativeWallpaperStore.swift`, preserve untargeted displays' inherited choices when stopping one display; verify deterministic sparse-store behavior and, when suitable hardware is available, multi-display behavior.
+- Audit 3 (Medium): In `Library.swift`, reject movies with external video references or copy them into a self-contained form; verify the imported copy still plays after the original source is moved.
+- Audit 4 (Medium): In `install.sh`, validate the app executable, bundle metadata, and signature before replacing an installation; verify an invalid bundle leaves the previous installation intact.
+- Audit 5 (Medium): In `Editor.swift`, propagate library save failures and keep the editor draft open; verify with an injected write failure.
+- Audit 6 (Medium): In `App.swift`, require an isolated `--data-dir` and disable native operations for accessibility verification; verify with disposable fixtures and confirm the real Flua support library is never opened or modified.
+- Audit 7 (Low): In `Editor.swift`, stage image exports and replace an existing destination only after save-panel consent; verify existing destinations, cancellation, and source preservation.
+
+### Should fix
+
+- Audit 8 (Medium): In `Library.swift`, downsample image thumbnails with ImageIO to a bounded size; verify thumbnail dimensions and orientation while confirming the source remains intact.
+- Audit 9 (Low): In `Model.swift` and `Library.swift`, check whether a playlist is due before scanning eligibility; verify not-due checks leave state unchanged and due transitions still work.
+
 ## Window management and resizing
 
 - Confirm the native window-management popup appears when physically hovering over the green window button in a normal Flua session with Hide from Dock enabled. The window is now explicitly fullscreen eligible in both regular and accessory activation policies; physical-pointer popup verification remains open. See [the recorded check](DEVELOPMENT.md#green-button-window-management-popup).
