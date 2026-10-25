@@ -280,8 +280,7 @@ extension Library {
             panel.nameFieldStringValue = wallpaper.title + "." + source.pathExtension
             panel.message = "Export a copy of this wallpaper image."
             panel.begin { [weak self] response in
-                guard response == .OK, let destination = panel.url else { return }
-                do { try FileManager.default.copyItem(at: source, to: destination) }
+                do { try ImageExport.copy(source: source, destination: panel.url, savePanelAccepted: response == .OK) }
                 catch { self?.error = error.localizedDescription }
             }
             return

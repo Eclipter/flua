@@ -11,6 +11,8 @@ swiftc -parse-as-library -target arm64-apple-macosx27.0 Sources/Flua/Model.swift
 build/tests/clear-filters-sort-tests
 swiftc -target arm64-apple-macosx27.0 Sources/Flua/ScenePackage.swift Tests/FluaTests/ScenePackageTests.swift -o build/tests/package-tests
 build/tests/package-tests
+swiftc -target arm64-apple-macosx27.0 Sources/Flua/ImageExport.swift Tests/FluaTests/ImageExportTests.swift -o build/tests/image-export-tests
+build/tests/image-export-tests
 swiftc -target arm64-apple-macosx27.0 Sources/Flua/Model.swift Sources/Flua/NativeWallpaperStore.swift Sources/Flua/NativeWallpaper.swift Tests/FluaTests/NativeWallpaperTests.swift -o build/tests/native-wallpaper-tests
 build/tests/native-wallpaper-tests
 swiftc -target arm64-apple-macosx27.0 Sources/Flua/AccentColor.swift Tests/FluaTests/AccentColorTests.swift -o build/tests/accent-color-tests
