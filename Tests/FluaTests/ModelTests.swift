@@ -176,7 +176,30 @@ import Foundation
         precondition(!LibraryPaths.isIsolatedVerificationRoot(fresh, applicationSupport: support))
         precondition(!LibraryPaths.isIsolatedVerificationRoot(fresh.appendingPathComponent("nested"), applicationSupport: support))
         precondition(!LibraryPaths.isIsolatedVerificationRoot(support, applicationSupport: support))
+        for flag in ["--smoke-test", "--startup-smoke", "--preview-smoke", "--scroll-benchmark", "--accessibility-audit"] {
+            let invalidArguments = [
+                [flag], [flag, "--data-dir"], [flag, "--data-dir", ""], [flag, "--data-dir", "--other-flag"],
+                [flag, "--data-dir", fresh.path], [flag, "--data-dir", fresh.appendingPathComponent("nested").path],
+                [flag, "--data-dir", support.path]
+            ]
+            for arguments in invalidArguments {
+                do {
+                    _ = try LibraryPaths.launchConfiguration(arguments: arguments, applicationSupport: support)
+                    preconditionFailure("Verification accepted an absent or overlapping data directory: \(arguments)")
+                } catch {
+                    precondition(error.localizedDescription.contains("--data-dir"))
+                }
+            }
+            let isolated = dir.appendingPathComponent("verification")
+            let launch = try LibraryPaths.launchConfiguration(arguments: [flag, "--data-dir", isolated.path], applicationSupport: support)
+            precondition(launch.root.path == isolated.path && !launch.systemPlaybackEnabled)
+            precondition(!fm.fileExists(atPath: isolated.path))
+        }
+        let ordinaryLaunch = try LibraryPaths.launchConfiguration(arguments: [], applicationSupport: support)
+        precondition(ordinaryLaunch.root == fresh && ordinaryLaunch.systemPlaybackEnabled)
         precondition(!fm.fileExists(atPath: support.path))
+        print("PASS: verification launch arguments reject unsafe roots before library access and disable native playback")
+
         let unrelated = support.appendingPathComponent("OtherLibrary", isDirectory: true)
         try fm.createDirectory(at: unrelated, withIntermediateDirectories: true)
         let original = Data("unrelated-library".utf8)
@@ -187,6 +210,12 @@ import Foundation
         let alias = dir.appendingPathComponent("library-alias")
         try fm.createSymbolicLink(at: alias, withDestinationURL: fresh)
         precondition(!LibraryPaths.isIsolatedVerificationRoot(alias, applicationSupport: support))
+        do {
+            _ = try LibraryPaths.launchConfiguration(arguments: ["--preview-smoke", "--data-dir", alias.path], applicationSupport: support)
+            preconditionFailure("Preview verification accepted a symlink into the protected library")
+        } catch {
+            precondition(error.localizedDescription.contains("must not overlap"))
+        }
         let current = Data("flua-library".utf8)
         try current.write(to: fresh.appendingPathComponent("library.json"))
         precondition(LibraryPaths.resolve(applicationSupport: support) == fresh)
