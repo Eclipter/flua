@@ -72,7 +72,7 @@ struct ScenePackage {
                 let archive = try Data(contentsOf: frozen, options: .mappedIfSafe)
                 let entries = try preflightZIP(archive)
                 // zipinfo independently checks that the system ZIP reader agrees
-                // about every member before ditto is allowed to extract anything.
+                // about every member before extraction starts.
                 let listed = try run("/usr/bin/zipinfo", ["-1", frozen.path])
                 guard let listing = String(data: listed, encoding: .utf8),
                       listing.split(separator: "\n", omittingEmptySubsequences: true).map(String.init) == entries.map(\.name) else {
@@ -80,7 +80,7 @@ struct ScenePackage {
                 }
                 let extracted = temporary.appendingPathComponent("contents", isDirectory: true)
                 try fm.createDirectory(at: extracted, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
-                _ = try run("/usr/bin/ditto", ["-x", "-k", "--norsrc", "--noextattr", "--noacl", frozen.path, extracted.path])
+                try extractZIP(frozen, entries: entries, at: extracted)
                 try validateTree(extracted)
                 try verifyExtraction(entries, at: extracted)
                 root = try packageRoot(extracted)
@@ -201,10 +201,65 @@ struct ScenePackage {
         }
     }
 
-    private struct Entry {
+    struct Entry {
         let name: String
         let size: Int
         let isDirectory: Bool
+    }
+
+    static func extractZIP(_ archive: URL, entries: [Entry], at root: URL,
+                           maxMemberBytes: Int = maxMember, maxExpandedBytes: Int = maxExpanded) throws {
+        var total = 0
+        for entry in entries {
+            let destination = try safeChild(entry.name, of: root, directory: entry.isDirectory)
+            if entry.isDirectory {
+                try fm.createDirectory(at: destination, withIntermediateDirectories: true,
+                                       attributes: [.posixPermissions: 0o700])
+                continue
+            }
+            try fm.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true,
+                                   attributes: [.posixPermissions: 0o700])
+            guard fm.createFile(atPath: destination.path, contents: nil, attributes: [.posixPermissions: 0o600]) else {
+                throw ScenePackageError.invalid("an extracted file could not be created.")
+            }
+            let output = try FileHandle(forWritingTo: destination)
+            let process = Process(), pipe = Pipe()
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/unzip")
+            process.arguments = ["-p", archive.path, literalZIPPattern(entry.name)]
+            process.standardOutput = pipe
+            process.standardError = FileHandle.nullDevice
+            do {
+                try process.run()
+                let input = pipe.fileHandleForReading
+                var member = 0
+                while true {
+                    let chunk = try input.read(upToCount: 64 * 1_024) ?? Data()
+                    if chunk.isEmpty { break }
+                    guard chunk.count <= maxMemberBytes - member,
+                          chunk.count <= maxExpandedBytes - total else {
+                        process.terminate()
+                        throw ScenePackageError.invalid("the package exceeds the expanded size limit.")
+                    }
+                    try output.write(contentsOf: chunk)
+                    member += chunk.count
+                    total += chunk.count
+                }
+                process.waitUntilExit()
+                guard process.terminationStatus == 0, member == entry.size else {
+                    throw ScenePackageError.invalid("the extracted file \(entry.name) differs from the ZIP inventory.")
+                }
+                try output.close()
+            } catch {
+                if process.isRunning { process.terminate(); process.waitUntilExit() }
+                try? output.close()
+                try? fm.removeItem(at: destination)
+                throw error
+            }
+        }
+    }
+
+    private static func literalZIPPattern(_ name: String) -> String {
+        String(name.flatMap { "*?[]".contains($0) ? ["\\", String($0)] : [String($0)] }.joined())
     }
 
     private static func preflightZIP(_ d: Data) throws -> [Entry] {

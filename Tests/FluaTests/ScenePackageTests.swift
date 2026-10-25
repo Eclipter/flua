@@ -55,6 +55,98 @@ import Foundation
         precondition((try? Data(contentsOf: compressedResult.assetURL!)) == video)
         compressedResult.cleanup()
 
+        let wildcardAsset = "clip*[?].mov"
+        let wildcardManifest = try JSONSerialization.data(withJSONObject: ["type": "video", "files": ["asset": wildcardAsset]])
+        let wildcardArchive = try archive("wildcard-members", [
+            Member("manifest.json", wildcardManifest), Member(wildcardAsset, video),
+            Member("clip-wildcard.mov", Data([1])), Member("clip*[x].mov", Data([2]))
+        ])
+        let wildcardResult = try ScenePackage.inspect(wildcardArchive)
+        precondition(wildcardResult.assetURL?.lastPathComponent == wildcardAsset)
+        let wildcardVideo = try Data(contentsOf: wildcardResult.assetURL!)
+        precondition(wildcardVideo == video)
+        wildcardResult.cleanup()
+
+        func falseSizeArchive(_ name: String, members: [(String, Data, Int)]) throws -> (URL, [ScenePackage.Entry]) {
+            let sourceDirectory = root.appendingPathComponent(name + "-source", isDirectory: true)
+            try fm.createDirectory(at: sourceDirectory, withIntermediateDirectories: false)
+            for (path, bytes, _) in members {
+                let file = sourceDirectory.appendingPathComponent(path)
+                try fm.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+                try bytes.write(to: file)
+            }
+            let url = root.appendingPathComponent(name + ".zip")
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/zip")
+            process.currentDirectoryURL = sourceDirectory
+            process.arguments = ["-q", "-r", url.path] + members.map(\.0)
+            try process.run()
+            process.waitUntilExit()
+            precondition(process.terminationStatus == 0)
+            var bytes = try Data(contentsOf: url)
+            var entries: [ScenePackage.Entry] = []
+            for (path, contents, declaredSize) in members {
+                entries.append(ScenePackage.Entry(name: path, size: declaredSize, isDirectory: false))
+                let nameBytes = Data(path.utf8)
+                var offset = 0
+                while offset + 46 <= bytes.count {
+                    let signature = UInt32(bytes[offset]) | UInt32(bytes[offset + 1]) << 8 | UInt32(bytes[offset + 2]) << 16 | UInt32(bytes[offset + 3]) << 24
+                    if signature == 0x04034b50 || signature == 0x02014b50 {
+                        let nameLengthOffset = offset + (signature == 0x04034b50 ? 26 : 28)
+                        let extraLengthOffset = offset + (signature == 0x04034b50 ? 28 : 30)
+                        let nameLength = Int(bytes[nameLengthOffset]) | Int(bytes[nameLengthOffset + 1]) << 8
+                        let extraLength = Int(bytes[extraLengthOffset]) | Int(bytes[extraLengthOffset + 1]) << 8
+                        let nameOffset = offset + (signature == 0x04034b50 ? 30 : 46)
+                        if nameLength == nameBytes.count && bytes.subdata(in: nameOffset..<(nameOffset + nameLength)) == nameBytes {
+                            let sizeOffset = offset + (signature == 0x04034b50 ? 22 : 24)
+                            for index in 0..<4 { bytes[sizeOffset + index] = UInt8((declaredSize >> (index * 8)) & 255) }
+                            offset = nameOffset + nameLength + extraLength
+                        } else {
+                            offset = nameOffset + nameLength + extraLength + (signature == 0x02014b50 ? (Int(bytes[offset + 32]) | Int(bytes[offset + 33]) << 8) : 0)
+                        }
+                    } else { offset += 1 }
+                    if offset < 0 || offset > bytes.count { break }
+                }
+                precondition(contents.count != declaredSize || name == "false-total-size")
+            }
+            try bytes.write(to: url)
+            return (url, entries)
+        }
+        for (name, members, memberLimit, totalLimit) in [
+            ("false-member-size", [("large.bin", Data((0..<256_000).map { UInt8($0 % 251) }), 100_000)], 130_000, 300_000),
+            ("false-total-size", [("first.bin", Data(repeating: 7, count: 100), 100), ("second.bin", Data(repeating: 8, count: 100), 80)], 120, 150)
+        ] {
+            let (url, entries) = try falseSizeArchive(name, members: members)
+            let destination = root.appendingPathComponent(name + "-output", isDirectory: true)
+            try fm.createDirectory(at: destination, withIntermediateDirectories: false)
+            do {
+                try ScenePackage.extractZIP(url, entries: entries, at: destination,
+                                            maxMemberBytes: memberLimit, maxExpandedBytes: totalLimit)
+                fatalError("Accepted \(name)")
+            } catch let error as ScenePackageError {
+                guard error.localizedDescription.contains("expanded size limit") else {
+                    fatalError("Unexpected \(name) error: \(error.localizedDescription)")
+                }
+            }
+            let iterator = fm.enumerator(at: destination, includingPropertiesForKeys: nil)!
+            let sizes = try iterator.compactMap { item -> Int? in
+                guard let item = item as? URL,
+                      try fm.attributesOfItem(atPath: item.path)[.type] as? FileAttributeType == .typeRegular else { return nil }
+                return (try fm.attributesOfItem(atPath: item.path)[.size] as? NSNumber)?.intValue
+            }
+            precondition(sizes.allSatisfy { $0 <= memberLimit } && sizes.reduce(0, +) <= totalLimit)
+            precondition(name == "false-total-size" ? sizes == [100] : sizes.isEmpty)
+        }
+
+        let exactLimitArchive = try archive("exact-extraction-limit", [Member("clip.mov", video)])
+        let exactLimitOutput = root.appendingPathComponent("exact-extraction-output", isDirectory: true)
+        try fm.createDirectory(at: exactLimitOutput, withIntermediateDirectories: false)
+        try ScenePackage.extractZIP(exactLimitArchive,
+                                    entries: [ScenePackage.Entry(name: "clip.mov", size: video.count, isDirectory: false)],
+                                    at: exactLimitOutput, maxMemberBytes: video.count, maxExpandedBytes: video.count)
+        let exactLimitVideo = try Data(contentsOf: exactLimitOutput.appendingPathComponent("clip.mov"))
+        precondition(exactLimitVideo == video)
+
         func reject(_ name: String, _ members: [Member]) throws {
             let url = try archive(name, members)
             do { let result = try ScenePackage.inspect(url); result.cleanup(); fatalError("Accepted \(name)") }
@@ -82,7 +174,7 @@ import Foundation
         try fm.createSymbolicLink(atPath: folder.appendingPathComponent("link").path, withDestinationPath: "/tmp")
         do { _ = try ScenePackage.inspect(folder); fatalError("Accepted a folder symbolic link") }
         catch is ScenePackageError {}
-        print("PASS: verified folder metadata, ZIP and .bdpkg extraction, source preservation, explicit unsupported-scene errors, cleanup, traversal, absolute/backslash/newline paths, symlinks, duplicate paths, file-directory collisions, AppleDouble and expansion limits")
+        print("PASS: verified folder metadata, ZIP and .bdpkg extraction, literal wildcard filenames, source preservation, explicit unsupported-scene errors, cleanup, traversal, absolute/backslash/newline paths, symlinks, duplicate paths, file-directory collisions, AppleDouble and bounded extraction at positive and exact limits")
     }
 
     struct Member {
