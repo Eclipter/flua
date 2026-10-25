@@ -16,7 +16,6 @@ Update capability claims only after the relevant checks pass. Keep untested OS v
 ## Performance and provider behavior
 
 - **Medium:** Avoid full catalog serialization for unchanged or favorite-only saves, and move expensive changed-catalog serialization off the UI thread with serialized writes. A synthetic 1,000-entry catalog containing a real Flua thumbnail measured 54.6 MB; repeated release-optimized saves took 143–151 ms. Verify unchanged catalog contents for favorite-only edits and responsiveness at a representative large size. See [Library.save](../Sources/Flua/Library.swift) and [LibraryDisk.saveCatalog](../Sources/Flua/Model.swift).
-- **Low:** In [Provider.m](../Sources/WallpaperExtension/Provider.m), query fullscreen Spaces only when at least one applicable Desktop session enables fullscreen pause. Avoid unnecessary polling for static content, preserve enabled-rule responsiveness, and verify monitoring behavior deterministically; the current policy timer polls at 30 Hz.
 
 ## Tooling and concurrency
 

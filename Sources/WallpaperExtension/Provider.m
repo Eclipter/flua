@@ -381,6 +381,7 @@ NSDictionary *FSInspectSettings(id settings) { return FSJSON(settings, @"Wallpap
 @property dispatch_source_t playbackTimer;
 @property NSDictionary *playbackEnvironment;
 @property CFTimeInterval powerSampleTime;
+@property uint64_t playbackInterval;
 @end
 @implementation FSProvider
 - (instancetype)init {
@@ -405,31 +406,72 @@ NSDictionary *FSInspectSettings(id settings) { return FSJSON(settings, @"Wallpap
     session.root.speed = suspended ? 0 : 1;
     if (session.renderer.suspended != suspended) [session.renderer setPlaybackSuspended:suspended];
 }
+- (BOOL)hasMovingPlayback:(FSSession *)session {
+    return ![session.request[@"isPreview"] boolValue] && !session.suspended && !session.needsRecovery &&
+        !session.renderer.holdsStill && ([session.renderConfiguration[@"kind"] isEqual:@"video"] ||
+        FSIsSceneKind(session.renderConfiguration[@"kind"]));
+}
+- (BOOL)needsPowerMonitoring {
+    for (FSSession *session in self.sessions.allValues) {
+        NSDictionary *policy = FSActivePlaybackPolicy ?: session.configuration[@"playbackPolicy"];
+        if ([self hasMovingPlayback:session] && FSPlaybackPowerEnabled(policy)) return YES;
+    }
+    return NO;
+}
+- (BOOL)needsFullscreenMonitoring {
+    for (FSSession *session in self.sessions.allValues) {
+        NSDictionary *policy = FSActivePlaybackPolicy ?: session.configuration[@"playbackPolicy"];
+        if ([self hasMovingPlayback:session] && [session.mode isEqual:@"default"] && session.displayID &&
+            FSPlaybackFullscreenEnabled(policy)) return YES;
+    }
+    return NO;
+}
+- (NSArray *)fullscreenDisplays {
+    return FSFullscreenDisplays();
+}
+- (NSDictionary *)powerEnvironment {
+    return FSPlaybackPowerEnvironment();
+}
 - (NSDictionary *)currentPlaybackEnvironment {
     CFTimeInterval now = CACurrentMediaTime();
-    // Space visibility must update within a frame; power sampling can stay at one second.
-    if (!self.playbackEnvironment || now - self.powerSampleTime >= 1) {
-        self.playbackEnvironment = FSPlaybackEnvironment();
+    if (![self needsPowerMonitoring]) {
+        self.playbackEnvironment = nil;
+        self.powerSampleTime = 0;
+    } else if (!self.playbackEnvironment || now - self.powerSampleTime >= 1) {
+        self.playbackEnvironment = [self powerEnvironment];
         self.powerSampleTime = now;
-    } else {
-        NSMutableDictionary *environment = [self.playbackEnvironment mutableCopy];
-        environment[@"fullscreenDisplays"] = FSFullscreenDisplays();
-        self.playbackEnvironment = environment;
     }
-    return self.playbackEnvironment;
+    NSMutableDictionary *environment = [self.playbackEnvironment mutableCopy] ?: NSMutableDictionary.new;
+    environment[@"fullscreenDisplays"] = [self needsFullscreenMonitoring] ? [self fullscreenDisplays] : @[];
+    self.playbackEnvironment = environment;
+    return environment;
 }
 - (void)refreshPlayback {
     NSDictionary *environment = [self currentPlaybackEnvironment];
     for (FSSession *session in self.sessions.allValues)
         [self applyPlaybackToSession:session environment:environment];
+    [self startPlaybackMonitoring];
 }
 - (void)startPlaybackMonitoring {
-    if (self.playbackTimer) return;
-    __weak FSProvider *host = self;
-    self.playbackTimer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, dispatch_get_main_queue());
-    dispatch_source_set_timer(self.playbackTimer, DISPATCH_TIME_NOW, NSEC_PER_SEC / 30, NSEC_PER_MSEC);
-    dispatch_source_set_event_handler(self.playbackTimer, ^{ [host refreshPlayback]; });
-    dispatch_resume(self.playbackTimer);
+    uint64_t interval = [self needsFullscreenMonitoring] ? NSEC_PER_SEC / 30 :
+        ([self needsPowerMonitoring] ? NSEC_PER_SEC : 0);
+    if (!interval) {
+        if (self.playbackTimer) dispatch_source_cancel(self.playbackTimer);
+        self.playbackTimer = nil;
+        self.playbackInterval = 0;
+        return;
+    }
+    if (self.playbackTimer && self.playbackInterval == interval) return;
+    self.playbackInterval = interval;
+    if (!self.playbackTimer) {
+        __weak FSProvider *host = self;
+        self.playbackTimer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, dispatch_get_main_queue());
+        dispatch_source_set_event_handler(self.playbackTimer, ^{ [host refreshPlayback]; });
+        dispatch_source_set_timer(self.playbackTimer, DISPATCH_TIME_NOW, interval, NSEC_PER_MSEC);
+        dispatch_resume(self.playbackTimer);
+    } else {
+        dispatch_source_set_timer(self.playbackTimer, DISPATCH_TIME_NOW, interval, NSEC_PER_MSEC);
+    }
 }
 - (NSDictionary *)renderConfiguration:(NSDictionary *)configuration presentation:(NSString *)presentation {
     if (!configuration.count || [configuration[@"version"] integerValue] == 1) return configuration;
@@ -503,6 +545,7 @@ NSDictionary *FSInspectSettings(id settings) { return FSJSON(settings, @"Wallpap
         [CATransaction flush];
         if (recovered) NSLog(@"Flua recovered original media session");
     }
+    [self refreshPlayback];
 }
 - (void)startRecovery {
     if (self.recoveryTimer) return;
@@ -657,7 +700,7 @@ NSDictionary *FSInspectSettings(id settings) { return FSJSON(settings, @"Wallpap
         }
         self.sessions[[self key:ident]] = s;
         [self startRecovery];
-        [self startPlaybackMonitoring];
+        [self refreshPlayback];
         NSLog(@"Flua acquired kind=%@ locked=%d idle=%d preview=%d context=%u frames=%lu scopedFiles=%lu activeScopes=%lu display=%@",
               renderConfig[@"kind"], [s.mode isEqual:@"locked"], [s.mode isEqual:@"idle"], [payload[@"isPreview"] boolValue], cid, (unsigned long)renderer.frameCount,
               (unsigned long)renderer.scopedFileCount, (unsigned long)renderer.activeScopeCount, s.displayID);
@@ -721,7 +764,7 @@ NSDictionary *FSInspectSettings(id settings) { return FSJSON(settings, @"Wallpap
     if (p[@"destination"]) {
         s.displayID = [p[@"destination"][@"directDisplayID"] isKindOfClass:NSNumber.class] ? p[@"destination"][@"directDisplayID"] : nil;
     }
-    [self applyPlaybackToSession:s environment:[self currentPlaybackEnvironment]];
+    [self refreshPlayback];
     NSLog(@"Flua updated kind=%@ locked=%d idle=%d suspended=%d frames=%lu loops=%ld",
           s.renderConfiguration[@"kind"], [s.mode isEqual:@"locked"], [s.mode isEqual:@"idle"], suspended,
           (unsigned long)s.renderer.frameCount, (long)s.renderer.loopCount);
@@ -737,10 +780,7 @@ NSDictionary *FSInspectSettings(id settings) { return FSJSON(settings, @"Wallpap
     self.sessions[[self key:ident]].fileWrappers = @[];
     [self.sessions[[self key:ident]].renderer dispose];
     [self.sessions removeObjectForKey:[self key:ident]];
-    if (self.sessions.count == 0 && self.playbackTimer) {
-        dispatch_source_cancel(self.playbackTimer);
-        self.playbackTimer = nil;
-    }
+    [self startPlaybackMonitoring];
     reply(nil);
 }
 - (void)snapshotWithId:(id)ident reply:(void (^)(id, NSError *))reply {
@@ -896,37 +936,107 @@ BOOL FSConfigureConnection(NSXPCConnection *connection) {
     return YES;
 }
 #ifdef FS_SELF_TEST
+@interface FSPlaybackMonitoringTestRenderer : FSMediaRenderer
+@property BOOL testHoldsStill;
+@end
+@implementation FSPlaybackMonitoringTestRenderer
+- (BOOL)holdsStill { return self.testHoldsStill; }
+@end
 @interface FSPlaybackMonitoringTestProvider : FSProvider
-@property NSUInteger playbackSamples;
+@property NSUInteger fullscreenSamples;
+@property NSUInteger powerSamples;
 @end
 @implementation FSPlaybackMonitoringTestProvider
-- (void)refreshPlayback {
-    self.playbackSamples++;
-    [super refreshPlayback];
+- (NSArray *)fullscreenDisplays {
+    self.fullscreenSamples++;
+    return @[@"test-display"];
+}
+- (NSDictionary *)powerEnvironment {
+    self.powerSamples++;
+    return @{@"onBattery":@YES};
 }
 @end
 
 static BOOL FSPlaybackMonitoringSelfTest(void) {
+    NSDictionary *savedPolicy = FSActivePlaybackPolicy;
+    FSActivePlaybackPolicy = nil;
     FSPlaybackMonitoringTestProvider *provider = FSPlaybackMonitoringTestProvider.new;
+    FSSession *session = FSSession.new;
+    FSPlaybackMonitoringTestRenderer *renderer = FSPlaybackMonitoringTestRenderer.new;
+    session.renderer = renderer;
+    session.mode = @"default";
+    session.displayID = @1;
+    session.configuration = @{@"playbackPolicy":@{@"pauseOnFullscreen":@NO}};
+    session.renderConfiguration = @{@"kind":@"video"};
+    provider.sessions[@"test"] = session;
     [provider refreshPlayback];
-    provider.playbackEnvironment = @{@"onBattery":@YES, @"fullscreenDisplays":@[@"stale-display"]};
+    BOOL disabled = provider.fullscreenSamples == 0 && provider.playbackTimer == nil && provider.powerSamples == 0;
+    session.configuration = @{@"playbackPolicy":@{}};
+    renderer.testHoldsStill = YES;
     [provider refreshPlayback];
-    BOOL fullscreenSampleRefreshed = ![provider.playbackEnvironment[@"fullscreenDisplays"] containsObject:@"stale-display"];
-    BOOL powerValueReused = [provider.playbackEnvironment[@"onBattery"] boolValue];
-    CFTimeInterval firstPowerSample = provider.powerSampleTime;
-    [provider startPlaybackMonitoring];
-    NSDate *deadline = [NSDate dateWithTimeIntervalSinceNow:0.25];
-    while (deadline.timeIntervalSinceNow > 0)
-        [NSRunLoop.currentRunLoop runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.005]];
-    BOOL fastDisplayChecks = provider.playbackSamples >= 5;
-    BOOL powerSampleReused = provider.powerSampleTime == firstPowerSample;
+    BOOL still = provider.fullscreenSamples == 0 && provider.playbackTimer == nil && provider.powerSamples == 0;
+    renderer.testHoldsStill = NO;
+    session.renderConfiguration = @{@"kind":@"image"};
+    [provider refreshPlayback];
+    still = still && provider.fullscreenSamples == 0 && provider.playbackTimer == nil && provider.powerSamples == 0;
+    session.renderConfiguration = @{@"kind":@"video"};
+    session.needsRecovery = YES;
+    [provider refreshPlayback];
+    still = still && provider.fullscreenSamples == 0 && provider.playbackTimer == nil && provider.powerSamples == 0;
+    session.needsRecovery = NO;
+    for (NSString *mode in @[@"locked", @"idle"]) {
+        session.mode = mode;
+        [provider refreshPlayback];
+    }
+    session.mode = @"default";
+    session.request = @{@"isPreview":@YES};
+    [provider refreshPlayback];
+    session.request = @{};
+    session.suspended = YES;
+    [provider refreshPlayback];
+    session.suspended = NO;
+    session.displayID = nil;
+    [provider refreshPlayback];
+    BOOL inapplicable = provider.fullscreenSamples == 0 && provider.playbackTimer == nil && provider.powerSamples == 0;
+    session.displayID = @1;
+    [provider refreshPlayback];
+    BOOL enabled = provider.fullscreenSamples == 1 && provider.playbackInterval == NSEC_PER_SEC / 30 &&
+        [provider.playbackEnvironment[@"fullscreenDisplays"] isEqual:@[@"test-display"]];
+    FSSession *otherSession = FSSession.new;
+    otherSession.mode = @"locked";
+    provider.sessions[@"other"] = otherSession;
+    [provider refreshPlayback];
+    BOOL responsive = provider.fullscreenSamples == 2 && provider.powerSamples == 0 &&
+        provider.playbackInterval == NSEC_PER_SEC / 30;
+    FSActivePlaybackPolicy = @{@"pauseOnFullscreen":@NO};
+    [provider refreshPlayback];
+    BOOL disabledAgain = provider.fullscreenSamples == 2 && provider.playbackTimer == nil && provider.powerSamples == 0 &&
+        [provider.playbackEnvironment[@"fullscreenDisplays"] count] == 0;
+    FSActivePlaybackPolicy = @{@"pauseOnFullscreen":@NO, @"pauseOnLowBattery":@YES};
+    session.mode = @"locked";
+    [provider refreshPlayback];
+    BOOL powerEnabled = provider.powerSamples == 1 && provider.playbackInterval == NSEC_PER_SEC;
+    [provider refreshPlayback];
+    BOOL powerReused = provider.powerSamples == 1;
     provider.powerSampleTime -= 1;
     [provider refreshPlayback];
-    BOOL powerSampleRefreshed = provider.powerSampleTime > firstPowerSample;
-    dispatch_source_cancel(provider.playbackTimer);
-    provider.playbackTimer = nil;
-    return fastDisplayChecks && fullscreenSampleRefreshed && powerValueReused && powerSampleReused && powerSampleRefreshed;
+    BOOL powerRefreshed = provider.powerSamples == 2;
+    renderer.testHoldsStill = YES;
+    [provider refreshPlayback];
+    BOOL idleAgain = provider.playbackTimer == nil && provider.powerSamples == 2;
+    renderer.testHoldsStill = NO;
+    [provider refreshPlayback];
+    BOOL rearmed = provider.playbackInterval == NSEC_PER_SEC && provider.powerSamples == 3;
+    session.suspended = YES;
+    [provider refreshPlayback];
+    BOOL hostSuspended = session.playbackSuspended && provider.playbackTimer == nil && provider.powerSamples == 3;
+    [provider.sessions removeAllObjects];
+    [provider startPlaybackMonitoring];
+    BOOL stopped = provider.playbackTimer == nil && provider.playbackInterval == 0;
+    FSActivePlaybackPolicy = savedPolicy;
+    return disabled && still && inapplicable && enabled && responsive && disabledAgain && powerEnabled && powerReused && powerRefreshed && idleAgain && rearmed && hostSuspended && stopped;
 }
+
 #endif
 
 int FSProviderSelfTest(void) {
@@ -1384,7 +1494,7 @@ int main(int argc,const char **argv) { @autoreleasepool {
     [provider updateWithId:ident request:FSBox(@"WallpaperUpdateRequestXPC",@"WallpaperUpdateRequest",modeUpdate) reply:^(NSError *error){}];
     FSPump(0.3);
     BOOL desktopPlays=!tunedSession.renderer.holdsStill && tunedSession.renderer.frameCount > stillFrames;
-    dispatch_source_cancel(provider.playbackTimer);
+    if (provider.playbackTimer) dispatch_source_cancel(provider.playbackTimer);
     provider.playbackTimer = nil;
     NSDictionary *savedPolicy = FSActivePlaybackPolicy;
     FSActivePlaybackPolicy = @{@"pauseOnBattery":@YES};

@@ -106,7 +106,17 @@ static BOOL FSPlaybackShouldPauseForDisplayUUID(NSDictionary *policy, NSDictiona
         && FSContainsDisplay(environment, displayUUID);
 }
 
-NSDictionary *FSPlaybackEnvironment(void) {
+BOOL FSPlaybackPowerEnabled(NSDictionary *policy) {
+    return [policy isKindOfClass:NSDictionary.class] &&
+        (FSBoolean(policy[@"pauseOnBattery"], NO) || FSBoolean(policy[@"pauseOnLowPower"], NO) ||
+         FSBoolean(policy[@"pauseOnLowBattery"], FSBoolean(policy[@"pauseOnLowPower"], NO)));
+}
+
+BOOL FSPlaybackFullscreenEnabled(NSDictionary *policy) {
+    return [policy isKindOfClass:NSDictionary.class] && FSBoolean(policy[@"pauseOnFullscreen"], YES);
+}
+
+NSDictionary *FSPlaybackPowerEnvironment(void) {
     CFTypeRef snapshot = IOPSCopyPowerSourcesInfo();
     CFStringRef provider = snapshot ? IOPSGetProvidingPowerSourceType(snapshot) : NULL;
     BOOL onBattery = provider && CFEqual(provider, CFSTR(kIOPMBatteryPowerKey));
@@ -148,11 +158,17 @@ NSDictionary *FSPlaybackEnvironment(void) {
     NSMutableDictionary *environment = [@{
         @"onBattery" : @(onBattery),
         @"lowPower" : @([NSProcessInfo processInfo].lowPowerModeEnabled),
-        @"fullscreenDisplays" : FSFullscreenDisplays()
+        @"fullscreenDisplays" : @[]
     } mutableCopy];
     if (foundBattery && !invalidBatteryCapacity && maximumTotal > 0) {
         environment[@"batteryPercent"] = @(fmin(100, fmax(0, currentTotal * 100 / maximumTotal)));
     }
+    return environment;
+}
+
+NSDictionary *FSPlaybackEnvironment(void) {
+    NSMutableDictionary *environment = [FSPlaybackPowerEnvironment() mutableCopy];
+    environment[@"fullscreenDisplays"] = FSFullscreenDisplays();
     return environment;
 }
 
@@ -163,6 +179,11 @@ BOOL FSPlaybackShouldPause(NSDictionary *policy, NSDictionary *environment, NSNu
 }
 
 BOOL FSPlaybackPolicySelfTest(void) {
+    if (FSPlaybackPowerEnabled(nil) || FSPlaybackPowerEnabled(@{}) ||
+        FSPlaybackPowerEnabled(@{@"pauseOnBattery":@1, @"pauseOnLowPower":@NO, @"pauseOnLowBattery":@NO})) return NO;
+    for (NSString *key in @[@"pauseOnBattery", @"pauseOnLowPower", @"pauseOnLowBattery"]) {
+        if (!FSPlaybackPowerEnabled(@{key:@YES})) return NO;
+    }
     NSString *fullscreenDisplay = @"A5B06E21-D3B0-4A71-A3D8-59CF109A1A30";
     NSArray *fullscreenDisplays = FSFullscreenDisplaysFromSnapshot(@[
         @{@"Display Identifier" : fullscreenDisplay, @"Current Space" : @{@"ManagedSpaceID" : @40, @"type" : @4}},
