@@ -1,4 +1,8 @@
 import Foundation
+import AVFoundation
+import CoreGraphics
+import CoreVideo
+import Dispatch
 
 // Standalone `swiftc` executables do not synthesize `Bundle.module`; provide a
 // test-only stand-in so the rendering types Library.swift references can
@@ -10,12 +14,13 @@ extension Bundle {
 
 @main struct ClearFiltersSortTests {
     @MainActor
-    static func main() throws {
+    static func main() async throws {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("FluaClearFiltersSortTest-" + UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: dir) }
         let support = dir.appendingPathComponent("ApplicationSupport", isDirectory: true)
         try FileManager.default.createDirectory(at: support, withIntermediateDirectories: true)
         let root = LibraryPaths.resolve(applicationSupport: support)
+        try await importReferenceMovieTests(dir.appendingPathComponent("video-import", isDirectory: true))
 
         let library = try Library(root: root, systemPlaybackEnabled: false)
         let originalState = library.state
@@ -292,5 +297,90 @@ extension Bundle {
         precondition(removedState.nativeCleanupDisplays.contains("disconnected"), "Disconnected displays must retain pending cleanup")
         print("PASS: active wallpaper removal persists pending native cleanup")
         print("PASS: clearFilters resets filters, query, and sort type to default (name) with only sorting changed (favorites/recent)")
+    }
+
+    @MainActor
+    static func importReferenceMovieTests(_ root: URL) async throws {
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let source = root.appendingPathComponent("self-contained.mov")
+        try await writeVideoFixture(source)
+        let reference = root.appendingPathComponent("external-reference.mov")
+        let movie = AVMovie(url: source, options: nil)
+        try movie.makeMovieHeader(fileType: .mov).write(to: reference)
+
+        let library = try Library(root: root.appendingPathComponent("Library", isDirectory: true), systemPlaybackEnabled: false)
+        let originalCount = library.state.wallpapers.count
+        library.importMedia([reference])
+        await waitForImport(library)
+        precondition(library.state.wallpapers.count == originalCount, "Import accepted a movie with external video references")
+        let rejectedImportFiles = try FileManager.default.contentsOfDirectory(atPath: library.disk.assets.path)
+        precondition(rejectedImportFiles.isEmpty,
+                     "Import copied a movie with external video references")
+
+        library.error = nil
+        library.importMedia([source])
+        await waitForImport(library)
+        guard let imported = library.state.wallpapers.last, let importedURL = library.disk.url(for: imported) else {
+            preconditionFailure("Import rejected a self-contained movie")
+        }
+        let movedSource = root.appendingPathComponent("moved-source.mov")
+        try FileManager.default.moveItem(at: source, to: movedSource)
+        let decodedFrame = try await Task.detached(priority: .userInitiated) {
+            let asset = AVURLAsset(url: importedURL,
+                                   options: [AVURLAssetReferenceRestrictionsKey: AVAssetReferenceRestrictions.forbidAll.rawValue])
+            let tracks = try await asset.loadTracks(withMediaType: .video)
+            guard let track = tracks.first, try await track.load(.isSelfContained) else { return false }
+            let reader = try AVAssetReader(asset: asset)
+            let output = AVAssetReaderTrackOutput(track: track,
+                outputSettings: [kCVPixelBufferPixelFormatTypeKey as String: Int(kCVPixelFormatType_32BGRA)])
+            let outputProvider = reader.outputProvider(for: output)
+            try reader.start()
+            return try await outputProvider.next() != nil
+        }.value
+        precondition(decodedFrame, "Imported video stopped playing after its original source moved")
+        print("PASS: video import rejects external references and preserves self-contained playback after the source moves")
+    }
+
+    @MainActor
+    static func waitForImport(_ library: Library) async {
+        let deadline = Date().addingTimeInterval(20)
+        while library.importing && Date() < deadline {
+            try? await Task.sleep(for: .milliseconds(50))
+        }
+        precondition(!library.importing, "Video import timed out")
+    }
+
+    static func writeVideoFixture(_ url: URL) async throws {
+        let width = 64
+        let height = 64
+        let writer = try AVAssetWriter(outputURL: url, fileType: .mov)
+        let input = AVAssetWriterInput(mediaType: .video, outputSettings: [
+            AVVideoCodecKey: AVVideoCodecType.h264,
+            AVVideoWidthKey: width,
+            AVVideoHeightKey: height
+        ])
+        let attributes = CVPixelBufferCreationAttributes(pixelFormatType: .init(rawValue: kCVPixelFormatType_32ARGB),
+            size: CVImageSize(width: width, height: height), compatibility: [.cgBitmapContext])
+        let receiver = writer.inputPixelBufferReceiver(for: input, pixelBufferAttributes: attributes)
+        try writer.start()
+        writer.startSession(atSourceTime: .zero)
+        for frame in 0..<2 {
+            guard let pool = receiver.pixelBufferPool else { throw LibraryError.unreadableMedia("video fixture") }
+            let pixels = try pool.makeMutablePixelBuffer()
+            pixels.withUnsafeBuffer { buffer in
+                CVPixelBufferLockBaseAddress(buffer, [])
+                defer { CVPixelBufferUnlockBaseAddress(buffer, []) }
+                if let context = CGContext(data: CVPixelBufferGetBaseAddress(buffer), width: width, height: height,
+                    bitsPerComponent: 8, bytesPerRow: CVPixelBufferGetBytesPerRow(buffer),
+                    space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.noneSkipFirst.rawValue) {
+                    context.setFillColor(CGColor(red: 0.2, green: 0.5 + Double(frame) * 0.1, blue: 0.8, alpha: 1))
+                    context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+                }
+            }
+            try await receiver.append(CVReadOnlyPixelBuffer(pixels), with: CMTime(value: Int64(frame), timescale: 24))
+        }
+        receiver.finish()
+        await withCheckedContinuation { continuation in writer.finishWriting { continuation.resume() } }
+        guard writer.status == .completed else { throw writer.error ?? LibraryError.unreadableMedia("video fixture") }
     }
 }

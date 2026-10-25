@@ -516,7 +516,7 @@ enum LibraryError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .invalidLibrary: return "The saved library could not be read. It was left untouched."
-        case .unreadableMedia(let name): return "Could not open \(name). Choose a supported image or video."
+        case .unreadableMedia(let name): return "Could not open \(name). Choose a supported image or a self-contained video."
         }
     }
 }

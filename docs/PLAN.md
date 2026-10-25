@@ -6,7 +6,6 @@ Current capabilities and limitations are listed in [FEATURES.md](FEATURES.md). T
 
 ### Must fix
 
-- Audit 3 (Medium): In `Library.swift`, reject movies with external video references or copy them into a self-contained form; verify the imported copy still plays after the original source is moved.
 - Audit 5 (Medium): In `Editor.swift`, propagate library save failures and keep the editor draft open; verify with an injected write failure.
 - Audit 7 (Low): In `Editor.swift`, stage image exports and replace an existing destination only after save-panel consent; verify existing destinations, cancellation, and source preservation.
 

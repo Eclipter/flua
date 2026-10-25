@@ -572,9 +572,12 @@ final class Library: ObservableObject {
                     let kind: String
                     if type?.conforms(to: .image) == true, NSImage(contentsOf: mediaURL) != nil { kind = "image" }
                     else {
-                        let asset = AVURLAsset(url: mediaURL)
+                        let asset = AVURLAsset(url: mediaURL, options: [AVURLAssetReferenceRestrictionsKey: AVAssetReferenceRestrictions.forbidAll.rawValue])
                         let tracks = try await asset.loadTracks(withMediaType: .video)
                         guard !tracks.isEmpty else { throw LibraryError.unreadableMedia(url.lastPathComponent) }
+                        for track in tracks where !(try await track.load(.isSelfContained)) {
+                            throw LibraryError.unreadableMedia(url.lastPathComponent)
+                        }
                         kind = "video"
                     }
                     let id = UUID().uuidString
