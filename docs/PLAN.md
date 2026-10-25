@@ -11,7 +11,6 @@ Current capabilities and limitations are listed in [FEATURES.md](FEATURES.md). T
 ### Should fix
 
 - Audit 8 (Medium): In `Library.swift`, downsample image thumbnails with ImageIO to a bounded size; verify thumbnail dimensions and orientation while confirming the source remains intact.
-- Audit 9 (Low): In `Model.swift` and `Library.swift`, check whether a playlist is due before scanning eligibility; verify not-due checks leave state unchanged and due transitions still work.
 
 ## Real-system validation
 

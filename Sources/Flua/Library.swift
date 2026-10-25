@@ -223,8 +223,8 @@ final class Library: ObservableObject {
                 guard targetSurface != .lockScreen || !surfaces.contains(.desktop) || state.displays[key]?.surfacesLinked != true,
                       let assignment = state.displays[key]?.selection(for: targetSurface),
                       let playlist = state.playlist(assignment.playlistID),
-                      state.playableItems(in: playlist).isEmpty,
                       force || now.timeIntervalSince(assignment.changedAt) >= (playlist.interval ?? state.interval) else { continue }
+                guard state.playableItems(in: playlist).isEmpty else { continue }
                 error = "A playlist has no playable wallpapers. Unblock a wallpaper or add another one."
             }
         }

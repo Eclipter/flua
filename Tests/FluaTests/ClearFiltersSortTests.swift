@@ -56,7 +56,7 @@ extension Bundle {
         var blockedPlaylistState = LibraryState.initial
         blockedPlaylistState.displayMode = "perDisplay"
         blockedPlaylistState.shuffle = false
-        blockedPlaylistState.playlists[0].interval = 0
+        blockedPlaylistState.playlists[0].interval = 60
         try blockedPlaylistDisk.save(blockedPlaylistState)
         let blockedPlaylistLibrary = try Library(root: blockedPlaylistRoot, systemPlaybackEnabled: false)
         blockedPlaylistLibrary.tick?.invalidate()
@@ -66,6 +66,12 @@ extension Bundle {
         blockedPlaylistLibrary.startPlaylist("ambient")
         precondition(blockedPlaylistLibrary.state.displays[displayIDs[0]]?.desktop.wallpaperID == "ocean")
         precondition(blockedPlaylistLibrary.state.playlists[0] == savedSlowMornings)
+        blockedPlaylistLibrary.state.assign("ocean", display: displayIDs[0], playlistID: "ambient", now: Date().addingTimeInterval(60))
+        let notDueAssignments = blockedPlaylistLibrary.state.displays
+        blockedPlaylistLibrary.advancePlaylists(force: false)
+        precondition(blockedPlaylistLibrary.state.displays == notDueAssignments, "not-due advancement changed assignments")
+        precondition(blockedPlaylistLibrary.error == nil, "not-due advancement scanned eligibility")
+        blockedPlaylistLibrary.state.assign("ocean", display: displayIDs[0], playlistID: "ambient", now: Date().addingTimeInterval(-60))
         blockedPlaylistLibrary.advancePlaylists(force: false)
         precondition(blockedPlaylistLibrary.state.displays[displayIDs[0]]?.desktop.wallpaperID == "cosmos")
         blockedPlaylistLibrary.advancePlaylists(force: true, backwards: true)
@@ -90,12 +96,21 @@ extension Bundle {
         precondition(blockedPlaylistLibrary.state.displays == allBlockedAssignments)
         blockedPlaylistLibrary.error = nil
         blockedPlaylistLibrary.advancePlaylists(force: false)
-        precondition(blockedPlaylistLibrary.error?.contains("no playable wallpapers") == true)
+        precondition(blockedPlaylistLibrary.error == nil, "not-due empty playlist reported an error")
+        precondition(blockedPlaylistLibrary.state.displays == allBlockedAssignments)
+        blockedPlaylistLibrary.advancePlaylists(force: true)
+        precondition(blockedPlaylistLibrary.error?.contains("no playable wallpapers") == true, "forced empty playlist did not report an error")
         precondition(blockedPlaylistLibrary.state.displays == allBlockedAssignments)
         blockedPlaylistLibrary.error = nil
         blockedPlaylistLibrary.startPlaylist("ambient")
         precondition(blockedPlaylistLibrary.error?.contains("no playable wallpapers") == true)
         precondition(blockedPlaylistLibrary.state.displays == allBlockedAssignments)
+        blockedPlaylistLibrary.error = nil
+        blockedPlaylistLibrary.state.assign("ember", display: displayIDs[0], playlistID: "ambient", now: Date().addingTimeInterval(-60))
+        let dueBlockedAssignments = blockedPlaylistLibrary.state.displays
+        blockedPlaylistLibrary.advancePlaylists(force: false)
+        precondition(blockedPlaylistLibrary.error?.contains("no playable wallpapers") == true, "due empty playlist did not report an error")
+        precondition(blockedPlaylistLibrary.state.displays == dueBlockedAssignments)
         precondition(blockedPlaylistLibrary.state.playlists[0] == savedSlowMornings)
         print("PASS: library playlist start, advancement, history, and empty eligibility skip blocked wallpapers without changing saved contents")
 

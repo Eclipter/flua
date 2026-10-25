@@ -11,6 +11,14 @@ import Foundation
             state.assign("aurora", display: id, playlistID: "ambient", now: id == "not-due" ? due : start)
             state.assign("ember", display: id, surface: .lockScreen)
         }
+        var single = LibraryState.initial
+        single.shuffle = false
+        single.playlists[0].interval = 60
+        single.assign("aurora", display: "single", playlistID: "ambient", now: start)
+        let singleBeforeNotDue = single.displays["single"]
+        precondition(single.advance(display: "single", now: due.addingTimeInterval(-1)) == nil)
+        precondition(single.displays["single"] == singleBeforeNotDue, "not-due advancement changed the assignment")
+        precondition(single.advance(display: "single", now: due)?.id == "ocean", "due advancement did not select the next wallpaper")
         let stopped = state.displays["stopped"]
         let disconnected = state.displays["disconnected"]
         let notDue = state.displays["not-due"]

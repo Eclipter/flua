@@ -425,10 +425,10 @@ struct LibraryState: Codable {
     }
     mutating func advance(display: String, surface: WallpaperSurface = .desktop, now: Date = Date(), force: Bool = false, backwards: Bool = false) -> Wallpaper? {
         guard var a = displays[display]?.selection(for: surface), let p = playlist(a.playlistID) else { return nil }
+        guard force || now.timeIntervalSince(a.changedAt) >= (p.interval ?? interval) else { return nil }
         let ids = p.items.filter { item($0) != nil }
         let eligible = Set(playableItems(in: p).map(\.id))
         guard !eligible.isEmpty else { return nil }
-        guard force || now.timeIntervalSince(a.changedAt) >= (p.interval ?? interval) else { return nil }
         let currentIndex = ids.firstIndex(of: a.wallpaperID ?? "") ?? ((a.index % ids.count) + ids.count) % ids.count
         if backwards {
             var history = (a.history ?? []).filter { eligible.contains($0) }
