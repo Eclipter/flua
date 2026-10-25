@@ -12,3 +12,23 @@ Use disposable libraries and matching catalog builds. Follow the [integration an
 - Currently blocked: verify HDR output on suitable hardware. A dedicated HDR display is unavailable; the built-in display's limited HDR capability is insufficient for full HDR validation.
 
 Update capability claims only after the relevant checks pass. Keep untested OS versions and hardware explicitly unverified.
+
+## Correctness and safe verification
+
+- **High:** Define commit semantics for [LibraryDisk.save](../Sources/Flua/Model.swift) and [Library.edit](../Sources/Flua/Library.swift). A failed catalog write currently leaves `library.json` updated while memory rolls back. Separate or retry derived catalog errors, and add a deterministic catalog-write-failure regression that checks both memory and reloaded state.
+- **Medium:** Make [media import](../Sources/Flua/Library.swift) accept only image formats the wallpaper provider can decode, or convert them while preserving the source. SVG is currently accepted through `UTType.image` and `NSImage`, but the provider's [MediaRenderer](../Sources/WallpaperExtension/MediaRenderer.m) cannot decode it. Add a decoder-parity regression for SVG and supported raster images, checking provider rendering and source preservation.
+- **Medium:** Preserve native playback intent and report failure when [Library.stop](../Sources/Flua/Library.swift) cannot call the system stop operation because the provider is unavailable or the catalog mismatches. Cover both cases and keep isolated-verification behavior safe.
+- **Medium:** Include `--preview-smoke` in [AppContext verification isolation](../Sources/Flua/App.swift). Add regressions for missing and overlapping `--data-dir` arguments before library access, and ensure verification disables native operations.
+- **Medium:** Fix unresolved smoke failures in [scripts/smoke.sh](../scripts/smoke.sh) and [SmokeRunner.swift](../Sources/Flua/SmokeRunner.swift): the accessibility gate failed on two runs, and a separate full application run reported `hiddenVideoPreviewResumed`, `videoResumed`, `liveAdjustmentSpeed`, and “Smoke verification activated Flua.” Diagnose and restore green smoke without weakening assertions; these observations do not establish separate product bugs.
+- **Medium:** Replace the duplicate `FocusClearView` and picker implementation in [FocusTests.swift](../Tests/FluaTests/FocusTests.swift) with coverage of production code, so production regressions cannot pass because the test compiles only its own copy.
+- **Medium:** Move GUI coverage from [FocusTests.swift](../Tests/FluaTests/FocusTests.swift) under [scripts/system-test-lock.py](../scripts/system-test-lock.py). The current test calls `makeKeyAndOrderFront` outside the shared lock and can interfere with focus or activation.
+
+## Performance and provider behavior
+
+- **Medium:** Avoid full catalog serialization for unchanged or favorite-only saves, and move expensive changed-catalog serialization off the UI thread with serialized writes. A synthetic 1,000-entry catalog containing a real Flua thumbnail measured 54.6 MB; repeated release-optimized saves took 143–151 ms. Verify unchanged catalog contents for favorite-only edits and responsiveness at a representative large size. See [Library.save](../Sources/Flua/Library.swift) and [LibraryDisk.saveCatalog](../Sources/Flua/Model.swift).
+- **Low:** In [Provider.m](../Sources/WallpaperExtension/Provider.m), query fullscreen Spaces only when at least one applicable Desktop session enables fullscreen pause. Avoid unnecessary polling for static content, preserve enabled-rule responsiveness, and verify monitoring behavior deterministically; the current policy timer polls at 30 Hz.
+
+## Tooling and concurrency
+
+- **Low:** Mark UI ownership explicitly with `@MainActor` and define worker boundaries in [Library.swift](../Sources/Flua/Library.swift) and related code. Make opt-in strict concurrency checking clean on the supported toolchain; the audit build passed with 99 warnings, including 52 in `Library.swift`.
+- **Low:** Choose and document a Swift formatting policy, then add a repeatable lint target and CI check. `.editorconfig` and `git diff --check` pass, but there is no formatter configuration, lint target, or CI check. Advisory Apple `swift-format` with four-space indentation and a 120-column limit reported 2,865 differences; do not mix mass cosmetic formatting into correctness fixes.
