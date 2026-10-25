@@ -536,6 +536,7 @@ struct ProviderCatalog: Codable, Equatable {
         var desktop: WallpaperMode = .animated
         var lockScreen: WallpaperMode = .animated
         var playbackPolicy: PlaybackPolicy?
+        var thumbnail: String?
     }
     var version = 1
     var items: [Item] = []
@@ -594,6 +595,7 @@ final class LibraryDisk {
     let assets: URL
     let manifest: URL
     let catalog: URL
+    var thumbnails: [String: String] = [:]
     init(root: URL) throws {
         self.root = root
         assets = root.appendingPathComponent("Media", isDirectory: true)
@@ -610,7 +612,16 @@ final class LibraryDisk {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         try encoder.encode(state).write(to: manifest, options: .atomic)
-        try encoder.encode(providerCatalog(from: state)).write(to: catalog, options: .atomic)
+        try saveCatalog(state)
+    }
+    func saveCatalog(_ state: LibraryState) throws {
+        var value = providerCatalog(from: state)
+        for index in value.items.indices {
+            value.items[index].thumbnail = thumbnails[value.items[index].id]
+        }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        try encoder.encode(value).write(to: catalog, options: .atomic)
     }
     func url(for wallpaper: Wallpaper) -> URL? {
         guard let name = wallpaper.file,

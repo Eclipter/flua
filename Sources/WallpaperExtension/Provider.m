@@ -2,6 +2,7 @@
 #import "MediaRenderer.h"
 #import "PlaybackPolicy.h"
 #import <IOSurface/IOSurface.h>
+#import <ImageIO/ImageIO.h>
 #import <QuartzCore/QuartzCore.h>
 #import <dlfcn.h>
 #import <fcntl.h>
@@ -137,7 +138,6 @@ static NSString *FSEncodeConfiguration(NSDictionary *configuration) {
     return [[NSJSONSerialization dataWithJSONObject:configuration options:0 error:nil] base64EncodedStringWithOptions:0] ?: @"";
 }
 // A library file is accepted only as Media/<name> inside the catalog root.
-// shortcut: rows reuse the bundled prototype thumbnail, replace it when still frames exist.
 static NSURL *FSActiveCatalogURL;
 static NSDictionary *FSActivePlaybackPolicy;
 static NSMutableArray *FSHeldCatalogAccess;
@@ -233,6 +233,17 @@ static NSArray *FSLibraryChoices(NSString **directRead) {
                                         @"desktop" : [entry[@"desktop"] isEqual:@"still"] ? @"still" : @"animated",
                                         @"lockScreen" : [entry[@"lockScreen"] isEqual:@"still"] ? @"still" : @"animated"} mutableCopy];
         if (file) choice[@"url"] = file;
+        NSString *thumbnail = entry[@"thumbnail"];
+        NSString *prefix = @"data:image/jpeg;base64,";
+        if ([thumbnail isKindOfClass:NSString.class] && thumbnail.length <= 512 * 1024 && [thumbnail hasPrefix:prefix]) {
+            NSData *bytes = [[NSData alloc] initWithBase64EncodedString:[thumbnail substringFromIndex:prefix.length] options:0];
+            CGImageSourceRef source = bytes.length ? CGImageSourceCreateWithData((__bridge CFDataRef)bytes, NULL) : NULL;
+            CFStringRef type = source ? CGImageSourceGetType(source) : NULL;
+            if (type && CFEqual(type, CFSTR("public.jpeg")) && CGImageSourceGetCount(source) > 0 &&
+                CGImageSourceGetStatus(source) == kCGImageStatusComplete)
+                choice[@"thumbnail"] = @{@"image":@{@"url":thumbnail}};
+            if (source) CFRelease(source);
+        }
         if ([entry[@"trimStart"] isKindOfClass:NSNumber.class] && [entry[@"trimEnd"] isKindOfClass:NSNumber.class]) {
             choice[@"trimStart"] = entry[@"trimStart"];
             choice[@"trimEnd"] = entry[@"trimEnd"];
@@ -310,9 +321,11 @@ static NSDictionary *FSBuildSettingsModel(BOOL libraryOnly) {
         NSMutableDictionary *mediaChoice=[choice mutableCopy];
         mediaChoice[@"id"]=@{@"descriptor":@{@"provider":provider,@"files":files,@"configuration":encoded}};
         mediaChoice[@"localizedDescription"]=library[@"title"];
+        mediaChoice[@"thumbnail"]=library[@"thumbnail"] ?: image;
         NSMutableDictionary *mediaItem=[item mutableCopy];
         mediaItem[@"id"]=@{@"id":[@"org.flua.library." stringByAppendingString:library[@"id"]]};
         mediaItem[@"localizedName"]=library[@"title"];
+        mediaItem[@"thumbnail"]=mediaChoice[@"thumbnail"];
         mediaItem[@"choice"]=mediaChoice;
         mediaItem[@"sortOrder"]=@(items.count);
         if ([library[@"kind"] isEqual:@"video"] || FSIsSceneKind(library[@"kind"])) mediaItem[@"contentBadge"]=@{@"video":@{}};
@@ -1530,11 +1543,23 @@ int main(int argc,const char **argv) { @autoreleasepool {
     [[NSFileManager defaultManager] createDirectoryAtURL:[catalogRoot URLByAppendingPathComponent:@"Media"] withIntermediateDirectories:YES attributes:nil error:nil];
     NSURL *catalogFile=[catalogRoot URLByAppendingPathComponent:@"catalog.json"];
     NSDictionary *catalogPolicy = @{@"pauseOnBattery":@NO, @"pauseOnLowPower":@YES, @"lowPowerThreshold":@30, @"pauseOnFullscreen":@NO};
+    CGImageSourceRef thumbnailSource = CGImageSourceCreateWithURL((__bridge CFURLRef)image, NULL);
+    CGImageRef thumbnailImage = thumbnailSource ? CGImageSourceCreateImageAtIndex(thumbnailSource, 0, NULL) : NULL;
+    NSMutableData *thumbnailBytes = NSMutableData.new;
+    CGImageDestinationRef thumbnailDestination = CGImageDestinationCreateWithData((__bridge CFMutableDataRef)thumbnailBytes, CFSTR("public.jpeg"), 1, NULL);
+    if (thumbnailImage && thumbnailDestination) {
+        CGImageDestinationAddImage(thumbnailDestination, thumbnailImage, NULL);
+        CGImageDestinationFinalize(thumbnailDestination);
+    }
+    if (thumbnailDestination) CFRelease(thumbnailDestination);
+    if (thumbnailImage) CGImageRelease(thumbnailImage);
+    if (thumbnailSource) CFRelease(thumbnailSource);
+    NSString *thumbnailURL = [@"data:image/jpeg;base64," stringByAppendingString:[thumbnailBytes base64EncodedStringWithOptions:0]];
     NSDictionary *catalog=@{@"version":@1,@"playbackPolicy":catalogPolicy,@"items":@[
         @{@"id":@"escape",@"title":@"Escape",@"kind":@"video",@"file":@"Media/../secret.mov",@"fit":@"fill"},
-        @{@"id":@"plain",@"title":@"Plain",@"kind":@"image",@"file":@"Media/plain.png",@"fit":@"fill"},
+        @{@"id":@"plain",@"title":@"Plain",@"kind":@"image",@"file":@"Media/plain.png",@"fit":@"fill",@"thumbnail":thumbnailURL},
         @{@"id":@"clip",@"title":@"Clip",@"kind":@"video",@"file":@"Media/clip.mov",@"fit":@"fit",@"speed":@1.5,@"dimming":@0.25,@"trimStart":@0.25,@"trimEnd":@0.75,@"still":@0.5,@"desktop":@"still",@"lockScreen":@"animated"},
-        @{@"id":@"scene",@"title":@"Scene",@"kind":@"aurora",@"file":@"Media/scene.mov",@"fit":@"fill"},
+        @{@"id":@"scene",@"title":@"Scene",@"kind":@"aurora",@"file":@"Media/scene.mov",@"fit":@"fill",@"thumbnail":@"https://example.invalid/preview.jpg"},
         @{@"id":@"plugin",@"title":@"Plugin",@"kind":@"plugin",@"file":@"Media/plugin.mov",@"fit":@"fill"}
     ]};
     NSData *catalogData=[NSJSONSerialization dataWithJSONObject:catalog options:0 error:nil];
@@ -1555,6 +1580,27 @@ int main(int argc,const char **argv) { @autoreleasepool {
         plainConfig=plainData.length ? [NSJSONSerialization JSONObjectWithData:plainData options:0 error:nil] : nil;
     }
     NSArray *trim=[config[@"trim"] isKindOfClass:NSArray.class] ? config[@"trim"] : nil;
+    NSDictionary *roundtrip = FSInspectSettings(FSBox(@"WallpaperSettingsViewModelsXPC", @"WallpaperSettingsViewModels", FSSettingsModel()));
+    NSDictionary *thumbnailItem = roundtrip[@"desktop"][@"groups"][0][@"items"][3];
+    NSString *listedThumbnail = thumbnailItem[@"thumbnail"][@"image"][@"url"];
+    BOOL catalogThumbnails = thumbnailBytes.length > 0 && [listedThumbnail isEqual:thumbnailURL]
+        && [thumbnailItem[@"choice"][@"thumbnail"] isEqual:thumbnailItem[@"thumbnail"]]
+        && ![sceneItem[@"thumbnail"][@"image"][@"url"] hasPrefix:@"https:"]
+        && [sceneItem[@"thumbnail"] isEqual:clipItem[@"thumbnail"]];
+    for (id invalid in @[@3, @"data:image/jpeg;base64,", @"data:image/jpeg;base64,%%%", @"data:image/jpeg;base64,bm90IGFuIGltYWdl",
+                         [@"data:image/jpeg;base64," stringByPaddingToLength:512 * 1024 + 1 withString:@"A" startingAtIndex:0]]) {
+        NSMutableDictionary *invalidCatalog = [catalog mutableCopy];
+        NSMutableArray *invalidItems = [catalog[@"items"] mutableCopy];
+        NSMutableDictionary *invalidItem = [invalidItems[1] mutableCopy];
+        invalidItem[@"thumbnail"] = invalid;
+        invalidItems[1] = invalidItem;
+        invalidCatalog[@"items"] = invalidItems;
+        [[NSJSONSerialization dataWithJSONObject:invalidCatalog options:0 error:nil] writeToURL:catalogFile atomically:YES];
+        NSDictionary *fallbackItem = FSSettingsModel()[@"desktop"][@"groups"][0][@"items"][3];
+        catalogThumbnails = catalogThumbnails && [fallbackItem[@"thumbnail"] isEqual:clipItem[@"thumbnail"]]
+            && [fallbackItem[@"choice"][@"thumbnail"] isEqual:fallbackItem[@"thumbnail"]];
+    }
+    [catalogData writeToURL:catalogFile atomically:YES];
     BOOL listedScene=[sceneItem[@"localizedName"] isEqual:@"Scene"] && [sceneDescriptor[@"files"] count]==0
         && [listedSceneConfig[@"kind"] isEqual:@"aurora"] && listedSceneConfig[@"fileIndex"]==nil
         && [listedSceneConfig[@"still"] doubleValue]==7 && [listedSceneConfig[@"modes"][@"desktop"] isEqual:@"animated"]
@@ -1593,7 +1639,7 @@ int main(int argc,const char **argv) { @autoreleasepool {
     recoveryOK = recoveryOK && cachedChoice;
     results[@"recovery"] = @{@"ok":@(recoveryOK), @"automaticMediaRecovery":@(automaticRecovery), @"activeVideoRecovery":@(activeVideoRecovery), @"cachedChoiceWithoutCatalog":@(cachedChoice), @"unsupportedConfigurationRejected":@(rejectedConfiguration)};
     unsetenv("FLUA_CATALOG");
-    results[@"catalog"]=@{@"ok":@(listedClip && rejectedRoot && rejectedVersion && policyPublished && policyRetained),@"policyPublished":@(policyPublished),@"policyRetained":@(policyRetained),@"listedClip":@(listedClip),@"rejectedRoot":@(rejectedRoot),@"rejectedVersion":@(rejectedVersion)};
+    results[@"catalog"]=@{@"ok":@(listedClip && rejectedRoot && rejectedVersion && policyPublished && policyRetained && catalogThumbnails),@"thumbnails":@(catalogThumbnails),@"policyPublished":@(policyPublished),@"policyRetained":@(policyRetained),@"listedClip":@(listedClip),@"rejectedRoot":@(rejectedRoot),@"rejectedVersion":@(rejectedVersion)};
     results[@"systemActivationPerformed"]=@NO;
     results[@"sandboxAuthorizationVerified"]=@NO;
     NSData *json=[NSJSONSerialization dataWithJSONObject:results options:NSJSONWritingPrettyPrinted error:nil];fwrite(json.bytes,1,json.length,stdout);puts("");

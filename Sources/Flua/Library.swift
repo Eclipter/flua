@@ -29,6 +29,7 @@ final class Library: ObservableObject {
     private var screenObserver: NSObjectProtocol?
     private var saveBlocked = false
     private var nativeRefreshTask: Task<Void, Never>?
+    private var thumbnailPublicationTask: Task<Void, Never>?
     private var automaticPlaylistPlaybackEnabled = false
     private var stoppedNativeDisplays = Set<String>()
     private var pendingNativeAssignmentDisplays = Set<String>()
@@ -526,6 +527,7 @@ final class Library: ObservableObject {
         scheduleNativeAssignmentRefresh(for: changed)
         // Retain the imported file so accidental removal never destroys the user's media.
         thumbnails.removeValue(forKey: w.id)
+        disk.thumbnails.removeValue(forKey: w.id)
         selection = state.wallpapers.first(where: { !state.isBlocked($0) })?.id
     }
     private weak var activeOpenPanel: NSOpenPanel?
@@ -691,18 +693,34 @@ final class Library: ObservableObject {
         }
     }
     func makeThumbnails() { for w in state.wallpapers { generateThumbnail(w) } }
+    private func publishThumbnail(_ image: NSImage, for wallpaper: Wallpaper) {
+        guard let current = state.item(wallpaper.id), current.file == wallpaper.file,
+              current.kind == wallpaper.kind, current.videoEdit == wallpaper.videoEdit else { return }
+        thumbnails[wallpaper.id] = image
+        guard !saveBlocked, let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil),
+              let data = NSBitmapImageRep(cgImage: cgImage).representation(using: .jpeg, properties: [.compressionFactor: 0.8]) else { return }
+        disk.thumbnails[wallpaper.id] = "data:image/jpeg;base64," + data.base64EncodedString()
+        thumbnailPublicationTask?.cancel()
+        thumbnailPublicationTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(200))
+            guard !Task.isCancelled, let self else { return }
+            do { try self.disk.saveCatalog(self.state) }
+            catch { self.error = error.localizedDescription }
+            self.thumbnailPublicationTask = nil
+        }
+    }
     func generateThumbnail(_ w: Wallpaper) {
-        if w.file == nil { thumbnails[w.id] = AmbientSceneView.thumbnail(scene: w.kind, size: NSSize(width: 480, height: 270)); return }
+        if w.file == nil { publishThumbnail(AmbientSceneView.thumbnail(scene: w.kind, size: NSSize(width: 480, height: 270)), for: w); return }
         guard let url = disk.url(for: w) else { return }
         Task { @MainActor [weak self] in
             if w.kind == "image" {
-                self?.thumbnails[w.id] = ImageThumbnail.create(url: url).map { NSImage(cgImage: $0, size: .zero) }
+                if let image = ImageThumbnail.create(url: url) { self?.publishThumbnail(NSImage(cgImage: image, size: .zero), for: w) }
             } else {
                 let generator = AVAssetImageGenerator(asset: AVURLAsset(url: url))
                 generator.appliesPreferredTrackTransform = true
                 generator.maximumSize = CGSize(width: 480, height: 270)
                 let timestamp = CMTime(seconds: w.videoEdit?.thumbnail ?? 0, preferredTimescale: 600)
-                if let result = try? await generator.image(at: timestamp), self?.state.item(w.id)?.videoEdit?.thumbnail == w.videoEdit?.thumbnail { self?.thumbnails[w.id] = NSImage(cgImage: result.image, size: .zero) }
+                if let result = try? await generator.image(at: timestamp) { self?.publishThumbnail(NSImage(cgImage: result.image, size: .zero), for: w) }
             }
         }
     }

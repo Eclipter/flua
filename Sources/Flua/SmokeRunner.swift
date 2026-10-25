@@ -774,6 +774,20 @@ enum SmokeRunner {
                 && library.selected?.file != nil && library.visible.contains { $0.id == library.selection }
                 && library.state.playlist(importPlaylist.id)?.items == importPlaylist.items && library.importNotice != nil
             await pause(0.3)
+            let thumbnailDeadline = Date().addingTimeInterval(5)
+            while Date() < thumbnailDeadline,
+                  (try JSONDecoder().decode(ProviderCatalog.self, from: Data(contentsOf: library.disk.catalog))).items.contains(where: { $0.thumbnail == nil }) {
+                await pause(0.05)
+            }
+            let thumbnailCatalog = try JSONDecoder().decode(ProviderCatalog.self, from: Data(contentsOf: library.disk.catalog))
+            let thumbnailImages = thumbnailCatalog.items.compactMap { item -> Data? in
+                guard let value = item.thumbnail, let url = URL(string: value), let data = try? Data(contentsOf: url),
+                      NSImage(data: data) != nil else { return nil }
+                return data
+            }
+            results["nativeCatalogThumbnails"] = thumbnailImages.count == thumbnailCatalog.items.count
+                && Set(thumbnailImages).count >= 5
+            if results["nativeCatalogThumbnails"] as? Bool != true { failures.append("nativeCatalogThumbnails") }
             if let window = NSApp.windows.first(where: { $0.title == "Flua" }) {
                 captureView(window, to: out.appendingPathComponent("Flua-added.png"))
             }

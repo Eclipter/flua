@@ -512,10 +512,24 @@ import Foundation
         try disk.save(state)
         let saved = try JSONDecoder().decode(ProviderCatalog.self, from: Data(contentsOf: disk.catalog))
         precondition(saved == catalog)
+        let manifest = try Data(contentsOf: disk.manifest)
+        disk.thumbnails = ["clip": "data:image/jpeg;base64,Y2xpcA==", "aurora": "data:image/jpeg;base64,c2NlbmU=",
+                           "hidden-pic": "hidden", "removed": "removed"]
+        try disk.saveCatalog(state)
+        var withThumbnails = catalog
+        withThumbnails.items[0].thumbnail = disk.thumbnails["clip"]
+        withThumbnails.items[2].thumbnail = disk.thumbnails["aurora"]
+        let published = try JSONDecoder().decode(ProviderCatalog.self, from: Data(contentsOf: disk.catalog))
+        let unchangedManifest = try Data(contentsOf: disk.manifest)
+        precondition(published == withThumbnails)
+        precondition(unchangedManifest == manifest, "Thumbnail publication rewrote library data")
+        try disk.save(state)
+        let resaved = try JSONDecoder().decode(ProviderCatalog.self, from: Data(contentsOf: disk.catalog))
+        precondition(resaved == withThumbnails)
         try Data("broken".utf8).write(to: disk.manifest)
         do { _ = try disk.load(); preconditionFailure("Corrupt library accepted") } catch LibraryError.invalidLibrary {}
         let preserved = try JSONDecoder().decode(ProviderCatalog.self, from: Data(contentsOf: disk.catalog))
-        precondition(preserved == catalog)
+        precondition(preserved == withThumbnails)
     }
     static func surfaceAssignmentTests(disk: LibraryDisk) throws {
         let start = Date(timeIntervalSinceReferenceDate: 42)
