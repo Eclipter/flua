@@ -131,6 +131,13 @@ final class Library: ObservableObject {
         if resolvedDisplayMode(state.displayMode) == "mirrored" { return screens }
         return screens.filter { displayID($0) == display || (display == "all" && $0 == screens.first) }
     }
+    var hasActivePlaylist: Bool {
+        !nativeSetupBusy && playbackTargets.contains { screen in
+            let id = displayID(screen)
+            return state.nativePlayback[id] != false
+                && state.playlist(state.displays[id]?.selection(for: surface)?.playlistID) != nil
+        }
+    }
     func setPlaybackMode(_ mode: String) {
         configurationDraft.changes.append(.displayMode(mode, displays: screens.map(displayID), preferredSource: display == "all" ? nil : display))
     }

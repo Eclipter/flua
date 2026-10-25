@@ -483,7 +483,6 @@ struct LibraryView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
                     GeometryReader { geometry in
-                        let isCompact = geometry.size.width < 650
                         ScrollViewReader { proxy in
                         ScrollView {
                             Group {
@@ -494,7 +493,8 @@ struct LibraryView: View {
                         }
                         .ignoresSafeArea(.container, edges: .top)
                         .overlay(alignment: .bottom) {
-                            transport(compact: isCompact, stackedControls: geometry.size.width < 380)
+                            transport(stackedControls: geometry.size.width < 380)
+                                .frame(maxWidth: .infinity)
                                 .fluaGlass(in: RoundedRectangle(cornerRadius: 16, style: .continuous))
                                 .padding(12)
                                 .padding(.trailing, NSScroller.scrollerWidth(for: .regular, scrollerStyle: NSScroller.preferredScrollerStyle))
@@ -578,6 +578,14 @@ struct LibraryView: View {
         VStack(alignment: .leading, spacing: 24) {
             pageHeader(compact: width < 650)
             browseToolbar(compact: width < 650)
+            if let notice = library.importNotice {
+                HStack(spacing: 8) {
+                    Text(notice).font(.caption).foregroundStyle(.secondary)
+                    Button("Undo") { library.undoImport() }.fluaGlassButton()
+                    Button { library.importNotice = nil } label: { Image(systemName: "xmark") }
+                        .accessibilityLabel("Dismiss confirmation").fluaGlassButton()
+                }
+            }
             if displayed.isEmpty {
                 ContentUnavailableView {
                     Label("No Wallpapers", systemImage: "photo.on.rectangle.angled")
@@ -766,31 +774,21 @@ struct LibraryView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(16)
     }
-    private func transport(compact: Bool, stackedControls: Bool) -> some View {
-        let layout = compact ? AnyLayout(VStackLayout(alignment: .leading, spacing: 10)) : AnyLayout(HStackLayout(spacing: 16))
-        return layout {
-            HStack(spacing: 8) {
-                Circle().fill(library.state.paused ? Color.orange : library.accent).frame(width: 8, height: 8)
-                Text(library.importNotice ?? library.activity).font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                if library.importNotice != nil {
-                    Button("Undo") { library.undoImport() }.fluaGlassButton().fixedSize()
-                    Button { library.importNotice = nil } label: { Image(systemName: "xmark") }.accessibilityLabel("Dismiss confirmation").fluaGlassButton()
-                }
-                Spacer(minLength: 0)
-            }
-            let controlsLayout = stackedControls ? AnyLayout(VStackLayout(alignment: .leading, spacing: 8)) : AnyLayout(HStackLayout(spacing: 12))
-            controlsLayout {
-                FluaSegmentedPicker(title: "Display Mode", selection: Binding(get: { library.playbackMode }, set: { library.setPlaybackMode($0) }),
-                    choices: [("Mirrored", "mirrored"), ("Per Display", "perDisplay")], showsLabel: false)
-                    .frame(maxWidth: 190)
-                fluaGlassRow {
-                    Button { library.advancePlaylists(force: true, backwards: true) } label: { Image(systemName: "backward.end.fill") }
-                        .accessibilityLabel("Previous in playlist").help("Previous in playlist").fluaGlassButton()
-                    Button { library.advancePlaylists(force: true) } label: { Image(systemName: "forward.end.fill") }
-                        .accessibilityLabel("Next in playlist").help("Next in playlist").fluaGlassButton()
-                    Button { library.stop() } label: { Image(systemName: "stop.fill") }
-                        .accessibilityLabel("Stop on selected displays").help("Stop on selected displays").fluaGlassButton()
-                }
+    private func transport(stackedControls: Bool) -> some View {
+        let controlsLayout = stackedControls ? AnyLayout(VStackLayout(spacing: 8)) : AnyLayout(HStackLayout(spacing: 12))
+        return controlsLayout {
+            FluaSegmentedPicker(title: "Display Mode", selection: Binding(get: { library.playbackMode }, set: { library.setPlaybackMode($0) }),
+                choices: [("Mirrored", "mirrored"), ("Per Display", "perDisplay")], showsLabel: false)
+                .frame(maxWidth: 190)
+            fluaGlassRow {
+                Button { library.advancePlaylists(force: true, backwards: true) } label: { Image(systemName: "backward.end.fill") }
+                    .accessibilityLabel("Previous in playlist").help("Previous in playlist").fluaGlassButton()
+                    .disabled(!library.hasActivePlaylist)
+                Button { library.advancePlaylists(force: true) } label: { Image(systemName: "forward.end.fill") }
+                    .accessibilityLabel("Next in playlist").help("Next in playlist").fluaGlassButton()
+                    .disabled(!library.hasActivePlaylist)
+                Button { library.stop() } label: { Image(systemName: "stop.fill") }
+                    .accessibilityLabel("Stop on selected displays").help("Stop on selected displays").fluaGlassButton()
             }
         }
         .padding(.horizontal, 16)

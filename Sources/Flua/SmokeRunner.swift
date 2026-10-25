@@ -83,8 +83,32 @@ enum SmokeRunner {
             playlistLibrary.state.shuffle = false
             playlistLibrary.state.assign("ember", display: key)
             let desktop = playlistLibrary.state.displays[key]?.desktop
+            func checkPlaylistControls(_ enabled: Bool, context: String) async {
+                await pause(0.3)
+                for (name, expected) in [("Previous in playlist", enabled), ("Next in playlist", enabled), ("Stop on selected displays", true)] {
+                    guard let button = auditElement(auditTitle, named: name) else {
+                        missing.append(context + ": missing " + name)
+                        continue
+                    }
+                    var value: CFTypeRef?
+                    if AXUIElementCopyAttributeValue(button, kAXEnabledAttribute as CFString, &value) != .success
+                        || (value as? NSNumber)?.boolValue != expected {
+                        missing.append(context + ": incorrect availability of " + name)
+                    }
+                }
+            }
+            await checkPlaylistControls(false, context: "Single wallpaper")
+            captureView(hosted, to: destination.deletingLastPathComponent().appendingPathComponent("Flua-transport-inactive.png"))
             playlistLibrary.surface = .lockScreen
             playlistLibrary.startPlaylist("ambient")
+            await checkPlaylistControls(true, context: "Active Lock Screen playlist")
+            captureView(hosted, to: destination.deletingLastPathComponent().appendingPathComponent("Flua-transport-active.png"))
+            playlistLibrary.togglePlaylistPause()
+            await checkPlaylistControls(true, context: "Paused playlist")
+            playlistLibrary.togglePlaylistPause()
+            playlistLibrary.surface = .desktop
+            await checkPlaylistControls(false, context: "Other surface has a playlist")
+            playlistLibrary.surface = .lockScreen
             var controlsPassed = playlistLibrary.state.displays[key]?.lockScreen?.wallpaperID == "aurora"
                 && playlistLibrary.state.displays[key]?.desktop == desktop
             for (name, expected) in [("Next in playlist", "ocean"), ("Previous in playlist", "aurora")] {
@@ -97,6 +121,19 @@ enum SmokeRunner {
                     && playlistLibrary.state.displays[key]?.desktop == desktop
             }
             if !controlsPassed { missing.append("Lock Screen playlist Previous/Next preserve Desktop") }
+            playlistLibrary.state.nativePlayback[key] = true
+            if let stop = auditElement(auditTitle, named: "Stop on selected displays") {
+                if AXUIElementPerformAction(stop, kAXPressAction as CFString) != .success {
+                    missing.append("Stop accessibility action")
+                }
+            } else { missing.append("Stop accessibility target") }
+            await checkPlaylistControls(false, context: "Stopped playlist with saved assignment")
+            if playlistLibrary.state.displays[key]?.lockScreen?.playlistID != "ambient" {
+                missing.append("Stop retains the saved playlist")
+            }
+            playlistLibrary.nativeSetupBusy = true
+            await checkPlaylistControls(false, context: "Native setup busy")
+            playlistLibrary.nativeSetupBusy = false
             if let error = playlistLibrary.error { missing.append("Lock Screen playlist verification: " + error) }
             hosted.contentView = originalContent
         } else { missing.append("Lock Screen playlist verification library") }
