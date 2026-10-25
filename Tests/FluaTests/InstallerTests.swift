@@ -111,6 +111,18 @@ import Foundation
         let mockBinary = mockMacOS.appendingPathComponent("Flua")
         try "#!/bin/sh\necho 'Flua Mock'\n".write(to: mockBinary, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: mockBinary.path)
+        let mockInfo = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+        <plist version="1.0"><dict>
+        <key>CFBundleExecutable</key><string>Flua</string>
+        <key>CFBundlePackageType</key><string>APPL</string>
+        <key>CFBundleIdentifier</key><string>local.flua.desktop</string>
+        <key>CFBundleShortVersionString</key><string>0.1.0</string>
+        <key>CFBundleVersion</key><string>1</string>
+        </dict></plist>
+        """
+        try mockInfo.write(to: mockContents.appendingPathComponent("Info.plist"), atomically: true, encoding: .utf8)
 
         let validZipURL = tempBase.appendingPathComponent("Flua.zip")
         let dittoValid = Process()
@@ -129,6 +141,9 @@ import Foundation
         let mockKillall = mockBinDir.appendingPathComponent("killall")
         try "#!/bin/sh\necho 'Unexpected killall call' >&2\nexit 1\n".write(to: mockKillall, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: mockKillall.path)
+        let mockCodesign = mockBinDir.appendingPathComponent("codesign")
+        try "#!/bin/sh\nexit \"${FLUA_TEST_CODESIGN_STATUS:-0}\"\n".write(to: mockCodesign, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: mockCodesign.path)
 
         let successRun = runScript(scriptURL: installScriptURL, arguments: ["--dir", targetAppsDir.path], environment: validEnv)
         precondition(successRun.status == 0, "Installation failed: \(successRun.stderr)")
@@ -142,6 +157,87 @@ import Foundation
         let oldMarker = installedApp.appendingPathComponent("previous-version.txt")
         try "previous installation".write(to: oldMarker, atomically: true, encoding: .utf8)
         let originalBinary = try Data(contentsOf: installedBin)
+
+        // An invalid signature must be rejected before the installed app is moved aside.
+        var invalidSignatureEnv = validEnv
+        invalidSignatureEnv["FLUA_TEST_CODESIGN_STATUS"] = "1"
+        let invalidSignature = runScript(scriptURL: installScriptURL, arguments: ["--dir", targetAppsDir.path], environment: invalidSignatureEnv)
+        precondition(invalidSignature.status != 0, "Invalid app signature must fail")
+        precondition(invalidSignature.stderr.contains("invalid signature"), "Invalid signature error missing")
+        precondition((try? Data(contentsOf: installedBin)) == originalBinary, "Invalid signature changed the installed binary")
+        precondition(FileManager.default.fileExists(atPath: oldMarker.path), "Invalid signature removed the previous installation")
+
+        // Invalid app metadata must also preserve the installed app.
+        let malformedInfo = mockContents.appendingPathComponent("Info.plist")
+        try "not a plist".write(to: malformedInfo, atomically: true, encoding: .utf8)
+        let malformedZip = tempBase.appendingPathComponent("Malformed.zip")
+        let malformedArchive = Process()
+        malformedArchive.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
+        malformedArchive.arguments = ["-c", "-k", "--keepParent", mockAppURL.path, malformedZip.path]
+        try malformedArchive.run()
+        malformedArchive.waitUntilExit()
+        precondition(malformedArchive.terminationStatus == 0, "Creating malformed app zip failed")
+        var invalidMetadataEnv = validEnv
+        invalidMetadataEnv["FLUA_DOWNLOAD_URL"] = "file://\(malformedZip.path)"
+        let invalidMetadata = runScript(scriptURL: installScriptURL, arguments: ["--dir", targetAppsDir.path], environment: invalidMetadataEnv)
+        precondition(invalidMetadata.status != 0, "Invalid app metadata must fail")
+        precondition(invalidMetadata.stderr.contains("invalid bundle metadata"), "Invalid metadata error missing")
+        precondition((try? Data(contentsOf: installedBin)) == originalBinary, "Invalid metadata changed the installed binary")
+        precondition(FileManager.default.fileExists(atPath: oldMarker.path), "Invalid metadata removed the previous installation")
+        try mockInfo.write(to: malformedInfo, atomically: true, encoding: .utf8)
+
+        // A different app's valid bundle identifier must not replace Flua.
+        try mockInfo.replacingOccurrences(of: "local.flua.desktop", with: "example.other.app").write(to: malformedInfo, atomically: true, encoding: .utf8)
+        let wrongIdentifierZip = tempBase.appendingPathComponent("WrongIdentifier.zip")
+        let wrongIdentifierArchive = Process()
+        wrongIdentifierArchive.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
+        wrongIdentifierArchive.arguments = ["-c", "-k", "--keepParent", mockAppURL.path, wrongIdentifierZip.path]
+        try wrongIdentifierArchive.run()
+        wrongIdentifierArchive.waitUntilExit()
+        precondition(wrongIdentifierArchive.terminationStatus == 0, "Creating wrong-identifier app zip failed")
+        var wrongIdentifierEnv = validEnv
+        wrongIdentifierEnv["FLUA_DOWNLOAD_URL"] = "file://\(wrongIdentifierZip.path)"
+        let wrongIdentifier = runScript(scriptURL: installScriptURL, arguments: ["--dir", targetAppsDir.path], environment: wrongIdentifierEnv)
+        precondition(wrongIdentifier.status != 0, "Wrong app bundle identifier must fail")
+        precondition(wrongIdentifier.stderr.contains("invalid bundle metadata"), "Wrong identifier error missing")
+        precondition((try? Data(contentsOf: installedBin)) == originalBinary, "Wrong identifier changed the installed binary")
+        precondition(FileManager.default.fileExists(atPath: oldMarker.path), "Wrong identifier removed the previous installation")
+        try mockInfo.write(to: malformedInfo, atomically: true, encoding: .utf8)
+
+        // A missing app executable must not replace the installed app.
+        let mockBinaryContents = try Data(contentsOf: mockBinary)
+        try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: mockBinary.path)
+        let nonExecutableZip = tempBase.appendingPathComponent("NonExecutable.zip")
+        let nonExecutableArchive = Process()
+        nonExecutableArchive.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
+        nonExecutableArchive.arguments = ["-c", "-k", "--keepParent", mockAppURL.path, nonExecutableZip.path]
+        try nonExecutableArchive.run()
+        nonExecutableArchive.waitUntilExit()
+        precondition(nonExecutableArchive.terminationStatus == 0, "Creating non-executable app zip failed")
+        var nonExecutableEnv = validEnv
+        nonExecutableEnv["FLUA_DOWNLOAD_URL"] = "file://\(nonExecutableZip.path)"
+        let nonExecutable = runScript(scriptURL: installScriptURL, arguments: ["--dir", targetAppsDir.path], environment: nonExecutableEnv)
+        precondition(nonExecutable.status != 0, "Non-executable app binary must fail")
+        precondition(nonExecutable.stderr.contains("no executable Flua app binary"), "Non-executable error missing")
+        precondition((try? Data(contentsOf: installedBin)) == originalBinary, "Non-executable app changed the installed binary")
+        precondition(FileManager.default.fileExists(atPath: oldMarker.path), "Non-executable app removed the previous installation")
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: mockBinary.path)
+        try FileManager.default.removeItem(at: mockBinary)
+        let missingExecutableZip = tempBase.appendingPathComponent("MissingExecutable.zip")
+        let missingExecutableArchive = Process()
+        missingExecutableArchive.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
+        missingExecutableArchive.arguments = ["-c", "-k", "--keepParent", mockAppURL.path, missingExecutableZip.path]
+        try missingExecutableArchive.run()
+        missingExecutableArchive.waitUntilExit()
+        precondition(missingExecutableArchive.terminationStatus == 0, "Creating app without an executable zip failed")
+        var missingExecutableEnv = validEnv
+        missingExecutableEnv["FLUA_DOWNLOAD_URL"] = "file://\(missingExecutableZip.path)"
+        let missingExecutable = runScript(scriptURL: installScriptURL, arguments: ["--dir", targetAppsDir.path], environment: missingExecutableEnv)
+        precondition(missingExecutable.status != 0, "Missing app executable must fail")
+        precondition(missingExecutable.stderr.contains("no executable Flua app binary"), "Missing executable error missing")
+        precondition((try? Data(contentsOf: installedBin)) == originalBinary, "Missing executable changed the installed binary")
+        precondition(FileManager.default.fileExists(atPath: oldMarker.path), "Missing executable removed the previous installation")
+        try mockBinaryContents.write(to: mockBinary)
 
         // A partial copy must leave the installed app intact and remove staging files.
         let mockCopy = mockBinDir.appendingPathComponent("cp")
@@ -195,7 +291,7 @@ import Foundation
         xattrCheck.waitUntilExit()
         precondition(xattrCheck.terminationStatus != 0, "Quarantine attribute should have been removed")
 
-        print("PASS: installer validates prerequisites, installs and updates Flua.zip, preserves the installed app after copy or replacement failure, strips quarantine, and cleans up staging directories")
+        print("PASS: installer validates prerequisites and downloaded apps, preserves the installed app after validation or replacement failure, strips quarantine, and cleans up staging directories")
     }
 
     struct ScriptResult {

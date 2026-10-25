@@ -157,6 +157,29 @@ info "Installing to ${TARGET_APP}..."
 STAGE_DIR="$(mktemp -d "${INSTALL_DIR}/.flua-install.XXXXXX")"
 cp -R "${TMP_EXTRACT}/${APP_NAME}" "${STAGE_DIR}/${APP_NAME}"
 
+STAGED_APP="${STAGE_DIR}/${APP_NAME}"
+APP_EXECUTABLE="${STAGED_APP}/Contents/MacOS/Flua"
+APP_INFO="${STAGED_APP}/Contents/Info.plist"
+if [ ! -f "$APP_EXECUTABLE" ] || [ ! -x "$APP_EXECUTABLE" ]; then
+    error "Downloaded ${APP_NAME} has no executable Flua app binary."
+    exit 1
+fi
+
+if [ ! -f "$APP_INFO" ] \
+    || [ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APP_INFO" 2>/dev/null || true)" != "Flua" ] \
+    || [ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundlePackageType' "$APP_INFO" 2>/dev/null || true)" != "APPL" ] \
+    || [ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP_INFO" 2>/dev/null || true)" != "local.flua.desktop" ] \
+    || [ -z "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP_INFO" 2>/dev/null || true)" ] \
+    || [ -z "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP_INFO" 2>/dev/null || true)" ]; then
+    error "Downloaded ${APP_NAME} has invalid bundle metadata."
+    exit 1
+fi
+
+if ! codesign --verify --deep --strict "$STAGED_APP"; then
+    error "Downloaded ${APP_NAME} has an invalid signature."
+    exit 1
+fi
+
 if pgrep -xq "Flua" 2>/dev/null; then
     info "Closing running Flua instance..."
     killall Flua 2>/dev/null || true
