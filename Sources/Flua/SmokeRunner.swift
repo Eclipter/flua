@@ -155,6 +155,7 @@ enum SmokeRunner {
             await checkPlaylistControls(false, context: "Single wallpaper", captureTo: destination.deletingLastPathComponent().appendingPathComponent("Flua-transport-inactive.png"))
             playlistLibrary.surface = .lockScreen
             playlistLibrary.startPlaylist("ambient")
+            await waitForNativePublication(playlistLibrary)
             await checkPlaylistControls(true, context: "Active Lock Screen playlist", captureTo: destination.deletingLastPathComponent().appendingPathComponent("Flua-transport-active.png"))
             playlistLibrary.togglePlaylistPause()
             await checkPlaylistControls(true, context: "Paused playlist")
@@ -714,18 +715,21 @@ enum SmokeRunner {
             let validation = try Library(root: out.appendingPathComponent("NativeValidation"), systemPlaybackEnabled: false)
             validation.tick?.invalidate()
             validation.applySelected()
+            await waitForNativePublication(validation)
             results["nativeDescriptorValidation"] = validation.error == nil && !validation.nativeSetupBusy
                 && validation.activity == "Validated saved wallpaper choices. System playback is disabled for verification."
                 && validation.state.nativePlayback.isEmpty
             if let selectedID = validation.selected?.id {
                 validation.state.wallpapers.removeAll { $0.id == selectedID }
                 validation.applySavedNativeAssignments()
+                await waitForNativePublication(validation)
                 results["nativeDescriptorValidationRejectsMissing"] = validation.error?.contains("unavailable or blocked") == true
             }
             let mismatch = try Library(root: out.appendingPathComponent("NativeMismatch"))
             mismatch.tick?.invalidate()
             if NativeWallpaper.available, NativeWallpaper.catalogURL.resolvingSymlinksInPath() != mismatch.disk.catalog.resolvingSymlinksInPath() {
                 mismatch.applySelected()
+                await waitForNativePublication(mismatch)
                 results["nativeCatalogMismatchRejected"] = mismatch.error?.contains("This build uses a different library") == true
                     && !mismatch.nativeSetupBusy && mismatch.state.nativePlayback.isEmpty
             }
@@ -748,9 +752,11 @@ enum SmokeRunner {
                     }
                     library.state = idle
                     library.applySavedNativeAssignments()
+                    await waitForNativePublication(library)
                     var publications = 0
                     let observation = library.$state.dropFirst().sink { _ in publications += 1 }
                     library.advancePlaylists(force: false)
+                    await waitForNativePublication(library)
                     observation.cancel()
                     results["idlePlaylistDoesNotPublish_" + mode] = publications == 0
                     if publications != 0 { failures.append("idlePlaylistDoesNotPublish_" + mode) }
@@ -1326,8 +1332,10 @@ enum SmokeRunner {
                 && library.error == nil
             library.updatePlaylist("ambient", shuffle: false)
             library.startPlaylist("ambient")
+            await waitForNativePublication(library)
             results["playlistStart"] = library.state.displays.values.allSatisfy { $0.desktop.wallpaperID == "aurora" && $0.desktop.playlistID == "ambient" }
             library.advancePlaylists(force: true)
+            await waitForNativePublication(library)
             results["playlistNext"] = library.state.displays.values.allSatisfy { $0.desktop.wallpaperID == "ocean" }
             library.stop()
             results["libraryStop"] = library.state.displays.isEmpty || library.state.nativePlayback.values.allSatisfy { !$0 }
@@ -1336,11 +1344,13 @@ enum SmokeRunner {
                 library.state.setMode(.still, display: key, surface: .desktop)
                 library.selection = "aurora"
                 library.applySelected()
+                await waitForNativePublication(library)
                 results["sceneStillMode"] = library.state.displays[key]?.desktop.mode == .still
                 library.selection = video.id
                 let sourceURL = library.disk.url(for: video)!
                 let sourceBefore = try Data(contentsOf: sourceURL)
                 library.applySelected()
+                await waitForNativePublication(library)
                 results["desktopStill"] = library.state.displays[key]?.desktop.mode == .still
                 let assignmentsBeforePause = library.state.displays
                 library.togglePlaylistPause()
@@ -1367,11 +1377,13 @@ enum SmokeRunner {
                 library.state.setMode(.still, display: key, surface: .lockScreen)
                 library.selection = video.id
                 library.applySelected()
+                await waitForNativePublication(library)
                 results["applySelectedSurfaceOnly"] = library.state.displays[key]?.desktop.wallpaperID == video.id
                     && library.state.displays[key]?.lockScreen?.wallpaperID == "ember"
                     && library.state.displays[key]?.lockScreen?.mode == .still
                 library.surface = .lockScreen
                 library.applySelected()
+                await waitForNativePublication(library)
                 results["applyLockScreenOnly"] = library.state.displays[key]?.desktop.wallpaperID == video.id
                     && library.state.displays[key]?.lockScreen?.wallpaperID == video.id
                     && library.state.displays[key]?.lockScreen?.mode == .still
@@ -1379,7 +1391,9 @@ enum SmokeRunner {
                 let lockScreen = library.state.displays[key]?.lockScreen
                 library.updatePlaylist("ambient", shuffle: false)
                 library.startPlaylist("ambient")
+                await waitForNativePublication(library)
                 library.advancePlaylists(force: true)
+                await waitForNativePublication(library)
                 results["desktopPlaylistPreservesLockScreen"] = library.state.displays.values.allSatisfy {
                     $0.desktop.wallpaperID == "ocean" && $0.lockScreen == lockScreen
                 }
@@ -1391,16 +1405,20 @@ enum SmokeRunner {
                 library.tick?.invalidate()
                 library.surface = .lockScreen
                 library.startPlaylist("ambient")
+                await waitForNativePublication(library)
                 library.surface = .desktop
                 library.startPlaylist("ambient")
+                await waitForNativePublication(library)
                 let previousInterval = library.state.playlists[0].interval
                 library.state.playlists[0].interval = 0
                 library.advancePlaylists(force: false)
+                await waitForNativePublication(library)
                 results["independentPlaylistTimers"] = library.state.displays.values.allSatisfy {
                     $0.desktop.wallpaperID == "ocean" && $0.lockScreen?.wallpaperID == "ocean"
                 }
                 for id in library.screens.map(displayID) { library.state.setSurfacesLinked(true, display: id) }
                 library.advancePlaylists(force: false)
+                await waitForNativePublication(library)
                 results["linkedPlaylistAdvancesOnce"] = library.state.displays.values.allSatisfy {
                     $0.desktop.wallpaperID == "cosmos" && $0.lockScreen == $0.desktop
                 }
@@ -1412,6 +1430,7 @@ enum SmokeRunner {
                 let key = displayID(screen)
                 library.selection = "aurora"
                 library.applySelected()
+                await waitForNativePublication(library)
                 let saved = library.state.displays
                 library.surface = .lockScreen
                 library.selection = "ember"
@@ -1420,6 +1439,7 @@ enum SmokeRunner {
                     && library.disk.load().displays == saved && library.surfaceMode == .still
                 library.surface = .desktop
                 library.applySelected()
+                await waitForNativePublication(library)
                 results["surfaceControlsApplyHiddenMode"] = library.state.displays[key]?.desktop.wallpaperID == "ember"
                     && library.state.displays[key]?.lockScreen?.wallpaperID == nil
                 library.surface = .lockScreen
@@ -1436,6 +1456,7 @@ enum SmokeRunner {
                     $0.desktop.mode == .still && $0.lockScreen?.mode == .animated && !$0.surfacesLinked
                 }
                 library.applySelected()
+                await waitForNativePublication(library)
                 results["surfaceControlsPersisted"] = try library.disk.load().displays == library.state.displays
                 library.surface = .desktop
                 library.state.displays.removeAll()
@@ -1449,20 +1470,24 @@ enum SmokeRunner {
                 draftValidation.display = key
                 draftValidation.updatePlaylist("ambient", shuffle: false)
                 draftValidation.startPlaylist("ambient")
+                await waitForNativePublication(draftValidation)
                 draftValidation.surface = .lockScreen
                 draftValidation.setSurfaceMode(.still)
                 draftValidation.surface = .desktop
                 draftValidation.advancePlaylists(force: true)
+                await waitForNativePublication(draftValidation)
                 draftValidation.surface = .lockScreen
                 let advanced = draftValidation.state.displays[key]?.desktop
                 results["configurationDraftPreviewUsesLivePlaylist"] = draftValidation.surfaceSummary(.desktop).contains("Quiet tides")
                 draftValidation.selection = "cosmos"
                 draftValidation.applySelected()
+                await waitForNativePublication(draftValidation)
                 results["configurationDraftPreservesPlaylistProgress"] = draftValidation.state.displays[key]?.desktop == advanced
                 draftValidation.setSurfaceMode(.animated)
                 draftValidation.remove(draftValidation.state.item("ocean")!)
                 draftValidation.selection = "ember"
                 draftValidation.applySelected()
+                await waitForNativePublication(draftValidation)
                 results["configurationDraftPreservesRemoval"] = draftValidation.state.displays[key]?.desktop.wallpaperID == nil
                     && draftValidation.state.displays[key]?.lockScreen?.wallpaperID == "ember"
             }
@@ -1884,6 +1909,7 @@ enum SmokeRunner {
         }
         library.selection = "aurora"
         library.applySelected()
+        await waitForNativePublication(library)
         defer { library.stop() }
         let activeChoice = library.state.displays.values.first?.desktop.wallpaperID
         libraryWindows().first?.close()
@@ -1964,6 +1990,11 @@ enum SmokeRunner {
             await pause(0.05)
         }
         return false
+    }
+    @MainActor private static func waitForNativePublication(_ library: Library) async {
+        let deadline = Date().addingTimeInterval(20)
+        while library.nativeSetupBusy && Date() < deadline { await pause(0.01) }
+        precondition(!library.nativeSetupBusy, "Native catalog publication timed out")
     }
     static func pause(_ seconds: Double) async { try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000)) }
     static func makeAudioVideo(video: URL, directory: URL) async throws -> URL {

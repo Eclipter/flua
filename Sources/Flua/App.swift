@@ -406,12 +406,29 @@ enum AppContext {
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     var openLibrary: (() -> Void)?
+    private var terminationReady = false
+    private var terminationPending = false
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         openLibrary?()
         return false
     }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        if terminationReady { return .terminateNow }
+        guard !terminationPending else { return .terminateCancel }
+        terminationPending = true
+        Task { @MainActor in
+            repeat {
+                while AppContext.library.nativeSetupBusy { try? await Task.sleep(for: .milliseconds(10)) }
+                await AppContext.library.finishCatalogWrites()
+            } while AppContext.library.nativeSetupBusy
+            terminationReady = true
+            sender.terminate(nil)
+        }
+        // Returning first lets a Quit requested inside a main-actor task finish that task.
+        return .terminateCancel
+    }
     func applicationWillFinishLaunching(_ notification: Notification) {
         AppContext.library.applyTheme()
         let arguments = ProcessInfo.processInfo.arguments

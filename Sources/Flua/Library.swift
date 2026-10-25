@@ -29,6 +29,7 @@ final class Library: ObservableObject {
     var tick: Timer?
     private var screenObserver: NSObjectProtocol?
     private var saveBlocked = false
+    private var catalogRevision = 0
     private var nativeRefreshTask: Task<Void, Never>?
     private var thumbnailPublicationTask: Task<Void, Never>?
     private var automaticPlaylistPlaybackEnabled = false
@@ -172,9 +173,8 @@ final class Library: ObservableObject {
     @discardableResult func save() -> Bool {
         guard !saveBlocked else { error = LibraryError.invalidLibrary.localizedDescription; return false }
         do {
-            if let catalogError = try disk.save(state) {
-                error = "Library saved, but wallpaper catalog could not be updated. A later save will retry: \(catalogError.localizedDescription)"
-            }
+            try disk.saveManifest(state)
+            publishCatalog()
         } catch {
             self.error = error.localizedDescription
             onChange?()
@@ -182,6 +182,33 @@ final class Library: ObservableObject {
         }
         onChange?()
         return true
+    }
+    private func publishCatalog() {
+        catalogRevision += 1
+        let revision = catalogRevision
+        let report: @MainActor @Sendable (Error?) -> Void = { [weak self] catalogError in
+            guard let self, revision == self.catalogRevision, let catalogError else { return }
+            self.error = "Library saved, but wallpaper catalog could not be updated. A later save will retry: \(catalogError.localizedDescription)"
+        }
+        disk.publishCatalog(state) { catalogError in
+            DispatchQueue.main.async { report(catalogError) }
+        }
+    }
+    @MainActor func finishCatalogWrites() async {
+        while true {
+            if thumbnailPublicationTask != nil {
+                thumbnailPublicationTask?.cancel()
+                thumbnailPublicationTask = nil
+                if !saveBlocked { publishCatalog() }
+            }
+            let revision = catalogRevision
+            await disk.finishCatalogWrites()
+            // Worker completions dispatch warnings before this main-queue barrier.
+            await withCheckedContinuation { continuation in
+                DispatchQueue.main.async { continuation.resume() }
+            }
+            if revision == catalogRevision && thumbnailPublicationTask == nil { return }
+        }
     }
     func settingChanged() { save() }
     @MainActor func applySelected() {
@@ -344,28 +371,29 @@ final class Library: ObservableObject {
                 return
             }
         }
-        do {
-            if let catalogError = try disk.save(state) { throw catalogError }
-        } catch { self.error = error.localizedDescription; return }
-        let assignments: [String: NativeWallpaperStore.Assignment]
-        do { assignments = try savedNativeAssignments(for: displays, surface: surface) }
+        do { try disk.saveManifest(state) }
         catch { self.error = error.localizedDescription; return }
-        guard !assignments.isEmpty || displays.contains(where: { state.nativePlayback[$0] == true }) else {
-            error = "Save a wallpaper choice for the targeted displays first."
-            return
-        }
-        // Isolated smoke runs validate real descriptors without touching the system wallpaper store.
-        guard systemPlaybackEnabled else {
-            automaticPlaylistPlaybackEnabled = true
-            activity = "Validated saved wallpaper choices. System playback is disabled for verification."
-            return
-        }
-        pendingNativeAssignmentDisplays.subtract(displays)
-        let mirrored = resolvedDisplayMode(state.displayMode) == "mirrored" && Set(displays) == Set(screens.map(displayID))
         nativeSetupBusy = true
-        let root = disk.root
-        Task {
+        Task { @MainActor in
             defer { nativeSetupBusy = false }
+            do { try await publishCurrentCatalog() }
+            catch { self.error = error.localizedDescription; return }
+            let assignments: [String: NativeWallpaperStore.Assignment]
+            do { assignments = try savedNativeAssignments(for: displays, surface: surface) }
+            catch { self.error = error.localizedDescription; return }
+            guard !assignments.isEmpty || displays.contains(where: { state.nativePlayback[$0] == true }) else {
+                error = "Save a wallpaper choice for the targeted displays first."
+                return
+            }
+            // Isolated smoke runs validate real descriptors without touching the system wallpaper store.
+            guard systemPlaybackEnabled else {
+                automaticPlaylistPlaybackEnabled = true
+                activity = "Validated saved wallpaper choices. System playback is disabled for verification."
+                return
+            }
+            pendingNativeAssignmentDisplays.subtract(displays)
+            let mirrored = resolvedDisplayMode(state.displayMode) == "mirrored" && Set(displays) == Set(screens.map(displayID))
+            let root = disk.root
             do {
                 try await Task.detached { try NativeWallpaper.apply(assignments, targeting: displays, mirrored: mirrored, root: root, reloadUnchanged: reloadUnchanged, clearingUnassigned: clearingUnassigned) }.value
                 if clearingUnassigned { state.nativeCleanupDisplays.subtract(displays) }
@@ -374,6 +402,14 @@ final class Library: ObservableObject {
                     ? "Previous system wallpapers restored; no saved native choices remain for the targeted displays."
                     : "Applied saved wallpaper choices to \(assignments.count) display(s). Native playback continues after Flua quits."
             } catch { self.error = error.localizedDescription }
+        }
+    }
+    @MainActor private func publishCurrentCatalog() async throws {
+        while true {
+            let revision = catalogRevision
+            if let catalogError = await disk.publishCatalog(state) { throw catalogError }
+            try Task.checkCancellation()
+            if revision == catalogRevision { return }
         }
     }
     private func savedNativeAssignments(for displays: [String], surface: WallpaperSurface? = nil) throws -> [String: NativeWallpaperStore.Assignment] {
@@ -461,6 +497,12 @@ final class Library: ObservableObject {
         nativeRefreshTask = Task { @MainActor [weak self] in
             do { try await Task.sleep(nanoseconds: 500_000_000) } catch { return }
             guard let self, !self.saveBlocked, self.nativeRoutingAvailable else { return }
+            if self.nativeSetupBusy { self.scheduleNativeRefresh(); return }
+            do { try await self.publishCurrentCatalog() }
+            catch {
+                if !Task.isCancelled { self.error = error.localizedDescription }
+                return
+            }
             if self.nativeSetupBusy { self.scheduleNativeRefresh(); return }
             let queuedDisplays = self.pendingNativeAssignmentDisplays
             self.pendingNativeAssignmentDisplays.removeAll()
@@ -723,8 +765,7 @@ final class Library: ObservableObject {
         thumbnailPublicationTask = Task { @MainActor [weak self] in
             try? await Task.sleep(for: .milliseconds(200))
             guard !Task.isCancelled, let self else { return }
-            do { try self.disk.saveCatalog(self.state) }
-            catch { self.error = error.localizedDescription }
+            self.publishCatalog()
             self.thumbnailPublicationTask = nil
         }
     }

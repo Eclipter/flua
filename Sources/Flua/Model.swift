@@ -24,7 +24,7 @@ struct Wallpaper: Codable, Identifiable, Equatable {
     var dateAdded: Date?
 }
 
-struct PlaybackPolicy: Codable, Equatable {
+struct PlaybackPolicy: Codable, Equatable, Sendable {
     var pauseOnBattery: Bool
     var pauseOnLowPower: Bool
     var pauseOnLowBattery: Bool = false
@@ -131,7 +131,7 @@ enum WallpaperSurface: CaseIterable, Hashable {
     case desktop, lockScreen
 }
 
-enum WallpaperMode: String, Codable {
+enum WallpaperMode: String, Codable, Sendable {
     case animated, still
 }
 
@@ -523,8 +523,8 @@ enum LibraryError: LocalizedError {
     }
 }
 
-struct ProviderCatalog: Codable, Equatable {
-    struct Item: Codable, Equatable {
+struct ProviderCatalog: Codable, Equatable, Sendable {
+    struct Item: Codable, Equatable, Sendable {
         var id: String
         var title: String
         var kind: String
@@ -598,6 +598,7 @@ final class LibraryDisk {
     let manifest: URL
     let catalog: URL
     var thumbnails: [String: String] = [:]
+    private let catalogWriter = CatalogWriter()
     init(root: URL) throws {
         self.root = root
         assets = root.appendingPathComponent("Media", isDirectory: true)
@@ -612,20 +613,35 @@ final class LibraryDisk {
     }
     // The manifest commits the library; a derived catalog failure must not roll it back.
     @discardableResult func save(_ state: LibraryState) throws -> Error? {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        try encoder.encode(state).write(to: manifest, options: .atomic)
+        try saveManifest(state)
         do { try saveCatalog(state); return nil }
         catch { return error }
     }
-    func saveCatalog(_ state: LibraryState) throws {
+    func saveManifest(_ state: LibraryState) throws {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        try encoder.encode(state).write(to: manifest, options: .atomic)
+    }
+    private func catalogSnapshot(_ state: LibraryState) -> ProviderCatalog {
         var value = providerCatalog(from: state)
         for index in value.items.indices {
             value.items[index].thumbnail = thumbnails[value.items[index].id]
         }
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        try encoder.encode(value).write(to: catalog, options: .atomic)
+        return value
+    }
+    func saveCatalog(_ state: LibraryState) throws {
+        try catalogWriter.save(catalogSnapshot(state), to: catalog)
+    }
+    func publishCatalog(_ state: LibraryState, completion: @escaping @Sendable (Error?) -> Void) {
+        catalogWriter.publish(catalogSnapshot(state), to: catalog, completion: completion)
+    }
+    @MainActor func publishCatalog(_ state: LibraryState) async -> Error? {
+        await withCheckedContinuation { continuation in
+            publishCatalog(state) { continuation.resume(returning: $0) }
+        }
+    }
+    func finishCatalogWrites() async {
+        await catalogWriter.finish()
     }
     func url(for wallpaper: Wallpaper) -> URL? {
         guard let name = wallpaper.file,
@@ -764,5 +780,42 @@ func classifiedColor(red: Double, green: Double, blue: Double) -> String {
     case 255..<285: return "Purple"
     case 285..<345: return "Pink"
     default: return "Red"
+    }
+}
+
+// All catalog encoding, cache access and writes share one queue, including synchronous fixtures.
+private final class CatalogWriter: @unchecked Sendable {
+    private let queue = DispatchQueue(label: "Flua.catalog", qos: .utility)
+    private var published: ProviderCatalog?
+    private var identity: NSDictionary?
+
+    private func fileIdentity(_ url: URL) throws -> NSDictionary {
+        let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
+        return attributes as NSDictionary
+    }
+    private func write(_ value: ProviderCatalog, to url: URL) throws {
+        if published == value, let identity, let current = try? fileIdentity(url), identity == current { return }
+        // A failed publication must retry even when its input matches the last success.
+        published = nil
+        identity = nil
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        try encoder.encode(value).write(to: url, options: .atomic)
+        identity = try fileIdentity(url)
+        published = value
+    }
+    func save(_ value: ProviderCatalog, to url: URL) throws {
+        try queue.sync { try write(value, to: url) }
+    }
+    func publish(_ value: ProviderCatalog, to url: URL, completion: @escaping @Sendable (Error?) -> Void) {
+        queue.async {
+            do { try self.write(value, to: url); completion(nil) }
+            catch { completion(error) }
+        }
+    }
+    func finish() async {
+        await withCheckedContinuation { continuation in
+            queue.async { continuation.resume() }
+        }
     }
 }

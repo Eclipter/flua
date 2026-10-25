@@ -13,10 +13,6 @@ Use disposable libraries and matching catalog builds. Follow the [integration an
 
 Update capability claims only after the relevant checks pass. Keep untested OS versions and hardware explicitly unverified.
 
-## Performance and provider behavior
-
-- **Medium:** Avoid full catalog serialization for unchanged or favorite-only saves, and move expensive changed-catalog serialization off the UI thread with serialized writes. A synthetic 1,000-entry catalog containing a real Flua thumbnail measured 54.6 MB; repeated release-optimized saves took 143–151 ms. Verify unchanged catalog contents for favorite-only edits and responsiveness at a representative large size. See [Library.save](../Sources/Flua/Library.swift) and [LibraryDisk.saveCatalog](../Sources/Flua/Model.swift).
-
 ## Tooling and concurrency
 
 - **Low:** Mark UI ownership explicitly with `@MainActor` and define worker boundaries in [Library.swift](../Sources/Flua/Library.swift) and related code. Make opt-in strict concurrency checking clean on the supported toolchain; the audit build passed with 99 warnings, including 52 in `Library.swift`.

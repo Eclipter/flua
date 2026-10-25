@@ -17,11 +17,19 @@ extension Bundle {
 
 @main struct ClearFiltersSortTests {
     @MainActor
-    static func saveCommitTests(_ root: URL) throws {
+    static func waitForNativePublication(_ library: Library) async {
+        let deadline = Date().addingTimeInterval(20)
+        while library.nativeSetupBusy && Date() < deadline { try? await Task.sleep(for: .milliseconds(10)) }
+        precondition(!library.nativeSetupBusy, "Native catalog publication timed out")
+    }
+
+    @MainActor
+    static func saveCommitTests(_ root: URL) async throws {
         let library = try Library(root: root, systemPlaybackEnabled: false)
         library.tick?.invalidate()
         for screen in library.screens { library.state.assign("aurora", display: displayID(screen)) }
         precondition(library.save())
+        await library.finishCatalogWrites()
         let original = library.state.item("aurora")!
         let selection = library.selection
         var edited = original
@@ -30,6 +38,7 @@ extension Bundle {
         try FileManager.default.createDirectory(at: library.disk.catalog, withIntermediateDirectories: false)
         try Data("keep".utf8).write(to: library.disk.catalog.appendingPathComponent("blocker"))
         precondition(library.edit(edited), "catalog failure rolled back a committed edit")
+        await library.finishCatalogWrites()
         precondition(library.state.item(edited.id) == edited)
         let reloaded = try LibraryDisk(root: root).load()
         precondition(reloaded.item(edited.id) == edited, "memory and reloaded library disagree")
@@ -37,9 +46,11 @@ extension Bundle {
         precondition(library.error?.contains("Library saved") == true, "catalog failure was not reported separately")
         let activity = library.activity
         library.applySavedNativeAssignments()
+        await waitForNativePublication(library)
         precondition(library.activity == activity, "native application proceeded without a current catalog")
         try FileManager.default.removeItem(at: library.disk.catalog)
         precondition(library.save(), "catalog retry failed")
+        await library.finishCatalogWrites()
         let catalog = try JSONDecoder().decode(ProviderCatalog.self, from: Data(contentsOf: library.disk.catalog))
         precondition(catalog.items.first { $0.id == edited.id }?.title == edited.title)
 
@@ -60,6 +71,87 @@ extension Bundle {
         let restored = try LibraryDisk(root: root).load()
         precondition(restored.item(edited.id) == library.state.item(edited.id))
         print("PASS: catalog failure commits memory and disk, retries publication, and manifest failure rolls back edits")
+    }
+
+    @MainActor
+    static func largeCatalogSaveTests(_ root: URL) async throws {
+        let library = try Library(root: root, systemPlaybackEnabled: false)
+        library.tick?.invalidate()
+        // Let startup publish its own thumbnails before replacing this disposable library.
+        try await Task.sleep(for: .milliseconds(250))
+        await library.finishCatalogWrites()
+        let image = AmbientSceneView.thumbnail(scene: "aurora", size: NSSize(width: 480, height: 270))
+        let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil)!
+        let jpeg = NSBitmapImageRep(cgImage: cgImage).representation(using: .jpeg, properties: [.compressionFactor: 0.8])!
+        let thumbnail = "data:image/jpeg;base64," + jpeg.base64EncodedString()
+        library.state.wallpapers = (0..<1000).map {
+            Wallpaper(id: "scene-\($0)", title: "Scene \($0)", kind: "aurora")
+        }
+        library.disk.thumbnails = Dictionary(uniqueKeysWithValues: library.state.wallpapers.map { ($0.id, thumbnail) })
+        let clock = ContinuousClock()
+        var start = clock.now
+        precondition(library.save())
+        let firstSave = start.duration(to: clock.now)
+        var ticks = 0
+        let heartbeat = Task { @MainActor in
+            while !Task.isCancelled {
+                ticks += 1
+                try? await Task.sleep(for: .milliseconds(1))
+            }
+        }
+        await library.finishCatalogWrites()
+        heartbeat.cancel()
+        precondition(ticks > 0, "UI executor made no progress during changed catalog encoding")
+        let catalog = try Data(contentsOf: library.disk.catalog)
+        let identity = try FileManager.default.attributesOfItem(atPath: library.disk.catalog.path) as NSDictionary
+        library.state.wallpapers[0].favorite.toggle()
+        start = clock.now
+        precondition(library.save())
+        let favoriteSave = start.duration(to: clock.now)
+        await library.finishCatalogWrites()
+        let favoriteCatalog = try Data(contentsOf: library.disk.catalog)
+        precondition(favoriteCatalog == catalog, "favorite changed catalog contents")
+        let afterFavorite = try FileManager.default.attributesOfItem(atPath: library.disk.catalog.path) as NSDictionary
+        precondition(afterFavorite == identity, "favorite rewrote catalog")
+        print("BENCHMARK: Library.save 1000 real aurora thumbnails, JPEG \(jpeg.count) bytes, catalog \(catalog.count) bytes; changed save \(firstSave), favorite save \(favoriteSave), main actor ticks \(ticks)")
+    }
+
+    @MainActor
+    static func catalogDrainTests(_ root: URL) async throws {
+        let library = try Library(root: root, systemPlaybackEnabled: false)
+        library.tick?.invalidate()
+        await library.finishCatalogWrites()
+        let releaseWriter = DispatchSemaphore(value: 0)
+        let secondReached = DispatchSemaphore(value: 0)
+        let releaseSecond = DispatchSemaphore(value: 0)
+        var drained = false
+        library.disk.publishCatalog(library.state) { _ in releaseWriter.wait() }
+        Task { @MainActor in
+            library.disk.publishCatalog(library.state) { _ in
+                secondReached.signal()
+                releaseSecond.wait()
+            }
+            library.state.wallpapers[0].title = "Committed while draining"
+            precondition(library.save())
+            releaseWriter.signal()
+        }
+        let controller = Task { @MainActor in
+            await withCheckedContinuation { continuation in
+                DispatchQueue.global().async {
+                    secondReached.wait()
+                    continuation.resume()
+                }
+            }
+            try? await Task.sleep(for: .milliseconds(20))
+            precondition(!drained, "drain returned with the newer save still blocked")
+            releaseSecond.signal()
+        }
+        await library.finishCatalogWrites()
+        drained = true
+        await controller.value
+        let catalog = try JSONDecoder().decode(ProviderCatalog.self, from: Data(contentsOf: library.disk.catalog))
+        precondition(catalog.items.first?.title == "Committed while draining", "drain dropped a save queued during suspension")
+        print("PASS: catalog drain includes saves committed while waiting")
     }
 
     @MainActor
@@ -121,7 +213,9 @@ extension Bundle {
         let support = dir.appendingPathComponent("ApplicationSupport", isDirectory: true)
         try FileManager.default.createDirectory(at: support, withIntermediateDirectories: true)
         let root = LibraryPaths.resolve(applicationSupport: support)
-        try saveCommitTests(dir.appendingPathComponent("save-commit", isDirectory: true))
+        try await saveCommitTests(dir.appendingPathComponent("save-commit", isDirectory: true))
+        try await catalogDrainTests(dir.appendingPathComponent("catalog-drain", isDirectory: true))
+        try await largeCatalogSaveTests(dir.appendingPathComponent("large-catalog", isDirectory: true))
         try await importImageDecoderTests(dir.appendingPathComponent("image-import", isDirectory: true))
         try await importReferenceMovieTests(dir.appendingPathComponent("video-import", isDirectory: true))
 
@@ -169,51 +263,65 @@ extension Bundle {
         blockedPlaylistLibrary.blockTags("nature")
         let savedSlowMornings = blockedPlaylistLibrary.state.playlists[0]
         blockedPlaylistLibrary.startPlaylist("ambient")
+        await waitForNativePublication(blockedPlaylistLibrary)
         precondition(blockedPlaylistLibrary.state.displays[displayIDs[0]]?.desktop.wallpaperID == "ocean")
         precondition(blockedPlaylistLibrary.state.playlists[0] == savedSlowMornings)
         blockedPlaylistLibrary.state.assign("ocean", display: displayIDs[0], playlistID: "ambient", now: Date().addingTimeInterval(60))
         let notDueAssignments = blockedPlaylistLibrary.state.displays
         blockedPlaylistLibrary.advancePlaylists(force: false)
+        await waitForNativePublication(blockedPlaylistLibrary)
         precondition(blockedPlaylistLibrary.state.displays == notDueAssignments, "not-due advancement changed assignments")
         precondition(blockedPlaylistLibrary.error == nil, "not-due advancement scanned eligibility")
         blockedPlaylistLibrary.state.assign("ocean", display: displayIDs[0], playlistID: "ambient", now: Date().addingTimeInterval(-60))
         blockedPlaylistLibrary.advancePlaylists(force: false)
+        await waitForNativePublication(blockedPlaylistLibrary)
         precondition(blockedPlaylistLibrary.state.displays[displayIDs[0]]?.desktop.wallpaperID == "cosmos")
         blockedPlaylistLibrary.advancePlaylists(force: true, backwards: true)
+        await waitForNativePublication(blockedPlaylistLibrary)
         precondition(blockedPlaylistLibrary.state.displays[displayIDs[0]]?.desktop.wallpaperID == "ocean")
         blockedPlaylistLibrary.state.assign("aurora", display: displayIDs[0], playlistID: "ambient")
         blockedPlaylistLibrary.advancePlaylists(force: true)
+        await waitForNativePublication(blockedPlaylistLibrary)
         precondition(blockedPlaylistLibrary.state.displays[displayIDs[0]]?.desktop.wallpaperID == "ocean")
         blockedPlaylistLibrary.advancePlaylists(force: true, backwards: true)
+        await waitForNativePublication(blockedPlaylistLibrary)
         precondition(blockedPlaylistLibrary.state.displays[displayIDs[0]]?.desktop.wallpaperID == "ember")
         blockedPlaylistLibrary.state.shuffle = true
         blockedPlaylistLibrary.blockTags("stars, blue, water, calm, ambient, green")
         blockedPlaylistLibrary.startPlaylist("ambient")
+        await waitForNativePublication(blockedPlaylistLibrary)
         precondition(blockedPlaylistLibrary.state.displays[displayIDs[0]]?.desktop.wallpaperID == "ember")
         blockedPlaylistLibrary.advancePlaylists(force: true)
+        await waitForNativePublication(blockedPlaylistLibrary)
         precondition(blockedPlaylistLibrary.state.displays[displayIDs[0]]?.desktop.wallpaperID == "ember")
         blockedPlaylistLibrary.advancePlaylists(force: true, backwards: true)
+        await waitForNativePublication(blockedPlaylistLibrary)
         precondition(blockedPlaylistLibrary.state.displays[displayIDs[0]]?.desktop.wallpaperID == "ember")
         blockedPlaylistLibrary.blockTags("warm, abstract, orange")
         let allBlockedAssignments = blockedPlaylistLibrary.state.displays
         blockedPlaylistLibrary.advancePlaylists(force: true)
+        await waitForNativePublication(blockedPlaylistLibrary)
         precondition(blockedPlaylistLibrary.error?.contains("no playable wallpapers") == true)
         precondition(blockedPlaylistLibrary.state.displays == allBlockedAssignments)
         blockedPlaylistLibrary.error = nil
         blockedPlaylistLibrary.advancePlaylists(force: false)
+        await waitForNativePublication(blockedPlaylistLibrary)
         precondition(blockedPlaylistLibrary.error == nil, "not-due empty playlist reported an error")
         precondition(blockedPlaylistLibrary.state.displays == allBlockedAssignments)
         blockedPlaylistLibrary.advancePlaylists(force: true)
+        await waitForNativePublication(blockedPlaylistLibrary)
         precondition(blockedPlaylistLibrary.error?.contains("no playable wallpapers") == true, "forced empty playlist did not report an error")
         precondition(blockedPlaylistLibrary.state.displays == allBlockedAssignments)
         blockedPlaylistLibrary.error = nil
         blockedPlaylistLibrary.startPlaylist("ambient")
+        await waitForNativePublication(blockedPlaylistLibrary)
         precondition(blockedPlaylistLibrary.error?.contains("no playable wallpapers") == true)
         precondition(blockedPlaylistLibrary.state.displays == allBlockedAssignments)
         blockedPlaylistLibrary.error = nil
         blockedPlaylistLibrary.state.assign("ember", display: displayIDs[0], playlistID: "ambient", now: Date().addingTimeInterval(-60))
         let dueBlockedAssignments = blockedPlaylistLibrary.state.displays
         blockedPlaylistLibrary.advancePlaylists(force: false)
+        await waitForNativePublication(blockedPlaylistLibrary)
         precondition(blockedPlaylistLibrary.error?.contains("no playable wallpapers") == true, "due empty playlist did not report an error")
         precondition(blockedPlaylistLibrary.state.displays == dueBlockedAssignments)
         precondition(blockedPlaylistLibrary.state.playlists[0] == savedSlowMornings)
@@ -230,24 +338,31 @@ extension Bundle {
         let preservedDesktop = surfaceLibrary.state.displays[displayIDs[0]]?.desktop
         surfaceLibrary.surface = .lockScreen
         surfaceLibrary.startPlaylist("ambient")
+        await waitForNativePublication(surfaceLibrary)
         precondition(surfaceLibrary.state.displays[displayIDs[0]]?.desktop == preservedDesktop, "Lock Screen playlist start replaced Desktop")
         precondition(surfaceLibrary.state.displays[displayIDs[0]]?.lockScreen?.wallpaperID == "aurora")
         surfaceLibrary.advancePlaylists(force: true)
+        await waitForNativePublication(surfaceLibrary)
         precondition(surfaceLibrary.state.displays[displayIDs[0]]?.lockScreen?.wallpaperID == "ocean")
         precondition(surfaceLibrary.state.displays[displayIDs[0]]?.desktop == preservedDesktop)
         surfaceLibrary.advancePlaylists(force: true, backwards: true)
+        await waitForNativePublication(surfaceLibrary)
         precondition(surfaceLibrary.state.displays[displayIDs[0]]?.lockScreen?.wallpaperID == "aurora")
         surfaceLibrary.surface = .desktop
         surfaceLibrary.startPlaylist("ambient")
+        await waitForNativePublication(surfaceLibrary)
         let preservedLock = surfaceLibrary.state.displays[displayIDs[0]]?.lockScreen
         surfaceLibrary.advancePlaylists(force: true)
+        await waitForNativePublication(surfaceLibrary)
         precondition(surfaceLibrary.state.displays[displayIDs[0]]?.desktop.wallpaperID == "ocean")
         precondition(surfaceLibrary.state.displays[displayIDs[0]]?.lockScreen == preservedLock)
         surfaceLibrary.advancePlaylists(force: false)
+        await waitForNativePublication(surfaceLibrary)
         precondition(surfaceLibrary.state.displays[displayIDs[0]]?.desktop.wallpaperID == "cosmos")
         precondition(surfaceLibrary.state.displays[displayIDs[0]]?.lockScreen?.wallpaperID == "ocean", "automatic advancement ignored independent Lock Screen playlist")
         surfaceLibrary.state.setSurfacesLinked(true, display: displayIDs[0])
         surfaceLibrary.advancePlaylists(force: false)
+        await waitForNativePublication(surfaceLibrary)
         let linkedAssignment = surfaceLibrary.state.displays[displayIDs[0]]!
         precondition(linkedAssignment.desktop.wallpaperID == "ember", "linked playlist advanced twice")
         precondition(linkedAssignment.lockScreen == linkedAssignment.desktop)
@@ -267,16 +382,20 @@ extension Bundle {
         let launched = try Library(root: launchRoot, systemPlaybackEnabled: false)
         launched.tick?.invalidate()
         launched.advancePlaylists(force: false)
+        await waitForNativePublication(launched)
         precondition(launched.state.displays == launchState.displays, "launch advanced an overdue saved playlist")
         launched.advancePlaylists(force: true)
+        await waitForNativePublication(launched)
         precondition(launched.state.displays[displayIDs[0]]?.desktop.wallpaperID == "cosmos")
         launched.state.assign("cosmos", display: displayIDs[0], playlistID: launchPlaylist.id, now: Date(timeIntervalSince1970: 0))
         launched.advancePlaylists(force: false)
+        await waitForNativePublication(launched)
         precondition(launched.state.displays[displayIDs[0]]?.desktop.wallpaperID == "aurora", "explicit playback did not resume automatic advancement")
         print("PASS: opening a library preserves overdue playlists until explicit playback resumes advancement")
         let selectedID = library.selected!.id
         library.display = displayIDs[0]
         library.applySelected()
+        await waitForNativePublication(library)
         precondition(library.state.item(selectedID)?.fit == true)
         precondition(library.state.item(selectedID)?.speed == 1.5)
         precondition(library.state.item(selectedID)?.dimming == 0.3)
@@ -299,6 +418,7 @@ extension Bundle {
         library.selection = "ocean"
         library.setSurfaceMode(.still)
         library.applySelected()
+        await waitForNativePublication(library)
         precondition(library.state.displays[displayIDs[0]]?.desktop.wallpaperID == "ember")
         precondition(library.state.displays[displayIDs[0]]?.lockScreen?.wallpaperID == "ocean")
         precondition(library.state.displays[displayIDs[0]]?.lockScreen?.mode == .still)
@@ -307,6 +427,7 @@ extension Bundle {
         library.setSurfacesLinked(true)
         library.selection = "aurora"
         library.applySelected()
+        await waitForNativePublication(library)
         precondition(library.state.displays[displayIDs[0]]?.desktop.wallpaperID == "aurora")
         precondition(library.state.displays[displayIDs[0]]?.lockScreen == library.state.displays[displayIDs[0]]?.desktop)
 
@@ -314,6 +435,7 @@ extension Bundle {
         library.setSurfacesLinked(false)
         library.selection = "cosmos"
         library.applySelected()
+        await waitForNativePublication(library)
         for id in displayIDs {
             precondition(library.state.displays[id]?.desktop.wallpaperID == "cosmos")
         }
@@ -321,9 +443,11 @@ extension Bundle {
         library.display = displayIDs[0]
         library.surface = .desktop
         library.applySelected()
+        await waitForNativePublication(library)
         let beforeMissingTarget = library.state.displays
         library.display = "not-connected"
         library.applySelected()
+        await waitForNativePublication(library)
         precondition(library.state.displays == beforeMissingTarget, "Per Display Apply fell back to a connected display")
         library.display = displayIDs[0]
 
@@ -334,11 +458,13 @@ extension Bundle {
         library.updatePlaylist("ambient", shuffle: false)
         library.display = firstDisplay
         library.startPlaylist("ambient")
+        await waitForNativePublication(library)
         precondition(library.state.displays[firstDisplay]?.desktop.wallpaperID == "aurora")
         library.setPlaybackMode("mirrored")
         precondition(library.state.displayMode == "perDisplay")
         precondition(library.playbackMode == "mirrored")
         library.advancePlaylists(force: true)
+        await waitForNativePublication(library)
         precondition(library.state.displayMode == "perDisplay")
         precondition(library.state.displays[firstDisplay]?.desktop.wallpaperID == "ocean")
         if otherDisplay != firstDisplay {
@@ -346,6 +472,7 @@ extension Bundle {
         }
         library.display = otherDisplay
         library.startPlaylist("target-probe")
+        await waitForNativePublication(library)
         precondition(library.state.displayMode == "perDisplay")
         precondition(library.playbackMode == "mirrored")
         if otherDisplay != firstDisplay {
@@ -358,9 +485,11 @@ extension Bundle {
         }
 
         library.applySelected()
+        await waitForNativePublication(library)
         library.display = otherDisplay
         library.setPlaybackMode("perDisplay")
         library.startPlaylist("target-probe")
+        await waitForNativePublication(library)
         precondition(library.state.displayMode == "mirrored")
         precondition(library.playbackMode == "perDisplay")
         for id in displayIDs {
@@ -369,25 +498,31 @@ extension Bundle {
         }
 
         library.applySelected()
+        await waitForNativePublication(library)
         library.setPlaybackMode("perDisplay")
         library.display = firstDisplay
         library.applySelected()
+        await waitForNativePublication(library)
         library.state.shuffle = false
         library.startPlaylist("ambient")
+        await waitForNativePublication(library)
         library.surface = .lockScreen
         library.setSurfaceMode(.still)
         library.surface = .desktop
         library.advancePlaylists(force: true)
+        await waitForNativePublication(library)
         library.surface = .lockScreen
         let currentDesktop = library.state.displays[firstDisplay]!.desktop
         precondition(library.surfaceSummary(.desktop).contains("Quiet tides"), "draft summary used old playlist position")
         library.selection = "cosmos"
         library.applySelected()
+        await waitForNativePublication(library)
         precondition(library.state.displays[firstDisplay]?.desktop == currentDesktop, "applying Lock Screen settings rewound desktop playlist")
         library.setSurfaceMode(.animated)
         library.remove(library.state.item("ocean")!)
         library.selection = "ember"
         library.applySelected()
+        await waitForNativePublication(library)
         precondition(library.state.displays[firstDisplay]?.desktop.wallpaperID == nil, "applying settings restored removed wallpaper")
         library.surface = .desktop
         print("PASS: applying pending configuration preserves playlist advancement and removed assignments")
