@@ -15,7 +15,6 @@ Update capability claims only after the relevant checks pass. Keep untested OS v
 
 ## Correctness and safe verification
 
-- **High:** Define commit semantics for [LibraryDisk.save](../Sources/Flua/Model.swift) and [Library.edit](../Sources/Flua/Library.swift). A failed catalog write currently leaves `library.json` updated while memory rolls back. Separate or retry derived catalog errors, and add a deterministic catalog-write-failure regression that checks both memory and reloaded state.
 - **Medium:** Make [media import](../Sources/Flua/Library.swift) accept only image formats the wallpaper provider can decode, or convert them while preserving the source. SVG is currently accepted through `UTType.image` and `NSImage`, but the provider's [MediaRenderer](../Sources/WallpaperExtension/MediaRenderer.m) cannot decode it. Add a decoder-parity regression for SVG and supported raster images, checking provider rendering and source preservation.
 - **Medium:** Preserve native playback intent and report failure when [Library.stop](../Sources/Flua/Library.swift) cannot call the system stop operation because the provider is unavailable or the catalog mismatches. Cover both cases and keep isolated-verification behavior safe.
 - **Medium:** Include `--preview-smoke` in [AppContext verification isolation](../Sources/Flua/App.swift). Add regressions for missing and overlapping `--data-dir` arguments before library access, and ensure verification disables native operations.

@@ -170,7 +170,11 @@ final class Library: ObservableObject {
     }
     @discardableResult func save() -> Bool {
         guard !saveBlocked else { error = LibraryError.invalidLibrary.localizedDescription; return false }
-        do { try disk.save(state) } catch {
+        do {
+            if let catalogError = try disk.save(state) {
+                error = "Library saved, but wallpaper catalog could not be updated. A later save will retry: \(catalogError.localizedDescription)"
+            }
+        } catch {
             self.error = error.localizedDescription
             onChange?()
             return false
@@ -332,7 +336,9 @@ final class Library: ObservableObject {
                 return
             }
         }
-        do { try disk.save(state) } catch { self.error = error.localizedDescription; return }
+        do {
+            if let catalogError = try disk.save(state) { throw catalogError }
+        } catch { self.error = error.localizedDescription; return }
         let assignments: [String: NativeWallpaperStore.Assignment]
         do { assignments = try savedNativeAssignments(for: displays, surface: surface) }
         catch { self.error = error.localizedDescription; return }

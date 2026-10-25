@@ -610,11 +610,13 @@ final class LibraryDisk {
         do { return try JSONDecoder().decode(LibraryState.self, from: Data(contentsOf: manifest)) }
         catch { throw LibraryError.invalidLibrary }
     }
-    func save(_ state: LibraryState) throws {
+    // The manifest commits the library; a derived catalog failure must not roll it back.
+    @discardableResult func save(_ state: LibraryState) throws -> Error? {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         try encoder.encode(state).write(to: manifest, options: .atomic)
-        try saveCatalog(state)
+        do { try saveCatalog(state); return nil }
+        catch { return error }
     }
     func saveCatalog(_ state: LibraryState) throws {
         var value = providerCatalog(from: state)

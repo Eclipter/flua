@@ -14,12 +14,59 @@ extension Bundle {
 
 @main struct ClearFiltersSortTests {
     @MainActor
+    static func saveCommitTests(_ root: URL) throws {
+        let library = try Library(root: root, systemPlaybackEnabled: false)
+        library.tick?.invalidate()
+        for screen in library.screens { library.state.assign("aurora", display: displayID(screen)) }
+        precondition(library.save())
+        let original = library.state.item("aurora")!
+        let selection = library.selection
+        var edited = original
+        edited.title = "Committed despite catalog failure"
+        try FileManager.default.removeItem(at: library.disk.catalog)
+        try FileManager.default.createDirectory(at: library.disk.catalog, withIntermediateDirectories: false)
+        try Data("keep".utf8).write(to: library.disk.catalog.appendingPathComponent("blocker"))
+        precondition(library.edit(edited), "catalog failure rolled back a committed edit")
+        precondition(library.state.item(edited.id) == edited)
+        let reloaded = try LibraryDisk(root: root).load()
+        precondition(reloaded.item(edited.id) == edited, "memory and reloaded library disagree")
+        precondition(library.selection == selection)
+        precondition(library.error?.contains("Library saved") == true, "catalog failure was not reported separately")
+        let activity = library.activity
+        library.applySavedNativeAssignments()
+        precondition(library.activity == activity, "native application proceeded without a current catalog")
+        try FileManager.default.removeItem(at: library.disk.catalog)
+        precondition(library.save(), "catalog retry failed")
+        let catalog = try JSONDecoder().decode(ProviderCatalog.self, from: Data(contentsOf: library.disk.catalog))
+        precondition(catalog.items.first { $0.id == edited.id }?.title == edited.title)
+
+        let committedManifest = try Data(contentsOf: library.disk.manifest)
+        try FileManager.default.removeItem(at: library.disk.manifest)
+        try FileManager.default.createDirectory(at: library.disk.manifest, withIntermediateDirectories: false)
+        try Data("keep".utf8).write(to: library.disk.manifest.appendingPathComponent("blocker"))
+        var rejected = edited
+        rejected.title = "Must not commit"
+        precondition(!library.edit(rejected), "manifest failure was treated as committed")
+        precondition(library.state.item(edited.id) == edited)
+        precondition(library.selection == selection)
+        precondition(library.error != nil)
+        let unchangedCatalog = try JSONDecoder().decode(ProviderCatalog.self, from: Data(contentsOf: library.disk.catalog))
+        precondition(unchangedCatalog == catalog, "manifest failure changed the catalog")
+        try FileManager.default.removeItem(at: library.disk.manifest)
+        try committedManifest.write(to: library.disk.manifest, options: .atomic)
+        let restored = try LibraryDisk(root: root).load()
+        precondition(restored.item(edited.id) == library.state.item(edited.id))
+        print("PASS: catalog failure commits memory and disk, retries publication, and manifest failure rolls back edits")
+    }
+
+    @MainActor
     static func main() async throws {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("FluaClearFiltersSortTest-" + UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: dir) }
         let support = dir.appendingPathComponent("ApplicationSupport", isDirectory: true)
         try FileManager.default.createDirectory(at: support, withIntermediateDirectories: true)
         let root = LibraryPaths.resolve(applicationSupport: support)
+        try saveCommitTests(dir.appendingPathComponent("save-commit", isDirectory: true))
         try await importReferenceMovieTests(dir.appendingPathComponent("video-import", isDirectory: true))
 
         let library = try Library(root: root, systemPlaybackEnabled: false)
