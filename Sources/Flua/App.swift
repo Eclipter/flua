@@ -1464,8 +1464,9 @@ struct SettingsView: View {
                 }
             }
             Section("About") {
-                Text("Flua 0.1.0 • Independent native wallpaper app").font(.callout)
-                Text("Add, preview, edit and set wallpapers, with playlists and per-display playback. Everything in your library remains local.").font(.caption).foregroundStyle(.secondary)
+                Text("Flua \(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.1.0")").font(.callout)
+                Text("Completely free live wallpapers for your Mac Desktop, Lock Screen and Screen Saver.").font(.caption).foregroundStyle(.secondary)
+                Link("GitHub", destination: URL(string: "https://github.com/Eclipter/flua")!)
             }
         }.formStyle(.grouped).scrollContentBackground(.hidden).padding(8)
             .fluaClearInitialFocus()

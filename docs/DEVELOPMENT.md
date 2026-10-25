@@ -57,6 +57,8 @@ UI smoke checks jump between window widths across the 1000-point inspector thres
 
 Flua is unreleased. The app and wallpaper extension both use development version `0.1.0`, build `1`. Keep their `CFBundleShortVersionString` and `CFBundleVersion` values aligned in `Resources/Info.plist` and `Sources/WallpaperExtension/Info.plist`.
 
+Settings → About reads the app version from its bundle, uses the README description and links to the GitHub repository.
+
 Keep the development version between releases; Git commits identify source changes. Run `make release` only when the user explicitly requests a release, never as part of routine agent implementation or validation. Each successful invocation increments the patch version and build number in both source plists before building and packaging: the current baseline becomes `0.1.1`, build `2`. The version changes remain in the working tree for review and commit. Minor or major version changes require a separate explicit decision.
 
 Release builds ignore `FLUA_APP_PATH`, `FLUA_CATALOG_PATH` and `FLUA_WALLPAPER_IDENTIFIER` overrides so the archive contains the standard app and library configuration. A build or packaging failure restores the source version files and preserves any existing `dist/Flua.zip`. A successful release replaces that local archive. The command does not commit, tag, publish or notarize anything. Once a release is published, preserve its tag and artifacts; publish changes under a new version. Tag releases as `v0.1.1`, for example.
