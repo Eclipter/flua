@@ -8,9 +8,6 @@ Current capabilities and limitations are listed in [FEATURES.md](FEATURES.md). T
 
 - Audit 5 (Medium): In `Editor.swift`, propagate library save failures and keep the editor draft open; verify with an injected write failure.
 
-### Should fix
-
-- Audit 8 (Medium): In `Library.swift`, downsample image thumbnails with ImageIO to a bounded size; verify thumbnail dimensions and orientation while confirming the source remains intact.
 
 ## Real-system validation
 

@@ -18,11 +18,7 @@ struct MediaInspection: Sendable {
                 let orientation = properties[kCGImagePropertyOrientation] as? Int ?? 1
                 if [5, 6, 7, 8].contains(orientation) { swap(&facts.width, &facts.height) }
             }
-            image = CGImageSourceCreateThumbnailAtIndex(source, 0, [
-                kCGImageSourceCreateThumbnailFromImageAlways: true,
-                kCGImageSourceCreateThumbnailWithTransform: true,
-                kCGImageSourceThumbnailMaxPixelSize: 64
-            ] as CFDictionary)
+            image = ImageThumbnail.create(source: source, maxPixelSize: 64)
         } else if kind == "video" {
             let asset = AVURLAsset(url: url)
             if let duration = try? await asset.load(.duration).seconds, duration.isFinite, duration > 0 {

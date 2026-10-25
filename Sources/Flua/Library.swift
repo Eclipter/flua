@@ -683,7 +683,7 @@ final class Library: ObservableObject {
         guard let url = disk.url(for: w) else { return }
         Task { @MainActor [weak self] in
             if w.kind == "image" {
-                self?.thumbnails[w.id] = NSImage(contentsOf: url)
+                self?.thumbnails[w.id] = ImageThumbnail.create(url: url).map { NSImage(cgImage: $0, size: .zero) }
             } else {
                 let generator = AVAssetImageGenerator(asset: AVURLAsset(url: url))
                 generator.appliesPreferredTrackTransform = true
