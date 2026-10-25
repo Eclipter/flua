@@ -183,6 +183,8 @@ enum SmokeRunner {
         await pause(0.65)
         captureView(hosted, to: destination.deletingLastPathComponent().appendingPathComponent("Flua-settings-navigation.png"))
         missing += missingNames(auditTitle, ["Accent color", "Blocked tags", "Show window on startup"])
+        if auditElement(auditTitle, named: "Display mode") != nil { missing.append("Settings exposes global Display mode") }
+        if auditElement(auditTitle, named: "Shuffle playlists") != nil { missing.append("Settings exposes global Shuffle playlists") }
         if library.section != "settings" { missing.append("Settings sidebar opens internal page") }
         if NSApp.windows.count > windowsBeforeSettings { missing.append("Settings must not open another window") }
         if auditElement(auditTitle, named: "Set Wallpapers") != nil { missing.append("Settings hides playback controls") }

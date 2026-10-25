@@ -35,7 +35,7 @@ Native fullscreen entry/exit paused and resumed Desktop scene frames with Flua c
 
 ## Library behavior
 
-Settings opens in the main window from the sidebar, app menu, Command-comma or menu bar menu. It replaces the wallpaper content and inspector; selecting a library section returns to browsing. The inspector uses the same native animation in opposite directions when entering and leaving Settings, respecting Reduce Motion.
+Settings opens in the main window from the sidebar, app menu, Command-comma or menu bar menu. It replaces the wallpaper content and inspector; selecting a library section returns to browsing. Display mode is selected in the playback controls, and shuffle is set per playlist in Playlist Options. The inspector uses the same native animation in opposite directions when entering and leaving Settings, respecting Reduce Motion.
 
 The right inspector uses a 24-point top margin and shows the selected wallpaper's title above its preview, followed by editable details and playback settings. Tags appear only in the editable text field, without duplicate tag buttons.
 

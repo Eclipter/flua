@@ -1404,10 +1404,6 @@ struct SettingsView: View {
                 Text("System follows the accent color selected in macOS settings.").font(.caption).foregroundStyle(.secondary)
             }
             Section("Playback") {
-                Picker("Display mode", selection: Binding(get: { library.playbackMode }, set: { library.setPlaybackMode($0) })) {
-                    Text("Mirrored").tag("mirrored")
-                    Text("Per Display").tag("perDisplay")
-                }.fluaMenuPicker()
                 Toggle("Pause behind fullscreen apps", isOn: $library.state.pauseOnFullscreen).tint(library.accentOverride)
                 Toggle("Pause while running on battery", isOn: $library.state.pauseOnBattery).tint(library.accentOverride)
                 Toggle("Pause in Low Power Mode", isOn: Binding(get: { library.state.pauseOnLowPower ?? false }, set: { library.state.pauseOnLowPower = $0; library.settingChanged() })).tint(library.accentOverride)
@@ -1421,9 +1417,6 @@ struct SettingsView: View {
                     }.fluaMenuPicker()
                 }
                 Text("Power preferences apply to Desktop and Lock Screen playback. Fullscreen pause affects only the display showing the fullscreen app.").font(.caption).foregroundStyle(.secondary)
-            }
-            Section("Playlists") {
-                Toggle("Shuffle playlists", isOn: $library.state.shuffle).tint(library.accentOverride)
             }
             Section("Blocked tags") {
                 HStack {
@@ -1481,7 +1474,6 @@ struct SettingsView: View {
             .textFieldStyle(FluaGlassTextFieldStyle())
             .onChange(of: library.state.pauseOnFullscreen) { _, _ in library.settingChanged() }
             .onChange(of: library.state.pauseOnBattery) { _, _ in library.settingChanged() }
-            .onChange(of: library.state.shuffle) { _, _ in library.save() }
     }
 }
 
