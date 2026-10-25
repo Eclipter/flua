@@ -16,10 +16,6 @@ Current capabilities and limitations are listed in [FEATURES.md](FEATURES.md). T
 - Audit 8 (Medium): In `Library.swift`, downsample image thumbnails with ImageIO to a bounded size; verify thumbnail dimensions and orientation while confirming the source remains intact.
 - Audit 9 (Low): In `Model.swift` and `Library.swift`, check whether a playlist is due before scanning eligibility; verify not-due checks leave state unchanged and due transitions still work.
 
-## Window management and resizing
-
-- Confirm the native window-management popup appears when physically hovering over the green window button in a normal Flua session with Hide from Dock enabled. The window is now explicitly fullscreen eligible in both regular and accessory activation policies; physical-pointer popup verification remains open. See [the recorded check](DEVELOPMENT.md#green-button-window-management-popup).
-
 ## Real-system validation
 
 Use disposable libraries and matching catalog builds. Follow the [integration and rollback procedure](DEVELOPMENT.md#lock-screen-integration-checks); standalone tests and application smoke do not establish system playback behavior.
