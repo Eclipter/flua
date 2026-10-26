@@ -1,5 +1,6 @@
 import AppKit
 import Metal
+import MetalKit
 import QuartzCore
 
 // The SDK does not mark MTLBuffer Sendable; seeds are written only during construction.
@@ -8,6 +9,11 @@ private final class ScenePreviewResources: @unchecked Sendable {
     let queue: MTLCommandQueue
     let pipeline: MTLRenderPipelineState
     let seeds: MTLBuffer
+    let artworks: [String: MTLTexture]
+    let motionPipeline: MTLRenderPipelineState
+    let motionTextures: [MTLTexture]
+    let motionMasks: [String: MTLTexture]
+    let compositePipeline: MTLRenderPipelineState
 
     init() throws {
         guard let device = MTLCreateSystemDefaultDevice(), let queue = device.makeCommandQueue(),
@@ -22,11 +28,47 @@ private final class ScenePreviewResources: @unchecked Sendable {
         descriptor.fragmentFunction = library.makeFunction(name: "sceneFragment")
         descriptor.colorAttachments[0].pixelFormat = .bgra8Unorm
         pipeline = try device.makeRenderPipelineState(descriptor: descriptor)
+        descriptor.fragmentFunction = library.makeFunction(name: "sceneComposite")
+        compositePipeline = try device.makeRenderPipelineState(descriptor: descriptor)
+        let motionDescriptor = MTLRenderPipelineDescriptor()
+        motionDescriptor.vertexFunction = library.makeFunction(name: "motionVertex")
+        motionDescriptor.fragmentFunction = library.makeFunction(name: "motionFragment")
+        let attachment = motionDescriptor.colorAttachments[0]!
+        attachment.pixelFormat = .bgra8Unorm
+        attachment.isBlendingEnabled = true
+        attachment.sourceRGBBlendFactor = .one
+        attachment.destinationRGBBlendFactor = .oneMinusSourceAlpha
+        attachment.sourceAlphaBlendFactor = .one
+        attachment.destinationAlphaBlendFactor = .oneMinusSourceAlpha
+        motionPipeline = try device.makeRenderPipelineState(descriptor: motionDescriptor)
         let noise = (0..<1024).map { Float(SceneDrawing.noise($0)) }
         guard let seeds = device.makeBuffer(bytes: noise, length: noise.count * MemoryLayout<Float>.stride) else {
             throw NativeWallpaperError("The graphics buffer for scene previews is unavailable.")
         }
         self.seeds = seeds
+        let loader = MTKTextureLoader(device: device)
+        var artworks: [String: MTLTexture] = [:]
+        for scene in SceneDrawing.artworkScenes {
+            guard let image = SceneDrawing.artworkImage(scene: scene) else {
+                throw NativeWallpaperError("The bundled wallpaper artwork is missing: " + scene)
+            }
+            artworks[scene] = try loader.newTexture(cgImage: image, options: [
+                .SRGB: false, .origin: MTKTextureLoader.Origin.bottomLeft, .generateMipmaps: true
+            ])
+        }
+        self.artworks = artworks
+        let options: [MTKTextureLoader.Option: Any] = [
+            .SRGB: false, .origin: MTKTextureLoader.Origin.bottomLeft, .generateMipmaps: true
+        ]
+        motionTextures = try SceneDrawing.motionImages.map { try loader.newTexture(cgImage: $0, options: options) }
+        var masks: [String: MTLTexture] = [:]
+        for scene in SceneDrawing.artworkScenes {
+            guard let mask = SceneDrawing.motionMask(scene: scene) else {
+                throw NativeWallpaperError("The wallpaper animation mask is unavailable: " + scene)
+            }
+            masks[scene] = try loader.newTexture(cgImage: mask, options: options)
+        }
+        motionMasks = masks
     }
 }
 
@@ -48,11 +90,16 @@ private final class ScenePreviewWorker: @unchecked Sendable {
     private var elapsed: Double = 0
     private var previousFrameTime: CFTimeInterval?
     private var submittedFrames = 0
+    private var compositeTexture: MTLTexture?
     private let kind: UInt32
+    private let artwork: MTLTexture
+    private let scene: String
 
     @MainActor init(resources: ScenePreviewResources, scene: String) {
         self.resources = resources
+        self.scene = scene
         kind = UInt32(["aurora", "cosmos", "ocean", "ember", "ink", "dunes", "contour", "opal"].firstIndex(of: scene) ?? 0)
+        artwork = resources.artworks[scene] ?? resources.artworks["ink"]!
         layer.device = resources.device
         layer.pixelFormat = .bgra8Unorm
         layer.framebufferOnly = true
@@ -99,9 +146,20 @@ private final class ScenePreviewWorker: @unchecked Sendable {
             semaphore.signal()
             return
         }
+        if compositeTexture?.width != drawable.texture.width || compositeTexture?.height != drawable.texture.height {
+            let descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .bgra8Unorm,
+                width: drawable.texture.width, height: drawable.texture.height, mipmapped: false)
+            descriptor.usage = [.renderTarget, .shaderRead]
+            descriptor.storageMode = .private
+            compositeTexture = resources.device.makeTexture(descriptor: descriptor)
+        }
+        guard let compositeTexture else {
+            semaphore.signal()
+            return
+        }
 
         let pass = MTLRenderPassDescriptor()
-        pass.colorAttachments[0].texture = drawable.texture
+        pass.colorAttachments[0].texture = compositeTexture
         pass.colorAttachments[0].loadAction = .dontCare
         pass.colorAttachments[0].storeAction = .store
         guard let encoder = command.makeRenderCommandEncoder(descriptor: pass) else {
@@ -114,12 +172,41 @@ private final class ScenePreviewWorker: @unchecked Sendable {
         }
         var uniforms = SIMD4<Float>(Float(drawable.texture.width), Float(drawable.texture.height), Float(elapsed), Float(kind))
         var shade = Float(state.dimming.isFinite ? min(max(state.dimming, 0), 0.9) : 0.12)
+        var unshaded: Float = 0
         encoder.setRenderPipelineState(resources.pipeline)
         encoder.setFragmentBytes(&uniforms, length: MemoryLayout<SIMD4<Float>>.stride, index: 0)
         encoder.setFragmentBuffer(resources.seeds, offset: 0, index: 1)
-        encoder.setFragmentBytes(&shade, length: MemoryLayout<Float>.stride, index: 2)
+        encoder.setFragmentBytes(&unshaded, length: MemoryLayout<Float>.stride, index: 2)
+        encoder.setFragmentTexture(artwork, index: 0)
         encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
+        let sprites = SceneDrawing.motionSprites(scene: scene, time: elapsed)
+        if !sprites.isEmpty, let image = SceneDrawing.artworkImage(scene: scene),
+           let buffer = resources.device.makeBuffer(bytes: sprites, length: sprites.count * MemoryLayout<SceneMotionSprite>.stride) {
+            let frame = SceneDrawing.artworkFrame(time: elapsed,
+                size: CGSize(width: drawable.texture.width, height: drawable.texture.height), image: image)
+            var geometry = SIMD4<Float>(Float(frame.minX), Float(frame.minY), Float(frame.width), Float(frame.height))
+            encoder.setRenderPipelineState(resources.motionPipeline)
+            encoder.setVertexBuffer(buffer, offset: 0, index: 0)
+            encoder.setVertexBytes(&geometry, length: MemoryLayout<SIMD4<Float>>.stride, index: 1)
+            for (index, texture) in resources.motionTextures.enumerated() { encoder.setFragmentTexture(texture, index: index) }
+            encoder.setFragmentTexture(resources.motionMasks[scene], index: 8)
+            encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4, instanceCount: sprites.count)
+        }
         encoder.endEncoding()
+        // Shade the finished composition once so overlapping translucent layers retain their colors.
+        let outputPass = MTLRenderPassDescriptor()
+        outputPass.colorAttachments[0].texture = drawable.texture
+        outputPass.colorAttachments[0].loadAction = .dontCare
+        outputPass.colorAttachments[0].storeAction = .store
+        guard let output = command.makeRenderCommandEncoder(descriptor: outputPass) else {
+            semaphore.signal()
+            return
+        }
+        output.setRenderPipelineState(resources.compositePipeline)
+        output.setFragmentTexture(compositeTexture, index: 0)
+        output.setFragmentBytes(&shade, length: MemoryLayout<Float>.stride, index: 2)
+        output.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
+        output.endEncoding()
         command.addCompletedHandler { _ in semaphore.signal() }
         command.present(drawable)
         command.commit()

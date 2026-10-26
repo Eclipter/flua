@@ -142,103 +142,59 @@ static float3 ember(float2 p, float t, float2 pixel, constant float *n) {
     return c;
 }
 
-static float3 ink(float2 p, float t, float2 pixel) {
-    float3 c = mix(float3(0.90f, 0.88f, 0.82f), float3(0.97f, 0.955f, 0.91f), p.y);
-    c = over(c, float4(0.67f, 0.25f, 0.18f, 0.80f * ellipse(p, float2(0.7635f, 0.783f), float2(0.0285f, 0.048f), pixel)));
-    for (int ridge = 0; ridge < 6; ++ridge) {
-        float r = ridge;
-        float peak = exp(-pow((p.x - (0.12f + r * 0.16f)) / 0.24f, 2.0f));
-        float h = 0.46f - r * 0.075f + peak * 0.29f + 0.045f * sin(p.x * 13 + r * 2.1f)
-            + 0.018f * sin(p.x * 34 + r) + 0.012f * sin(p.x * 83 + r * 3)
-            + 0.005f * sin(p.x * 181 + r * 7);
-        float3 paint = mix(float3(0.87f - r * 0.065f, 0.86f - r * 0.067f, 0.81f - r * 0.062f),
-            float3(0.66f - r * 0.10f, 0.69f - r * 0.10f, 0.66f - r * 0.093f),
-            clamp((p.y + 0.10f) / (0.75f - r * 0.055f), 0.0f, 1.0f));
-        c = mix(c, paint, below(p.y, h, pixel.y));
-        float mistY = 0.37f - r * 0.068f;
-        float drift = sin(t * 0.065f + r) * 0.13f;
-        c = glow(c, p, float2(0.30f + drift, mistY), float2(0.62f, 0.10f), float4(0.96f, 0.95f, 0.90f, 0.32f));
-        c = glow(c, p, float2(0.85f - drift, mistY + 0.015f), float2(0.45f, 0.075f), float4(0.96f, 0.95f, 0.90f, 0.26f));
-    }
-    uint2 cell = uint2(p * 1024);
-    uint seed = cell.x * 374761393u + cell.y * 668265263u;
-    seed = (seed ^ (seed >> 13)) * 1274126177u;
-    return c * (1 - float((seed ^ (seed >> 16)) % 20) / 255);
+static float3 artwork(float2 p, float2 size, texture2d<float> image) {
+    constexpr sampler imageSampler(coord::normalized, address::clamp_to_edge, filter::linear, mip_filter::linear);
+    float2 imageSize = float2(image.get_width(), image.get_height());
+    float scale = max(size.x / imageSize.x, size.y / imageSize.y);
+    float2 extent = imageSize * scale / size;
+    return image.sample(imageSampler, (p - (1 - extent) / 2) / extent).rgb;
 }
 
-static float duneHeight(float x, float layer, float t) {
-    return 0.55f - layer * 0.125f + 0.14f * sin(x * 3.6f + layer * 1.15f)
-        + 0.045f * sin(x * 7.3f - layer * 0.8f) + 0.006f * sin(t * 0.08f + layer);
+struct MotionSprite { float4 rect; float4 style; };
+struct MotionVertex {
+    float4 position [[position]];
+    float2 uv;
+    float2 artworkUV;
+    float opacity;
+    uint textureIndex [[flat]];
+    uint masked [[flat]];
+};
+
+vertex MotionVertex motionVertex(uint id [[vertex_id]], uint instance [[instance_id]],
+    constant MotionSprite *sprites [[buffer(0)]], constant float4 &frame [[buffer(1)]]) {
+    float2 uv = float2(id & 1, id >> 1);
+    MotionSprite sprite = sprites[instance];
+    float2 offset = (uv - 0.5f) * sprite.rect.zw;
+    float s = sin(sprite.style.x), c = cos(sprite.style.x);
+    float2 point = sprite.rect.xy + float2(offset.x * c - offset.y * s, offset.x * s + offset.y * c);
+    float2 p = frame.xy + point * frame.zw;
+    return {float4(p * 2 - 1, 0, 1), uv, point, sprite.style.y, uint(sprite.style.z), uint(sprite.style.w)};
 }
 
-static float3 dunes(float2 p, float t, float2 pixel) {
-    float3 c = mix(float3(0.91f, 0.66f, 0.46f), float3(0.96f, 0.86f, 0.69f), p.y);
-    c = glow(c, p, float2(0.72f, 0.80f), float2(0.23f, 0.38f), float4(1, 0.94f, 0.79f, 0.25f));
-    c = over(c, float4(1, 0.93f, 0.77f, 0.78f * ellipse(p, float2(0.72f, 0.799f), float2(0.036f, 0.061f), pixel)));
-    for (int layer = 0; layer < 5; ++layer) {
-        float l = layer, h = duneHeight(p.x, l, t);
-        float mask = below(p.y, h, pixel.y);
-        float3 paint = mix(float3(0.39f + l * 0.025f, 0.16f + l * 0.008f, 0.115f),
-            float3(0.88f - l * 0.047f, 0.59f - l * 0.055f, 0.36f - l * 0.037f),
-            projection(p, float2(0.2f, -0.18f), float2(0.65f, 0.63f - l * 0.12f)));
-        c = mix(c, paint, mask);
-        for (int ripple = 1; ripple <= 22; ++ripple) {
-            float y = h - ripple * 0.008f * (1 + 0.18f * sin(p.x * 8 + l))
-                + 0.0015f * sin(p.x * 65 + ripple * 0.7f - t * 0.12f);
-            c = over(c, float4(1, 0.78f, 0.51f, 0.055f * mask * line(p.y, y, 0.00055f, pixel.y)));
-        }
-        c = over(c, float4(1, 0.83f, 0.59f, 0.52f * line(p.y, h, 0.0011f, pixel.y)));
-    }
-    return c;
+fragment float4 motionFragment(MotionVertex in [[stage_in]],
+    array<texture2d<float>, 8> textures [[texture(0)]], texture2d<float> mask [[texture(8)]],
+    constant float &dimming [[buffer(2)]]) {
+    constexpr sampler spriteSampler(coord::normalized, address::clamp_to_zero, filter::linear, mip_filter::linear);
+    float4 color = textures[in.textureIndex].sample(spriteSampler, in.uv) * in.opacity;
+    if (in.masked != 0) color *= mask.sample(spriteSampler, in.artworkUV).a;
+    color.rgb *= 1 - dimming;
+    return color;
 }
 
-static float3 contour(float2 p, float t, float2 pixel) {
-    float3 c = mix(float3(0.015f, 0.055f, 0.065f), float3(0.035f, 0.13f, 0.14f), projection(p, float2(0), float2(1)));
-    c = glow(c, p, float2(0.63f, 0.51f), float2(0.65f, 0.9f), float4(0.05f, 0.30f, 0.27f, 0.25f));
-    float2 q = (p - float2(0.63f, 0.51f)) * float2(1.6f, 1);
-    float a = atan2(q.y, q.x), radius = length(q);
-    // Each ring has its own deformation; check neighboring levels to preserve nested line spacing.
-    float level = radius;
-    for (int i = 0; i < 5; ++i)
-        level = radius / (1 + 0.12f * sin(a * 3 + level * 5 + t * 0.06f) + 0.065f * cos(a * 5 - level * 4 - t * 0.04f));
-    int nearest = int(round((level - 0.045f) / 0.018f));
-    for (int ring = max(0, nearest - 1); ring <= min(73, nearest + 1); ++ring) {
-        float l = 0.045f + ring * 0.018f;
-        float edge = l * (1 + 0.12f * sin(a * 3 + l * 5 + t * 0.06f) + 0.065f * cos(a * 5 - l * 4 - t * 0.04f));
-        float slope = l * (0.36f * cos(a * 3 + l * 5 + t * 0.06f) - 0.325f * sin(a * 5 - l * 4 - t * 0.04f));
-        float2 normal = float2(cos(a) + slope / max(radius, 0.001f) * sin(a), sin(a) - slope / max(radius, 0.001f) * cos(a));
-        float metric = length(normal * float2(1.6f, 1));
-        bool major = ring % 5 == 0;
-        float coverage = line(radius, edge, (major ? 0.00105f : 0.00065f) * metric,
-            length(normal * float2(1.6f, 1) * pixel));
-        c = over(c, major ? float4(0.76f, 0.70f, 0.42f, 0.62f * coverage) : float4(0.27f, 0.65f, 0.58f, 0.42f * coverage));
-    }
-    return c;
-}
-
-static float3 opal(float2 p, float t, float2 pixel) {
-    float warp = 0.19f * sin(p.y * 4.8f + t * 0.075f) + 0.055f * sin(p.y * 10.5f - t * 0.045f);
-    float derivative = 0.912f * cos(p.y * 4.8f + t * 0.075f) + 0.5775f * cos(p.y * 10.5f - t * 0.045f);
-    float width = length(float2(pixel.x, derivative * pixel.y));
-    float distance = abs(fract((p.x + warp - 0.003f) * 72 + 0.5f) - 0.5f) / 72;
-    float coverage = line(distance, 0, 0.006f, width);
-    float3 paint = gradient(p, float2(0), float2(1), float4(0.53f, 0.58f, 0.62f, 1),
-        float4(0.94f, 0.925f, 0.87f, 1), float4(0.74f, 0.76f, 0.74f, 1)).rgb;
-    return mix(float3(0.075f, 0.085f, 0.10f), paint, coverage);
+fragment float4 sceneComposite(SceneVertex in [[stage_in]], texture2d<float> color [[texture(0)]],
+    constant float &dimming [[buffer(2)]]) {
+    return float4(color.read(uint2(in.position.xy)).rgb * (1 - dimming), 1);
 }
 
 fragment float4 sceneFragment(SceneVertex in [[stage_in]], constant float4 &u [[buffer(0)]],
-    constant float *noise [[buffer(1)]], constant float &dimming [[buffer(2)]]) {
+    constant float *noise [[buffer(1)]], constant float &dimming [[buffer(2)]], texture2d<float> image [[texture(0)]]) {
     float2 pixel = 1 / max(u.xy, float2(1));
     float3 color;
     switch (uint(u.w)) {
         case 1: color = cosmos(in.uv, u.z, pixel, noise); break;
         case 2: color = ocean(in.uv, u.z, pixel, noise); break;
         case 3: color = ember(in.uv, u.z, pixel, noise); break;
-        case 4: color = ink(in.uv, u.z, pixel); break;
-        case 5: color = dunes(in.uv, u.z, pixel); break;
-        case 6: color = contour(in.uv, u.z, pixel); break;
-        case 7: color = opal(in.uv, u.z, pixel); break;
+        case 4: case 5: case 6: case 7: color = artwork(in.uv, u.xy, image); break;
         default: color = aurora(in.uv, u.z, pixel, noise); break;
     }
     return float4(color * (1 - dimming), 1);

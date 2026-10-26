@@ -1,4 +1,11 @@
 import CoreGraphics
+import Foundation
+import ImageIO
+
+struct SceneMotionSprite: Sendable {
+    var rect: SIMD4<Float>
+    var style: SIMD4<Float>
+}
 
 enum SceneDrawing {
     static func rgb(_ r: CGFloat, _ g: CGFloat, _ b: CGFloat, _ a: CGFloat = 1) -> CGColor {
@@ -15,10 +22,7 @@ enum SceneDrawing {
         case "cosmos": cosmos(c, time)
         case "ocean": ocean(c, time)
         case "ember": ember(c, time)
-        case "ink": ink(c, time)
-        case "dunes": dunes(c, time)
-        case "contour": contour(c, time)
-        case "opal": opal(c, time)
+        case "ink", "dunes", "contour", "opal": artwork(scene: scene, time: time, in: c, size: bounds.size)
         default: aurora(c, time)
         }
         let shade = dimming.isFinite ? CGFloat(min(max(dimming, 0), 0.9)) : 0.12
@@ -59,166 +63,439 @@ enum SceneDrawing {
         }
     }
 
-    static func pigment(_ r: CGFloat, _ g: CGFloat, _ b: CGFloat, _ a: CGFloat = 1) -> CGColor {
-        // Use the shader's RGB space so the newer palettes match across both renderers.
-        CGColor(colorSpace: CGColorSpaceCreateDeviceRGB(), components: [r, g, b, a])!
+    static let artworkScenes = ["ink", "dunes", "contour", "opal"]
+
+    private static func loadSceneImage(_ name: String) -> CGImage? {
+        #if SWIFT_PACKAGE
+        let url = Bundle.module.url(forResource: name, withExtension: "png", subdirectory: "SceneAssets")
+        #else
+        let url = Bundle.main.url(forResource: name, withExtension: "png", subdirectory: "SceneAssets")
+        #endif
+        guard let url, let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+              let original = CGImageSourceCreateImageAtIndex(source, 0, nil),
+              let context = CGContext(data: nil, width: original.width, height: original.height,
+                bitsPerComponent: 8, bytesPerRow: original.width * 4, space: CGColorSpaceCreateDeviceRGB(),
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+        // Decode once into the same RGB space used by the preview texture.
+        context.draw(original, in: CGRect(x: 0, y: 0, width: original.width, height: original.height))
+        return context.makeImage()
     }
 
-    private static let paperGrain: CGImage = {
-        var pixels = [UInt8](repeating: 0, count: 1024 * 1024 * 4)
-        for y in 0..<1024 {
-            for x in 0..<1024 {
-                var seed = UInt32(x) &* 374761393 &+ UInt32(y) &* 668265263
-                seed = (seed ^ (seed >> 13)) &* 1274126177
-                pixels[(y * 1024 + x) * 4 + 3] = UInt8((seed ^ (seed >> 16)) % 20)
+    private static let artworkImages: [String: CGImage] = Dictionary(uniqueKeysWithValues: artworkScenes.compactMap { scene in
+        guard let image = loadSceneImage(scene) else { return nil }
+        return (scene, image)
+    })
+
+    static func artworkImage(scene: String) -> CGImage? { artworkImages[scene] }
+
+    static func artworkFrame(time t: Double, size: CGSize, image: CGImage) -> CGRect {
+        let scale = max(size.width / CGFloat(image.width), size.height / CGFloat(image.height))
+        let width = CGFloat(image.width) * scale / size.width
+        let height = CGFloat(image.height) * scale / size.height
+        return CGRect(x: (1 - width) / 2, y: (1 - height) / 2, width: width, height: height)
+    }
+
+    private struct PineImage {
+        let image: CGImage
+        let root: SIMD2<Float>
+    }
+
+    private static let pineImages: [PineImage] = {
+        guard let atlas = loadSceneImage("ink-pines"), let data = atlas.dataProvider?.data,
+              let bytes = CFDataGetBytePtr(data) else { return [] }
+        return (0..<3).compactMap { column in
+            let start = column * atlas.width / 3, end = (column + 1) * atlas.width / 3
+            var left = end, right = start, top = atlas.height, bottom = 0
+            for y in 0..<atlas.height {
+                for x in start..<end where bytes[y * atlas.bytesPerRow + x * 4 + 3] > 2 {
+                    left = min(left, x); right = max(right, x)
+                    top = min(top, y); bottom = max(bottom, y)
+                }
             }
+            guard right > left, bottom > top,
+                  let crop = atlas.cropping(to: CGRect(x: left, y: top, width: right - left + 1, height: bottom - top + 1)),
+                  let context = CGContext(data: nil, width: crop.width + 4, height: crop.height + 4,
+                    bitsPerComponent: 8, bytesPerRow: (crop.width + 4) * 4, space: CGColorSpaceCreateDeviceRGB(),
+                    bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+            var rootX = 0.0, weight = 0.0
+            for y in max(top, bottom - 4)...bottom {
+                for x in left...right {
+                    let alpha = Double(bytes[y * atlas.bytesPerRow + x * 4 + 3])
+                    rootX += (Double(x) + 0.5) * alpha
+                    weight += alpha
+                }
+            }
+            context.draw(crop, in: CGRect(x: 2, y: 2, width: crop.width, height: crop.height))
+            guard let image = context.makeImage(), weight > 0 else { return nil }
+            return PineImage(image: image, root: SIMD2(Float((rootX / weight - Double(left) + 2) / Double(image.width)),
+                                                      2 / Float(image.height)))
         }
-        let data = CFDataCreate(nil, pixels, pixels.count)!
-        return CGImage(width: 1024, height: 1024, bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: 4096,
-                       space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue),
-                       provider: CGDataProvider(data: data)!, decode: nil, shouldInterpolate: false, intent: .defaultIntent)!
     }()
 
-    static func inkHeight(_ x: Double, _ ridge: Int) -> Double {
-        let r = Double(ridge)
-        let peak = exp(-pow((x - (0.12 + r * 0.16)) / 0.24, 2))
-        return 0.46 - r * 0.075 + peak * 0.29 + 0.045 * sin(x * 13 + r * 2.1)
-            + 0.018 * sin(x * 34 + r) + 0.012 * sin(x * 83 + r * 3)
-            + 0.005 * sin(x * 181 + r * 7)
-    }
+    static let motionImages: [CGImage] = (0..<5).map(makeMotionImage) + pineImages.map(\.image)
 
-    static func ink(_ c: CGContext, _ t: Double) {
-        linear(c, colors: [pigment(0.90, 0.88, 0.82), pigment(0.97, 0.955, 0.91)], from: .zero, to: CGPoint(x: 0, y: 1))
-        c.setFillColor(pigment(0.67, 0.25, 0.18, 0.80))
-        c.fillEllipse(in: CGRect(x: 0.735, y: 0.735, width: 0.057, height: 0.096))
-        for ridge in 0..<6 {
-            let path = CGMutablePath()
-            path.move(to: CGPoint(x: -0.01, y: -0.01))
-            for step in 0...400 {
-                let x = Double(step) / 400
-                path.addLine(to: CGPoint(x: x, y: inkHeight(x, ridge)))
-            }
-            path.addLine(to: CGPoint(x: 1.01, y: -0.01))
-            path.closeSubpath()
-            let r = CGFloat(ridge)
-            c.saveGState()
-            c.addPath(path)
-            c.clip()
-            linear(c, colors: [pigment(0.87 - r * 0.065, 0.86 - r * 0.067, 0.81 - r * 0.062),
-                               pigment(0.66 - r * 0.10, 0.69 - r * 0.10, 0.66 - r * 0.093)],
-                   from: CGPoint(x: 0, y: -0.10), to: CGPoint(x: 0, y: 0.65 - Double(ridge) * 0.055))
-            c.restoreGState()
-            let mistY = 0.37 - r * 0.068
-            let drift = CGFloat(sin(t * 0.065 + Double(ridge))) * 0.13
-            glow(c, x: 0.30 + drift, y: mistY, rx: 0.62, ry: 0.10, color: pigment(0.96, 0.95, 0.90, 0.32))
-            glow(c, x: 0.85 - drift, y: mistY + 0.015, rx: 0.45, ry: 0.075, color: pigment(0.96, 0.95, 0.90, 0.26))
+    static let treePlacements: [SIMD4<Float>] = [
+        SIMD4(0.805, 0.015, 0.14, 0), SIMD4(0.875, 0.025, 0.20, 1),
+        SIMD4(0.960, 0.055, 0.23, 2), SIMD4(0.655, 0.350, 0.10, 0),
+        SIMD4(0.282, 0.120, 0.075, 1), SIMD4(0.595, 0.627, 0.065, 2)
+    ]
+
+    static func treeSprites(time: Double) -> [SceneMotionSprite] {
+        let t = (time.isFinite ? time : 0) * 2
+        return treePlacements.enumerated().compactMap { index, placement in
+            let texture = Int(placement.w)
+            guard pineImages.indices.contains(texture) else { return nil }
+            let pine = pineImages[texture]
+            let phase = Double(index) * 1.73
+            let angle = Float(0.025 * sin(t * 0.85 + phase) + 0.008 * sin(t * 1.47 + phase * 0.63))
+            let height = placement.z
+            let width = height * Float(pine.image.width) / Float(pine.image.height) * 992 / 1586
+            let offset = (SIMD2<Float>(repeating: 0.5) - pine.root) * SIMD2(width, height)
+            let center = SIMD2(placement.x, placement.y) + SIMD2(offset.x * cos(angle) - offset.y * sin(angle),
+                                                              offset.x * sin(angle) + offset.y * cos(angle))
+            return SceneMotionSprite(rect: SIMD4(center.x, center.y, width, height),
+                                     style: SIMD4(angle, 1, Float(texture + 5), 0))
         }
-        c.interpolationQuality = .none
-        c.draw(paperGrain, in: CGRect(x: 0, y: 0, width: 1, height: 1))
     }
 
-    static func duneHeight(_ x: Double, _ layer: Int, _ t: Double) -> Double {
-        let l = Double(layer)
-        return 0.55 - l * 0.125 + 0.14 * sin(x * 3.6 + l * 1.15)
-            + 0.045 * sin(x * 7.3 - l * 0.8) + 0.006 * sin(t * 0.08 + l)
-    }
+    private static let motionMasks: [String: CGImage] = Dictionary(uniqueKeysWithValues: artworkScenes.compactMap { scene in
+        guard let image = artworkImages[scene] else { return nil }
+        return (scene, makeMotionMask(scene: scene, image: image))
+    })
 
-    static func dunes(_ c: CGContext, _ t: Double) {
-        linear(c, colors: [pigment(0.91, 0.66, 0.46), pigment(0.96, 0.86, 0.69)], from: .zero, to: CGPoint(x: 0, y: 1))
-        glow(c, x: 0.72, y: 0.80, rx: 0.23, ry: 0.38, color: pigment(1, 0.94, 0.79, 0.25))
-        c.setFillColor(pigment(1, 0.93, 0.77, 0.78))
-        c.fillEllipse(in: CGRect(x: 0.684, y: 0.738, width: 0.072, height: 0.122))
-        for layer in 0..<5 {
-            let path = CGMutablePath()
-            for step in 0...240 {
-                let x = Double(step) / 240
-                let point = CGPoint(x: x, y: duneHeight(x, layer, t))
-                if step == 0 { path.move(to: point) } else { path.addLine(to: point) }
+    private static let motionClipMasks: [String: CGImage] = Dictionary(uniqueKeysWithValues: motionMasks.compactMap { scene, image in
+        guard let provider = image.dataProvider, let data = provider.data,
+              let source = CFDataGetBytePtr(data) else { return nil }
+        let count = image.width * image.height
+        var alpha = [UInt8](repeating: 0, count: count)
+        for index in 0..<count { alpha[index] = source[index * 4 + 3] }
+        guard let alphaProvider = CGDataProvider(data: Data(alpha) as CFData),
+              let clipMask = CGImage(width: image.width, height: image.height, bitsPerComponent: 8,
+                                     bitsPerPixel: 8, bytesPerRow: image.width, space: CGColorSpaceCreateDeviceGray(),
+                                     bitmapInfo: [], provider: alphaProvider, decode: nil, shouldInterpolate: true,
+                                     intent: .defaultIntent) else { return nil }
+        return (scene, clipMask)
+    })
+
+    static func motionMask(scene: String) -> CGImage? { motionMasks[scene] }
+
+    static func motionSprites(scene: String, time: Double) -> [SceneMotionSprite] {
+        let t = (time.isFinite ? time : 0) * (scene == "ink" || scene == "dunes" ? 2 : 1)
+        var result: [SceneMotionSprite] = []
+        func add(_ x: Double, _ y: Double, _ width: Double, _ height: Double, _ angle: Double,
+                 _ opacity: Double, _ texture: Int, masked: Bool) {
+            guard [x, y, width, height, angle, opacity].allSatisfy(\.isFinite), width > 0, height > 0 else { return }
+            let alpha = min(1, max(0, opacity))
+            guard alpha > 0.001 else { return }
+            result.append(SceneMotionSprite(
+                rect: SIMD4(Float(x), Float(y), Float(width), Float(height)),
+                style: SIMD4(Float(angle), Float(alpha), Float(texture), masked ? 1 : 0)
+            ))
+        }
+        func phase(_ seed: Double, speed: Double) -> Double {
+            let value = t * speed + seed
+            return value - floor(value)
+        }
+        func fade(_ p: Double, edge: Double = 0.12) -> Double {
+            smoothstep(0, edge, p) * (1 - smoothstep(1 - edge, 1, p))
+        }
+
+        switch scene {
+        case "ink":
+            for i in 0..<26 {
+                let seed = noise(i * 17 + 31)
+                let p = phase(seed, speed: 0.010 + Double(noise(i + 101)) * 0.006)
+                let lane = Double(i % 6)
+                let x = -0.18 + p * 1.36
+                let y = 0.22 + lane * 0.045 + 0.018 * sin(t * 0.16 + Double(i) * 1.7)
+                let alpha = fade(p) * (0.19 + Double(noise(i + 7)) * 0.16)
+                add(x, y, 0.13 + Double(noise(i + 3)) * 0.12, 0.035 + Double(noise(i + 8)) * 0.032,
+                    0.035 * sin(t * 0.11 + Double(i)), alpha, 0, masked: true)
             }
-            let surface = CGMutablePath()
-            surface.addPath(path)
-            surface.addLine(to: CGPoint(x: 1, y: -0.2))
-            surface.addLine(to: CGPoint(x: 0, y: -0.2))
-            surface.closeSubpath()
-            let l = CGFloat(layer)
-            c.saveGState()
-            c.addPath(surface)
-            c.clip()
-            linear(c, colors: [pigment(0.39 + l * 0.025, 0.16 + l * 0.008, 0.115),
-                               pigment(0.88 - l * 0.047, 0.59 - l * 0.055, 0.36 - l * 0.037)],
-                   from: CGPoint(x: 0.2, y: -0.18), to: CGPoint(x: 0.65, y: 0.63 - Double(layer) * 0.12))
-            for ripple in 1...22 {
-                let detail = CGMutablePath()
-                for step in 0...160 {
-                    let x = Double(step) / 160
-                    let depth = Double(ripple) * 0.008
-                    let y = duneHeight(x, layer, t) - depth * (1 + 0.18 * sin(x * 8 + Double(layer)))
-                        + 0.0015 * sin(x * 65 + Double(ripple) * 0.7 - t * 0.12)
-                    if step == 0 { detail.move(to: CGPoint(x: x, y: y)) }
-                    else { detail.addLine(to: CGPoint(x: x, y: y)) }
+            for i in 0..<9 {
+                let p = phase(Double(i) / 9, speed: 0.0035 + Double(noise(i + 211)) * 0.0015)
+                let x = -0.08 + p * 1.16
+                let y = 0.73 + Double(noise(i + 19)) * 0.21 + 0.012 * sin(t * 0.65 + Double(i))
+                let wing = 0.65 + 0.35 * abs(sin(t * 1.5 + Double(i) * 2.1))
+                add(x, y, 0.020 + Double(noise(i + 43)) * 0.018, (0.012 + Double(noise(i + 53)) * 0.006) * wing,
+                    0.10 * sin(t * 0.22 + Double(i)), fade(p, edge: 0.18) * 0.72, 4, masked: false)
+            }
+            result += treeSprites(time: time)
+        case "dunes":
+            for i in 0..<20 {
+                let p = phase(Double(i) / 20, speed: 0.019 + Double(noise(i + 307)) * 0.009)
+                let lane = Double(i % 5)
+                let x = -0.10 + p * 1.20
+                let y = 0.22 + lane * 0.082 + 0.045 * sin(p * 6.2 + Double(i) * 1.4)
+                let alpha = fade(p, edge: 0.15) * (0.16 + Double(noise(i + 11)) * 0.13)
+                add(x, y, 0.11 + Double(noise(i + 12)) * 0.11, 0.018 + Double(noise(i + 26)) * 0.018,
+                    -0.24 + 0.08 * sin(t * 0.14 + Double(i)), alpha, 1, masked: true)
+            }
+            for i in 0..<250 {
+                let p = phase(Double(noise(i * 13 + 9)), speed: 0.025 + Double(noise(i + 401)) * 0.045)
+                let x = -0.04 + p * 1.08
+                let lane = Double(noise(i * 7 + 2))
+                let y = 0.19 + lane * 0.47 + 0.035 * sin(x * 7 + t * 0.25 + Double(i))
+                let alpha = fade(p, edge: 0.08) * (0.18 + Double(noise(i + 82)) * 0.34)
+                let width = 0.003 + Double(noise(i + 1)) * 0.006
+                add(x, y, width, width * (0.42 + Double(noise(i + 55)) * 0.48),
+                    -0.30 + 0.14 * sin(t * 0.19 + Double(i)), alpha, 1, masked: true)
+            }
+        case "contour":
+            let routes: [[CGPoint]] = [
+                [CGPoint(x: 0.36, y: 0.91), CGPoint(x: 0.39, y: 0.82), CGPoint(x: 0.40, y: 0.72), CGPoint(x: 0.50, y: 0.61), CGPoint(x: 0.57, y: 0.50), CGPoint(x: 0.54, y: 0.39), CGPoint(x: 0.56, y: 0.25), CGPoint(x: 0.63, y: 0.095)],
+                [CGPoint(x: 0.15, y: 0.77), CGPoint(x: 0.26, y: 0.75), CGPoint(x: 0.36, y: 0.72), CGPoint(x: 0.43, y: 0.68), CGPoint(x: 0.49, y: 0.62), CGPoint(x: 0.50, y: 0.54)],
+                [CGPoint(x: 0.76, y: 0.83), CGPoint(x: 0.68, y: 0.76), CGPoint(x: 0.62, y: 0.69), CGPoint(x: 0.57, y: 0.60), CGPoint(x: 0.55, y: 0.46)],
+                [CGPoint(x: 0.27, y: 0.34), CGPoint(x: 0.37, y: 0.38), CGPoint(x: 0.46, y: 0.42), CGPoint(x: 0.53, y: 0.46), CGPoint(x: 0.56, y: 0.36)]
+            ]
+            for (routeIndex, route) in routes.enumerated() {
+                let count = routeIndex == 0 ? 48 : 24
+                for i in 0..<count {
+                    let p = phase(Double(i) / Double(count) + Double(routeIndex) * 0.19, speed: 0.032 + Double(noise(i + routeIndex * 73)) * 0.014)
+                    let point = routePoint(route, progress: p)
+                    let before = routePoint(route, progress: max(0, p - 0.008))
+                    let after = routePoint(route, progress: min(1, p + 0.008))
+                    let angle = atan2(Double(after.y - before.y), Double(after.x - before.x))
+                    let spread = (Double(noise(i * 5 + routeIndex + 8)) - 0.5) * 0.020
+                    let alpha = fade(p, edge: 0.09) * (0.32 + Double(noise(i + routeIndex * 41)) * 0.42)
+                    let width = 0.014 + Double(noise(i + 27)) * 0.025
+                    add(Double(point.x) + spread, Double(point.y) + spread * 0.55, width, 0.005 + Double(noise(i + 61)) * 0.006,
+                        angle, alpha, 3, masked: true)
                 }
-                c.addPath(detail)
-                c.setLineWidth(0.00055)
-                c.setStrokeColor(pigment(1, 0.78, 0.51, 0.055))
-                c.strokePath()
             }
+        case "opal":
+            for i in 0..<192 {
+                let lane = i % 6
+                let count = 32.0
+                let p = phase(Double(i) / count, speed: 0.021 + Double(noise(i + 503)) * 0.014)
+                let x = -0.12 + p * 1.24
+                let lanePhase = Double(lane) * 0.82
+                let y = 0.53 + 0.22 * sin(p * 5.4 + lanePhase) + 0.075 * sin(p * 12.0 - lanePhase * 0.8)
+                let angle = atan2(0.22 * 5.4 * cos(p * 5.4 + lanePhase) + 0.075 * 12 * cos(p * 12 - lanePhase * 0.8), 1.24)
+                let size = 0.045 + Double(noise(i + 37)) * 0.075
+                let alpha = fade(p, edge: 0.10) * (0.25 + Double(noise(i + 107)) * 0.45)
+                add(x, y, size, size * (0.45 + Double(noise(i + 3)) * 0.45), angle, alpha,
+                    i % 5 == 0 ? 0 : 2, masked: true)
+            }
+        default:
+            break
+        }
+        return result
+    }
+
+    private static func smoothstep(_ lower: Double, _ upper: Double, _ value: Double) -> Double {
+        let x = min(1, max(0, (value - lower) / (upper - lower)))
+        return x * x * (3 - 2 * x)
+    }
+
+    private static func routePoint(_ points: [CGPoint], progress: Double) -> CGPoint {
+        let scaled = min(1, max(0, progress)) * Double(points.count - 1)
+        let index = min(points.count - 2, Int(scaled))
+        let t = CGFloat(scaled - Double(index))
+        let p0 = points[max(0, index - 1)]
+        let p1 = points[index]
+        let p2 = points[index + 1]
+        let p3 = points[min(points.count - 1, index + 2)]
+        func interpolate(_ a: CGFloat, _ b: CGFloat, _ c: CGFloat, _ d: CGFloat) -> CGFloat {
+            0.5 * ((2 * b) + (-a + c) * t + (2 * a - 5 * b + 4 * c - d) * t * t + (-a + 3 * b - 3 * c + d) * t * t * t)
+        }
+        return CGPoint(x: interpolate(p0.x, p1.x, p2.x, p3.x), y: interpolate(p0.y, p1.y, p2.y, p3.y))
+    }
+
+    private static func makeMotionMask(scene: String, image: CGImage) -> CGImage {
+        let width = image.width, height = image.height
+        guard let sourceContext = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8,
+            bytesPerRow: width * 4, space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return image }
+        sourceContext.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+        guard let sourceData = sourceContext.data else { return image }
+        let sourcePixels = sourceData.assumingMemoryBound(to: UInt8.self)
+        var output = [UInt8](repeating: 0, count: width * height * 4)
+        for pixel in 0..<(width * height) {
+            let offset = pixel * 4
+            let red = Double(sourcePixels[offset]) / 255
+            let green = Double(sourcePixels[offset + 1]) / 255
+            let blue = Double(sourcePixels[offset + 2]) / 255
+            let luminance = red * 0.2126 + green * 0.7152 + blue * 0.0722
+            let alpha: Double
+            switch scene {
+            case "dunes": alpha = 1
+            case "ink": alpha = smoothstep(0.30, 0.76, luminance)
+            case "contour":
+                let teal = min(green, blue) - red
+                let blueBias = blue - red
+                let balanced = 1 - min(1, abs(green - blue) * 5)
+                alpha = smoothstep(0.025, 0.12, teal) * smoothstep(0.012, 0.085, blueBias) * (0.25 + balanced * 0.75)
+            case "opal": alpha = smoothstep(0.42, 0.78, luminance)
+            default: alpha = 0
+            }
+            let value = UInt8((min(1, max(0, alpha)) * 255).rounded())
+            output[offset] = value
+            output[offset + 1] = value
+            output[offset + 2] = value
+            output[offset + 3] = value
+        }
+        return makeRGBAImage(width: width, height: height, pixels: output) ?? image
+    }
+
+    private static func makeMotionImage(_ index: Int) -> CGImage {
+        let side = index == 4 ? 128 : 256
+        var pixels = [UInt8](repeating: 0, count: side * side * 4)
+        for y in 0..<side {
+            for x in 0..<side {
+                let u = (Double(x) + 0.5) / Double(side)
+                let v = (Double(y) + 0.5) / Double(side)
+                let broad = fractalNoise(u * 4, v * 4, seed: UInt32(index * 91 + 7))
+                let mid = fractalNoise(u * 11, v * 8, seed: UInt32(index * 137 + 19))
+                let fine = fractalNoise(u * 29, v * 23, seed: UInt32(index * 211 + 37))
+                var color = SIMD3<Double>(1, 1, 1)
+                var alpha = 0.0
+                switch index {
+                case 0:
+                    let strand = 0.5 + 0.5 * sin((u * 5 + v * 1.2 + broad * 0.7) * 22)
+                    alpha = smoothstep(0.24, 0.66, broad) * (0.52 + mid * 0.42) * (0.72 + strand * 0.28)
+                    color = SIMD3(0.91, 0.94, 0.93)
+                case 1:
+                    let filament = exp(-abs(sin((u * 8 + v * 2 + broad * 0.4) * 48)) * 13)
+                    alpha = min(0.88, 0.22 + broad * 0.42 + mid * 0.19 + filament * 0.28) * (0.76 + fine * 0.24)
+                    color = SIMD3(0.98, 0.67 + fine * 0.12, 0.39 + fine * 0.08)
+                case 2:
+                    let brush = 0.5 + 0.5 * sin((u * 1.4 + v * 0.34 + broad * 0.34) * 64)
+                    alpha = smoothstep(0.28, 0.65, broad * 0.72 + mid * 0.28) * (0.38 + brush * 0.62)
+                    color = SIMD3(0.055 + fine * 0.025, 0.06 + fine * 0.025, 0.058 + fine * 0.024)
+                case 3:
+                    let center = 0.5 + 0.075 * sin(u * 12 + broad * 2)
+                    let filament = exp(-pow((v - center) * 5, 2))
+                    alpha = filament * (0.60 + mid * 0.35)
+                    color = SIMD3(0.48 + fine * 0.10, 0.84 + fine * 0.08, 0.81 + fine * 0.08)
+                default:
+                    alpha = inBirdShape(u, v) ? 1 : 0
+                    color = SIMD3(0.055, 0.065, 0.064)
+                }
+                if index < 4 {
+                    let dx = (u - 0.5) * 2
+                    let dy = (v - 0.5) * 2
+                    let radius = sqrt(dx * dx + dy * dy)
+                    let angle = atan2(dy, dx)
+                    let boundary = 0.69 + broad * 0.24 + mid * 0.12
+                        + 0.045 * sin(angle * 3 + 0.55 * sin(angle * 5 + broad * 4))
+                    alpha *= 1 - smoothstep(boundary - 0.12, boundary + 0.025, radius)
+                }
+                let a = min(1, max(0, alpha))
+                let offset = (y * side + x) * 4
+                pixels[offset] = UInt8((color.x * a * 255).rounded())
+                pixels[offset + 1] = UInt8((color.y * a * 255).rounded())
+                pixels[offset + 2] = UInt8((color.z * a * 255).rounded())
+                pixels[offset + 3] = UInt8((a * 255).rounded())
+            }
+        }
+        return makeRGBAImage(width: side, height: side, pixels: pixels)!
+    }
+
+    private static func inBirdShape(_ x: Double, _ y: Double) -> Bool {
+        let leftWing = [(0.50, 0.50), (0.43, 0.57), (0.17, 0.77), (0.29, 0.53), (0.44, 0.42)]
+        let rightWing = leftWing.map { (1 - $0.0, $0.1) }
+        func inside(_ polygon: [(Double, Double)]) -> Bool {
+            var value = false
+            var previous = polygon.count - 1
+            for current in polygon.indices {
+                let a = polygon[current], b = polygon[previous]
+                if (a.1 > y) != (b.1 > y), x < (b.0 - a.0) * (y - a.1) / (b.1 - a.1) + a.0 { value.toggle() }
+                previous = current
+            }
+            return value
+        }
+        let body = (x - 0.5) * (x - 0.5) / 0.0005 + (y - 0.47) * (y - 0.47) / 0.012 < 1
+        return body || inside(leftWing) || inside(rightWing)
+    }
+
+    private static func fractalNoise(_ x: Double, _ y: Double, seed: UInt32) -> Double {
+        var amplitude = 0.5
+        var frequency = 1.0
+        var total = 0.0
+        var normalization = 0.0
+        for octave in 0..<4 {
+            total += valueNoise(x * frequency, y * frequency, seed: seed &+ UInt32(octave * 71)) * amplitude
+            normalization += amplitude
+            amplitude *= 0.5
+            frequency *= 2
+        }
+        return total / normalization
+    }
+
+    private static func valueNoise(_ x: Double, _ y: Double, seed: UInt32) -> Double {
+        let x0 = Int(floor(x)), y0 = Int(floor(y))
+        let fx = x - floor(x), fy = y - floor(y)
+        let sx = fx * fx * (3 - 2 * fx), sy = fy * fy * (3 - 2 * fy)
+        let a = lattice(x0, y0, seed), b = lattice(x0 + 1, y0, seed)
+        let c = lattice(x0, y0 + 1, seed), d = lattice(x0 + 1, y0 + 1, seed)
+        let lower = a + (b - a) * sx
+        let upper = c + (d - c) * sx
+        return lower + (upper - lower) * sy
+    }
+
+    private static func lattice(_ x: Int, _ y: Int, _ seed: UInt32) -> Double {
+        var value = UInt32(truncatingIfNeeded: x) &* 0x8da6b343
+        value ^= UInt32(truncatingIfNeeded: y) &* 0xd8163841
+        value ^= seed &* 0xcb1ab31f
+        value ^= value >> 13
+        value &*= 0x85ebca6b
+        value ^= value >> 16
+        value &*= 0xc2b2ae35
+        value ^= value >> 16
+        return Double(value) / Double(UInt32.max)
+    }
+
+    private static func makeRGBAImage(width: Int, height: Int, pixels: [UInt8]) -> CGImage? {
+        guard let provider = CGDataProvider(data: Data(pixels) as CFData) else { return nil }
+        return CGImage(width: width, height: height, bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: width * 4,
+            space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue),
+            provider: provider, decode: nil, shouldInterpolate: true, intent: .defaultIntent)
+    }
+
+    private static func drawMotion(scene: String, time: Double, frame: CGRect, in c: CGContext) {
+        let sprites = motionSprites(scene: scene, time: time)
+        guard !sprites.isEmpty else { return }
+        let mask = motionClipMasks[scene]
+        let masked = sprites.filter { $0.style.w > 0.5 }
+        let unmasked = sprites.filter { $0.style.w <= 0.5 }
+        if !masked.isEmpty, let mask {
+            c.saveGState()
+            c.clip(to: CGRect(x: 0, y: 0, width: 1, height: 1))
+            c.clip(to: frame, mask: mask)
+            drawSprites(masked, frame: frame, in: c)
             c.restoreGState()
-            c.addPath(path)
-            c.setLineWidth(0.0011)
-            c.setStrokeColor(pigment(1, 0.83, 0.59, 0.52))
-            c.strokePath()
+        }
+        drawSprites(unmasked, frame: frame, in: c)
+    }
+
+    private static func drawSprites(_ sprites: [SceneMotionSprite], frame: CGRect, in c: CGContext) {
+        for sprite in sprites {
+            let texture = Int(sprite.style.z.rounded())
+            guard motionImages.indices.contains(texture) else { continue }
+            let x = CGFloat(sprite.rect.x), y = CGFloat(sprite.rect.y)
+            let width = CGFloat(sprite.rect.z), height = CGFloat(sprite.rect.w)
+            c.saveGState()
+            c.translateBy(x: frame.minX + x * frame.width, y: frame.minY + y * frame.height)
+            c.scaleBy(x: frame.width, y: frame.height)
+            c.rotate(by: CGFloat(sprite.style.x))
+            c.setAlpha(CGFloat(sprite.style.y))
+            c.interpolationQuality = .high
+            c.draw(motionImages[texture], in: CGRect(x: -width / 2, y: -height / 2, width: width, height: height))
+            c.restoreGState()
         }
     }
 
-    static func contour(_ c: CGContext, _ t: Double) {
-        linear(c, colors: [pigment(0.015, 0.055, 0.065), pigment(0.035, 0.13, 0.14)], from: .zero, to: CGPoint(x: 1, y: 1))
-        glow(c, x: 0.63, y: 0.51, rx: 0.65, ry: 0.9, color: pigment(0.05, 0.30, 0.27, 0.25))
-        for ring in 0..<74 {
-            let level = 0.045 + Double(ring) * 0.018
-            let path = CGMutablePath()
-            for step in 0...360 {
-                let a = Double(step) / 360 * .pi * 2
-                let radius = level * (1 + 0.12 * sin(a * 3 + level * 5 + t * 0.06)
-                    + 0.065 * cos(a * 5 - level * 4 - t * 0.04))
-                let p = CGPoint(x: 0.63 + cos(a) * radius / 1.6, y: 0.51 + sin(a) * radius)
-                if step == 0 { path.move(to: p) } else { path.addLine(to: p) }
-            }
-            path.closeSubpath()
-            c.addPath(path)
-            let major = ring % 5 == 0
-            c.setLineWidth(major ? 0.00105 : 0.00065)
-            c.setStrokeColor(major ? pigment(0.76, 0.70, 0.42, 0.62) : pigment(0.27, 0.65, 0.58, 0.42))
-            c.strokePath()
+    static func artwork(scene: String, time t: Double, in c: CGContext, size: CGSize) {
+        guard let image = artworkImage(scene: scene) else {
+            c.setFillColor(rgb(0.025, 0.045, 0.055))
+            c.fill(CGRect(x: 0, y: 0, width: 1, height: 1))
+            return
         }
-    }
-
-    static func opticalWarp(_ y: Double, _ t: Double) -> Double {
-        0.19 * sin(y * 4.8 + t * 0.075) + 0.055 * sin(y * 10.5 - t * 0.045)
-    }
-
-    static func opal(_ c: CGContext, _ t: Double) {
-        c.setFillColor(pigment(0.075, 0.085, 0.10))
-        c.fill(CGRect(x: 0, y: 0, width: 1, height: 1))
-        let stripes = CGMutablePath()
-        for stripe in -20..<94 {
-            let x = Double(stripe) / 72
-            stripes.move(to: CGPoint(x: x - opticalWarp(0, t), y: 0))
-            for step in 0...220 {
-                let y = Double(step) / 220
-                stripes.addLine(to: CGPoint(x: x - opticalWarp(y, t), y: y))
-            }
-            for step in stride(from: 220, through: 0, by: -1) {
-                let y = Double(step) / 220
-                stripes.addLine(to: CGPoint(x: x + 0.006 - opticalWarp(y, t), y: y))
-            }
-            stripes.closeSubpath()
-        }
-        c.saveGState()
-        c.addPath(stripes)
-        c.clip()
-        linear(c, colors: [pigment(0.53, 0.58, 0.62), pigment(0.94, 0.925, 0.87), pigment(0.74, 0.76, 0.74)],
-               from: .zero, to: CGPoint(x: 1, y: 1))
-        c.restoreGState()
+        let frame = artworkFrame(time: t, size: size, image: image)
+        c.interpolationQuality = .high
+        c.draw(image, in: frame)
+        drawMotion(scene: scene, time: t, frame: frame, in: c)
     }
 
     static func aurora(_ c: CGContext, _ t: Double) {

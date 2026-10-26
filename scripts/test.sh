@@ -4,7 +4,8 @@ cd "${0:A:h:h}"
 python3 Tests/Scripts/SmokeTests.py
 python3 Tests/Scripts/SystemTestLockTests.py
 python3 Tests/Scripts/ReleaseTests.py
-mkdir -p build/tests
+mkdir -p build/tests/SceneAssets
+cp -R Sources/Flua/SceneAssets/. build/tests/SceneAssets/
 swiftc Sources/Flua/Model.swift Sources/Flua/LibraryPaths.swift Tests/FluaTests/ModelTests.swift -o build/tests/model-tests
 build/tests/model-tests
 swiftc -target arm64-apple-macosx27.0 \

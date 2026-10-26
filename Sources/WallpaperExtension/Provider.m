@@ -1557,7 +1557,7 @@ int main(int argc,const char **argv) { @autoreleasepool {
     creation[@"activityState"]=@{@"active":@{}};
     NSMutableDictionary *scenePlayback=[@{@"version":@1,@"kind":@"aurora",@"fit":@"fill",@"speed":@2,@"dimming":@0,@"modes":@{@"desktop":@"still",@"lockScreen":@"animated"}} mutableCopy];
     NSMutableArray *sceneSums=NSMutableArray.new;
-    BOOL scenesDrawn=YES;
+    BOOL scenesDrawn=YES, artworkAnimated=YES;
     for (NSString *scene in @[@"aurora",@"cosmos",@"ocean",@"ember",@"ink",@"dunes",@"contour",@"opal"]) {
         scenePlayback[@"kind"]=scene;
         creation[@"configuration"]=[[NSJSONSerialization dataWithJSONObject:scenePlayback options:0 error:nil] base64EncodedStringWithOptions:0];
@@ -1572,6 +1572,20 @@ int main(int argc,const char **argv) { @autoreleasepool {
         if (!sceneAcquired || !opaque || !colored || sceneSession.renderer.scopedFileCount!=0 || !sceneSession.renderer.holdsStill) scenesDrawn=NO;
         if (sceneSnap[@"checksum"]) [sceneSums addObject:sceneSnap[@"checksum"]];
         [provider invalidateWithId:ident reply:^(NSError *error){}];
+        if ([@[@"ink",@"dunes",@"contour",@"opal"] containsObject:scene]) {
+            scenePlayback[@"modes"]=@{@"desktop":@"animated",@"lockScreen":@"still"};
+            creation[@"configuration"]=[[NSJSONSerialization dataWithJSONObject:scenePlayback options:0 error:nil] base64EncodedStringWithOptions:0];
+            [provider acquireWithId:ident request:FSCreateRequest(creation,@[]) reply:^(id remote,NSError *error){}];
+            FSSession *movingArtwork=provider.sessions.allValues.firstObject;
+            __block NSDictionary *firstArtwork=nil, *nextArtwork=nil;
+            [provider snapshotWithId:ident reply:^(id snapshot,NSError *error){firstArtwork=FSInspectSnapshot(snapshot);}];
+            FSPump(0.25);
+            [provider snapshotWithId:ident reply:^(id snapshot,NSError *error){nextArtwork=FSInspectSnapshot(snapshot);}];
+            artworkAnimated=artworkAnimated && movingArtwork.renderer.frameCount>1 && !movingArtwork.renderer.holdsStill
+                && firstArtwork[@"checksum"] && nextArtwork[@"checksum"] && ![firstArtwork[@"checksum"] isEqual:nextArtwork[@"checksum"]];
+            [provider invalidateWithId:ident reply:^(NSError *error){}];
+            scenePlayback[@"modes"]=@{@"desktop":@"still",@"lockScreen":@"animated"};
+        }
     }
     BOOL distinctScenes=sceneSums.count==8 && [NSSet setWithArray:sceneSums].count==8;
     creation[@"destination"][@"size"]=@[@3840,@2160];
@@ -1647,8 +1661,8 @@ int main(int argc,const char **argv) { @autoreleasepool {
     FSPump(0.3);
     BOOL sceneDesktopResumed=!playing.renderer.holdsStill && playing.renderer.playbackRate>1 && playing.renderer.frameCount>lockFrames;
     [provider invalidateWithId:ident reply:^(NSError *error){}];
-    BOOL sceneOK=scenesDrawn && distinctScenes && sceneFullFrame && sceneDimmed && sceneMotion && sceneSuspended && sceneResumed && sceneLockStill && sceneIdleStill && sceneIdleResumeStill && sceneDesktopResumed;
-    results[@"scene"]=@{@"ok":@(sceneOK),@"drawn":@(scenesDrawn),@"distinct":@(distinctScenes),@"fullFrame":@(sceneFullFrame),@"dimmed":@(sceneDimmed),@"motion":@(sceneMotion),@"suspended":@(sceneSuspended),@"resumed":@(sceneResumed),@"lockStill":@(sceneLockStill),@"idleStill":@(sceneIdleStill),@"idleResumeStill":@(sceneIdleResumeStill),@"desktopResumed":@(sceneDesktopResumed),@"frames":@(playing.renderer.frameCount)};
+    BOOL sceneOK=scenesDrawn && artworkAnimated && distinctScenes && sceneFullFrame && sceneDimmed && sceneMotion && sceneSuspended && sceneResumed && sceneLockStill && sceneIdleStill && sceneIdleResumeStill && sceneDesktopResumed;
+    results[@"scene"]=@{@"ok":@(sceneOK),@"artworkMotion":@(artworkAnimated),@"drawn":@(scenesDrawn),@"distinct":@(distinctScenes),@"fullFrame":@(sceneFullFrame),@"dimmed":@(sceneDimmed),@"motion":@(sceneMotion),@"suspended":@(sceneSuspended),@"resumed":@(sceneResumed),@"lockStill":@(sceneLockStill),@"idleStill":@(sceneIdleStill),@"idleResumeStill":@(sceneIdleResumeStill),@"desktopResumed":@(sceneDesktopResumed),@"frames":@(playing.renderer.frameCount)};
     NSURL *catalogRoot=[dir URLByAppendingPathComponent:@"library" isDirectory:YES];
     [[NSFileManager defaultManager] createDirectoryAtURL:[catalogRoot URLByAppendingPathComponent:@"Media"] withIntermediateDirectories:YES attributes:nil error:nil];
     NSURL *catalogFile=[catalogRoot URLByAppendingPathComponent:@"catalog.json"];
