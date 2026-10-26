@@ -567,6 +567,8 @@ enum SmokeRunner {
             let fullScreenNone = window?.collectionBehavior.contains(.fullScreenNone) == true
             let fullScreenEligible = fullScreenPrimary && !fullScreenNone
             let controlsVisible = visible && window.map(windowControlsVisible) == true
+            let windowFrame = window.map { [$0.frame.minX, $0.frame.minY, $0.frame.width, $0.frame.height] }
+            let visibleFrame = window?.screen.map { [$0.visibleFrame.minX, $0.visibleFrame.minY, $0.visibleFrame.width, $0.visibleFrame.height] }
             var passed = visible == library.state.showWindowOnStartup
                 && (!visible || (fullScreenEligible && controlsVisible))
             var report: [String: Any] = [
@@ -578,7 +580,10 @@ enum SmokeRunner {
                 "fullScreenPrimary": fullScreenPrimary,
                 "fullScreenNone": fullScreenNone,
                 "fullScreenEligible": fullScreenEligible,
-                "windowControlsVisible": controlsVisible
+                "windowControlsVisible": controlsVisible,
+                "windowFrame": windowFrame as Any? ?? NSNull(),
+                "screenVisibleFrame": visibleFrame as Any? ?? NSNull(),
+                "isNativeFullScreen": window?.styleMask.contains(.fullScreen) == true
             ]
             if args.contains("--fullscreen-chrome"), let window, visible {
                 // This opt-in check changes Spaces; ordinary smoke stays in the background.

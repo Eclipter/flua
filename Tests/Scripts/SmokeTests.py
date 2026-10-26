@@ -93,6 +93,8 @@ if '--startup-smoke' in sys.argv:
         'hidesDockIcon': hidden, 'activationPolicy': 1 if hidden else 0,
         'fullScreenPrimary': shown, 'fullScreenNone': False,
         'fullScreenEligible': shown, 'windowControlsVisible': shown,
+        'windowFrame': [10, 20, 1440, 900], 'screenVisibleFrame': [10, 20, 1440, 900],
+        'isNativeFullScreen': False,
     }))
 PYTHON
 chmod +x "$FLUA_APP_PATH/Contents/MacOS/Flua"

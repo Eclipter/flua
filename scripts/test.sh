@@ -13,6 +13,8 @@ swiftc -O \
     Tests/FluaTests/CatalogPublicationTests.swift \
     -o build/tests/catalog-publication-tests
 build/tests/catalog-publication-tests
+swiftc Sources/Flua/LibraryWindowLaunchPolicy.swift Tests/FluaTests/LibraryWindowLaunchPolicyTests.swift -o build/tests/library-window-launch-policy-tests
+build/tests/library-window-launch-policy-tests
 swiftc -target arm64-apple-macosx27.0 Sources/Flua/ImageThumbnail.swift Tests/FluaTests/ImageThumbnailTests.swift -o build/tests/image-thumbnail-tests
 build/tests/image-thumbnail-tests
 swiftc -parse-as-library -target arm64-apple-macosx27.0 Sources/Flua/Model.swift Sources/Flua/LibraryPaths.swift Sources/Flua/Engine.swift Sources/Flua/NativeWallpaperStore.swift Sources/Flua/NativeWallpaper.swift Sources/Flua/ImageThumbnail.swift Sources/Flua/MediaFacts.swift Sources/Flua/SceneView.swift Sources/Flua/ScenePreviewRenderer.swift Sources/Flua/SceneDrawing.swift Sources/Flua/ScenePackage.swift Sources/Flua/Library.swift Tests/FluaTests/ClearFiltersSortTests.swift -o build/tests/clear-filters-sort-tests

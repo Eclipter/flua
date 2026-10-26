@@ -460,6 +460,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
     @Environment(\.openWindow) private var openWindow
     @StateObject var library = AppContext.library
+
+    init() {
+        guard !LibraryWindowLaunchPolicy.isVerificationLaunch(arguments: ProcessInfo.processInfo.arguments) else { return }
+        LibraryWindowLaunchPolicy.current.prepareInitialPlacement {
+            NSWindow.removeFrame(usingName: "library")
+        }
+    }
+
     var body: some Scene {
         let _ = appDelegate.openLibrary = {
             openWindow(id: "library")
@@ -472,9 +480,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 .windowToolbarFullScreenVisibility(.visible)
                 .frame(minWidth: 700, minHeight: 440)
                 .windowFullScreenBehavior(ProcessInfo.processInfo.arguments.contains("--smoke-test") || ProcessInfo.processInfo.arguments.contains("--preview-smoke") ? .disabled : .enabled)
+                .onAppear {
+                    if !LibraryWindowLaunchPolicy.isVerificationLaunch(arguments: ProcessInfo.processInfo.arguments) {
+                        LibraryWindowLaunchPolicy.current.markLibraryWindowPresented()
+                    }
+                }
         }
         .defaultSize(width: 1320, height: 840)
-        .restorationBehavior(ProcessInfo.processInfo.arguments.contains("--fullscreen-chrome") ? .disabled : .automatic)
+        .defaultWindowPlacement { _, context in
+            let visibleRect = context.defaultDisplay.visibleRect
+            return WindowPlacement(visibleRect.origin, size: visibleRect.size)
+        }
+        .restorationBehavior(LibraryWindowLaunchPolicy.isVerificationLaunch(arguments: ProcessInfo.processInfo.arguments) ? .disabled : .automatic)
         // Smoke tests exercise explicit launch handling; background startup leaves the window closed.
         .defaultLaunchBehavior(ProcessInfo.processInfo.arguments.contains("--smoke-test") || ProcessInfo.processInfo.arguments.contains("--preview-smoke") || !library.state.showWindowOnStartup ? .suppressed : .presented)
         .windowToolbarStyle(.unified)

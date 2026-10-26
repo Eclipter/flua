@@ -83,6 +83,11 @@ for shown in (False, True):
     assert result['fullScreenEligible'] is shown, result
     assert result['windowControlsVisible'] is shown, result
     assert result['activationPolicy'] == 0, result
+    if shown:
+        frame, visible_frame = result['windowFrame'], result['screenVisibleFrame']
+        assert len(frame) == len(visible_frame) == 4, result
+        assert all(abs(actual - expected) <= 1 for actual, expected in zip(frame, visible_frame)), result
+        assert result['isNativeFullScreen'] is False, result
 print('PASS: normal startup honors both startup window settings')
 PYTHON
 accessory_dir="$run_dir/startup-hide-from-dock"
@@ -105,5 +110,9 @@ result = json.load(open(sys.argv[1]))
 assert result['passed'] is True and result['windowVisible'] is True, result
 assert result['hidesDockIcon'] is True and result['activationPolicy'] == 1, result
 assert result['fullScreenEligible'] is True and result['windowControlsVisible'] is True, result
+frame, visible_frame = result['windowFrame'], result['screenVisibleFrame']
+assert len(frame) == len(visible_frame) == 4, result
+assert all(abs(actual - expected) <= 1 for actual, expected in zip(frame, visible_frame)), result
+assert result['isNativeFullScreen'] is False, result
 print('PASS: Hide from Dock preserves fullscreen eligibility')
 PYTHON
