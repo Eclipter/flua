@@ -41,7 +41,7 @@
 @property BOOL reportedPlaybackFailure;
 @end
 BOOL FSIsSceneKind(NSString *kind) {
-    return [kind isEqual:@"aurora"] || [kind isEqual:@"cosmos"] || [kind isEqual:@"ocean"] || [kind isEqual:@"ember"];
+    return [@[@"aurora", @"cosmos", @"ocean", @"ember", @"ink", @"dunes", @"contour", @"opal"] containsObject:kind];
 }
 static double FSClamped(id value, double fallback, double lo, double hi) {
     if (![value isKindOfClass:NSNumber.class]) return fallback;

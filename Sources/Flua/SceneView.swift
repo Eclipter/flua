@@ -6,7 +6,11 @@ final class AmbientSceneView: NSView {
         ("aurora", "Northern Lights", "Silk ribbons above a quiet alpine lake"),
         ("cosmos", "Deep Space", "A drifting nebula and a distant dark planet"),
         ("ocean", "Midnight Tide", "Luminous waves beneath a soft moon"),
-        ("ember", "Ember Glow", "Warm currents and slowly rising sparks")
+        ("ember", "Ember Glow", "Warm currents and slowly rising sparks"),
+        ("ink", "Ink Mountains", "Warm rice paper and distant sumi-e peaks"),
+        ("dunes", "Sahara", "Terracotta light over sculpted desert dunes"),
+        ("contour", "Contour Atlas", "Fine jade lines across a dark topographic field"),
+        ("opal", "Optical Current", "Monochrome stripes flowing in quiet motion")
     ]
 
     let scene: String

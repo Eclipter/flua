@@ -1066,7 +1066,7 @@ struct SurfacePreview: NSViewRepresentable {
     }
     private func immediateStillImage() -> NSImage? {
         if wallpaper.kind == "image", let url { return NSImage(contentsOf: url) }
-        guard ["aurora", "cosmos", "ocean", "ember"].contains(wallpaper.kind) else { return nil }
+        guard builtInSceneKinds.contains(wallpaper.kind) else { return nil }
         let width = 640, height = 400
         guard let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: width, pixelsHigh: height,
             bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,

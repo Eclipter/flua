@@ -52,7 +52,7 @@ private final class ScenePreviewWorker: @unchecked Sendable {
 
     @MainActor init(resources: ScenePreviewResources, scene: String) {
         self.resources = resources
-        kind = UInt32(["aurora", "cosmos", "ocean", "ember"].firstIndex(of: scene) ?? 0)
+        kind = UInt32(["aurora", "cosmos", "ocean", "ember", "ink", "dunes", "contour", "opal"].firstIndex(of: scene) ?? 0)
         layer.device = resources.device
         layer.pixelFormat = .bgra8Unorm
         layer.framebufferOnly = true

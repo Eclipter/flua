@@ -91,7 +91,7 @@ final class MediaSurface: NSView {
             }
         } else if wallpaper.kind == "image", let url, let image = NSImage(contentsOf: url) {
             addImage(image, fit: wallpaper.fit)
-        } else if ["aurora", "cosmos", "ocean", "ember"].contains(wallpaper.kind) {
+        } else if builtInSceneKinds.contains(wallpaper.kind) {
             let scene = AmbientSceneView(frame: bounds, scene: wallpaper.kind)
             scene.autoresizingMask = [.width, .height]
             scene.speed = wallpaper.speed

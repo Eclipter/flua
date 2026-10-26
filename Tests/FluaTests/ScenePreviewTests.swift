@@ -41,7 +41,7 @@ import Metal
             texture.getBytes(&pixels, bytesPerRow: size * 4, from: MTLRegionMake2D(0, 0, size, height), mipmapLevel: 0)
             return pixels
         }
-        for (kind, scene) in ["aurora", "cosmos", "ocean", "ember"].enumerated() {
+        for (kind, scene) in ["aurora", "cosmos", "ocean", "ember", "ink", "dunes", "contour", "opal"].enumerated() {
             let pixels = try render(kind: kind)
             let context = CGContext(data: nil, width: size, height: height, bitsPerComponent: 8, bytesPerRow: size * 4,
                 space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!

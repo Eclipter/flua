@@ -15,6 +15,10 @@ enum SceneDrawing {
         case "cosmos": cosmos(c, time)
         case "ocean": ocean(c, time)
         case "ember": ember(c, time)
+        case "ink": ink(c, time)
+        case "dunes": dunes(c, time)
+        case "contour": contour(c, time)
+        case "opal": opal(c, time)
         default: aurora(c, time)
         }
         let shade = dimming.isFinite ? CGFloat(min(max(dimming, 0), 0.9)) : 0.12
@@ -53,6 +57,168 @@ enum SceneDrawing {
             c.setFillColor(rgb(0.8, 0.9, 1, alpha))
             c.fillEllipse(in: CGRect(x: x, y: y, width: radius, height: radius * 1.7))
         }
+    }
+
+    static func pigment(_ r: CGFloat, _ g: CGFloat, _ b: CGFloat, _ a: CGFloat = 1) -> CGColor {
+        // Use the shader's RGB space so the newer palettes match across both renderers.
+        CGColor(colorSpace: CGColorSpaceCreateDeviceRGB(), components: [r, g, b, a])!
+    }
+
+    private static let paperGrain: CGImage = {
+        var pixels = [UInt8](repeating: 0, count: 1024 * 1024 * 4)
+        for y in 0..<1024 {
+            for x in 0..<1024 {
+                var seed = UInt32(x) &* 374761393 &+ UInt32(y) &* 668265263
+                seed = (seed ^ (seed >> 13)) &* 1274126177
+                pixels[(y * 1024 + x) * 4 + 3] = UInt8((seed ^ (seed >> 16)) % 20)
+            }
+        }
+        let data = CFDataCreate(nil, pixels, pixels.count)!
+        return CGImage(width: 1024, height: 1024, bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: 4096,
+                       space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue),
+                       provider: CGDataProvider(data: data)!, decode: nil, shouldInterpolate: false, intent: .defaultIntent)!
+    }()
+
+    static func inkHeight(_ x: Double, _ ridge: Int) -> Double {
+        let r = Double(ridge)
+        let peak = exp(-pow((x - (0.12 + r * 0.16)) / 0.24, 2))
+        return 0.46 - r * 0.075 + peak * 0.29 + 0.045 * sin(x * 13 + r * 2.1)
+            + 0.018 * sin(x * 34 + r) + 0.012 * sin(x * 83 + r * 3)
+            + 0.005 * sin(x * 181 + r * 7)
+    }
+
+    static func ink(_ c: CGContext, _ t: Double) {
+        linear(c, colors: [pigment(0.90, 0.88, 0.82), pigment(0.97, 0.955, 0.91)], from: .zero, to: CGPoint(x: 0, y: 1))
+        c.setFillColor(pigment(0.67, 0.25, 0.18, 0.80))
+        c.fillEllipse(in: CGRect(x: 0.735, y: 0.735, width: 0.057, height: 0.096))
+        for ridge in 0..<6 {
+            let path = CGMutablePath()
+            path.move(to: CGPoint(x: -0.01, y: -0.01))
+            for step in 0...400 {
+                let x = Double(step) / 400
+                path.addLine(to: CGPoint(x: x, y: inkHeight(x, ridge)))
+            }
+            path.addLine(to: CGPoint(x: 1.01, y: -0.01))
+            path.closeSubpath()
+            let r = CGFloat(ridge)
+            c.saveGState()
+            c.addPath(path)
+            c.clip()
+            linear(c, colors: [pigment(0.87 - r * 0.065, 0.86 - r * 0.067, 0.81 - r * 0.062),
+                               pigment(0.66 - r * 0.10, 0.69 - r * 0.10, 0.66 - r * 0.093)],
+                   from: CGPoint(x: 0, y: -0.10), to: CGPoint(x: 0, y: 0.65 - Double(ridge) * 0.055))
+            c.restoreGState()
+            let mistY = 0.37 - r * 0.068
+            let drift = CGFloat(sin(t * 0.065 + Double(ridge))) * 0.13
+            glow(c, x: 0.30 + drift, y: mistY, rx: 0.62, ry: 0.10, color: pigment(0.96, 0.95, 0.90, 0.32))
+            glow(c, x: 0.85 - drift, y: mistY + 0.015, rx: 0.45, ry: 0.075, color: pigment(0.96, 0.95, 0.90, 0.26))
+        }
+        c.interpolationQuality = .none
+        c.draw(paperGrain, in: CGRect(x: 0, y: 0, width: 1, height: 1))
+    }
+
+    static func duneHeight(_ x: Double, _ layer: Int, _ t: Double) -> Double {
+        let l = Double(layer)
+        return 0.55 - l * 0.125 + 0.14 * sin(x * 3.6 + l * 1.15)
+            + 0.045 * sin(x * 7.3 - l * 0.8) + 0.006 * sin(t * 0.08 + l)
+    }
+
+    static func dunes(_ c: CGContext, _ t: Double) {
+        linear(c, colors: [pigment(0.91, 0.66, 0.46), pigment(0.96, 0.86, 0.69)], from: .zero, to: CGPoint(x: 0, y: 1))
+        glow(c, x: 0.72, y: 0.80, rx: 0.23, ry: 0.38, color: pigment(1, 0.94, 0.79, 0.25))
+        c.setFillColor(pigment(1, 0.93, 0.77, 0.78))
+        c.fillEllipse(in: CGRect(x: 0.684, y: 0.738, width: 0.072, height: 0.122))
+        for layer in 0..<5 {
+            let path = CGMutablePath()
+            for step in 0...240 {
+                let x = Double(step) / 240
+                let point = CGPoint(x: x, y: duneHeight(x, layer, t))
+                if step == 0 { path.move(to: point) } else { path.addLine(to: point) }
+            }
+            let surface = CGMutablePath()
+            surface.addPath(path)
+            surface.addLine(to: CGPoint(x: 1, y: -0.2))
+            surface.addLine(to: CGPoint(x: 0, y: -0.2))
+            surface.closeSubpath()
+            let l = CGFloat(layer)
+            c.saveGState()
+            c.addPath(surface)
+            c.clip()
+            linear(c, colors: [pigment(0.39 + l * 0.025, 0.16 + l * 0.008, 0.115),
+                               pigment(0.88 - l * 0.047, 0.59 - l * 0.055, 0.36 - l * 0.037)],
+                   from: CGPoint(x: 0.2, y: -0.18), to: CGPoint(x: 0.65, y: 0.63 - Double(layer) * 0.12))
+            for ripple in 1...22 {
+                let detail = CGMutablePath()
+                for step in 0...160 {
+                    let x = Double(step) / 160
+                    let depth = Double(ripple) * 0.008
+                    let y = duneHeight(x, layer, t) - depth * (1 + 0.18 * sin(x * 8 + Double(layer)))
+                        + 0.0015 * sin(x * 65 + Double(ripple) * 0.7 - t * 0.12)
+                    if step == 0 { detail.move(to: CGPoint(x: x, y: y)) }
+                    else { detail.addLine(to: CGPoint(x: x, y: y)) }
+                }
+                c.addPath(detail)
+                c.setLineWidth(0.00055)
+                c.setStrokeColor(pigment(1, 0.78, 0.51, 0.055))
+                c.strokePath()
+            }
+            c.restoreGState()
+            c.addPath(path)
+            c.setLineWidth(0.0011)
+            c.setStrokeColor(pigment(1, 0.83, 0.59, 0.52))
+            c.strokePath()
+        }
+    }
+
+    static func contour(_ c: CGContext, _ t: Double) {
+        linear(c, colors: [pigment(0.015, 0.055, 0.065), pigment(0.035, 0.13, 0.14)], from: .zero, to: CGPoint(x: 1, y: 1))
+        glow(c, x: 0.63, y: 0.51, rx: 0.65, ry: 0.9, color: pigment(0.05, 0.30, 0.27, 0.25))
+        for ring in 0..<74 {
+            let level = 0.045 + Double(ring) * 0.018
+            let path = CGMutablePath()
+            for step in 0...360 {
+                let a = Double(step) / 360 * .pi * 2
+                let radius = level * (1 + 0.12 * sin(a * 3 + level * 5 + t * 0.06)
+                    + 0.065 * cos(a * 5 - level * 4 - t * 0.04))
+                let p = CGPoint(x: 0.63 + cos(a) * radius / 1.6, y: 0.51 + sin(a) * radius)
+                if step == 0 { path.move(to: p) } else { path.addLine(to: p) }
+            }
+            path.closeSubpath()
+            c.addPath(path)
+            let major = ring % 5 == 0
+            c.setLineWidth(major ? 0.00105 : 0.00065)
+            c.setStrokeColor(major ? pigment(0.76, 0.70, 0.42, 0.62) : pigment(0.27, 0.65, 0.58, 0.42))
+            c.strokePath()
+        }
+    }
+
+    static func opticalWarp(_ y: Double, _ t: Double) -> Double {
+        0.19 * sin(y * 4.8 + t * 0.075) + 0.055 * sin(y * 10.5 - t * 0.045)
+    }
+
+    static func opal(_ c: CGContext, _ t: Double) {
+        c.setFillColor(pigment(0.075, 0.085, 0.10))
+        c.fill(CGRect(x: 0, y: 0, width: 1, height: 1))
+        let stripes = CGMutablePath()
+        for stripe in -20..<94 {
+            let x = Double(stripe) / 72
+            stripes.move(to: CGPoint(x: x - opticalWarp(0, t), y: 0))
+            for step in 0...220 {
+                let y = Double(step) / 220
+                stripes.addLine(to: CGPoint(x: x - opticalWarp(y, t), y: y))
+            }
+            for step in stride(from: 220, through: 0, by: -1) {
+                let y = Double(step) / 220
+                stripes.addLine(to: CGPoint(x: x + 0.006 - opticalWarp(y, t), y: y))
+            }
+            stripes.closeSubpath()
+        }
+        c.saveGState()
+        c.addPath(stripes)
+        c.clip()
+        linear(c, colors: [pigment(0.53, 0.58, 0.62), pigment(0.94, 0.925, 0.87), pigment(0.74, 0.76, 0.74)],
+               from: .zero, to: CGPoint(x: 1, y: 1))
+        c.restoreGState()
     }
 
     static func aurora(_ c: CGContext, _ t: Double) {
