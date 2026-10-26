@@ -20,6 +20,7 @@ final class AmbientSceneView: NSView {
         didSet { renderer?.updateDimming(dimming) }
     }
     var frameCount: Int { renderer?.frameCount ?? 0 }
+    func frameChecksum() async -> UInt64? { await renderer?.frameChecksum() }
     private(set) var previewError: String?
     private var renderer: ScenePreviewRenderer?
 
@@ -56,16 +57,16 @@ final class AmbientSceneView: NSView {
         if changed { updateDrawableSize() }
     }
     private func updateDrawableSize() {
-        // Keep animated scene shaders near the previous 480 x 300 pixel budget.
-        let scale = min(1, min(1280 / max(max(bounds.width, bounds.height), 1), sqrt(144_000 / max(bounds.width * bounds.height, 1))))
-        let size = CGSize(width: max(1, ceil(bounds.width * scale)), height: max(1, ceil(bounds.height * scale)))
-        renderer?.resize(frame: bounds, drawableSize: size)
+        let backingScale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 1
+        let size = SceneDrawing.previewPixelSize(scene: scene, size: bounds.size, backingScale: backingScale)
+        renderer?.resize(frame: bounds, drawableSize: size, backingScale: backingScale)
     }
 
     private var occlusionObserver: Any?
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
+        updateDrawableSize()
         if let occlusionObserver {
             NotificationCenter.default.removeObserver(occlusionObserver)
             self.occlusionObserver = nil
@@ -80,6 +81,10 @@ final class AmbientSceneView: NSView {
             }
         }
         updatePlayback()
+    }
+    override func viewDidChangeBackingProperties() {
+        super.viewDidChangeBackingProperties()
+        updateDrawableSize()
     }
     override func viewDidHide() {
         super.viewDidHide()

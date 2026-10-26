@@ -95,6 +95,16 @@ enum SceneDrawing {
         return CGRect(x: (1 - width) / 2, y: (1 - height) / 2, width: width, height: height)
     }
 
+    static func previewPixelSize(scene: String, size: CGSize, backingScale: CGFloat) -> CGSize {
+        let maximumEdge: CGFloat = artworkScenes.contains(scene) ? 2048 : 1280
+        let maximumPixels: CGFloat = artworkScenes.contains(scene) ? 2_073_600 : 144_000
+        let scale = backingScale.isFinite && backingScale > 0 ? backingScale : 1
+        let width = size.width.isFinite && size.width > 0 ? min(1_000_000, size.width) : 1
+        let height = size.height.isFinite && size.height > 0 ? min(1_000_000, size.height) : 1
+        let pixelScale = min(scale, min(maximumEdge / max(width, height), sqrt(maximumPixels / (width * height))))
+        return CGSize(width: max(1, floor(width * pixelScale)), height: max(1, floor(height * pixelScale)))
+    }
+
     private struct PineImage {
         let image: CGImage
         let root: SIMD2<Float>

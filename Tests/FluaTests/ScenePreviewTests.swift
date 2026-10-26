@@ -5,6 +5,25 @@ import MetalKit
 
 @main struct ScenePreviewTests {
     static func main() throws {
+        precondition(SceneDrawing.previewPixelSize(scene: "contour", size: CGSize(width: 220, height: 138), backingScale: 2)
+            == CGSize(width: 440, height: 276), "Artwork previews must render at Retina resolution")
+        precondition(SceneDrawing.previewPixelSize(scene: "contour", size: CGSize(width: 220, height: 138), backingScale: 1)
+            == CGSize(width: 220, height: 138), "Artwork previews must preserve 1x resolution")
+        for scene in ["contour", "aurora"] {
+            let size = SceneDrawing.previewPixelSize(scene: scene, size: CGSize(width: 10_000, height: 5_000), backingScale: 2)
+            precondition(abs(size.width / size.height - 2) < 0.01, "Preview limits must preserve the view aspect ratio")
+            let maximumEdge: CGFloat = scene == "contour" ? 2048 : 1280
+            let maximumPixels: CGFloat = scene == "contour" ? 2_073_600 : 144_000
+            precondition(size.width <= maximumEdge && size.height <= maximumEdge && size.width * size.height <= maximumPixels,
+                         "Preview dimensions must stay within the scene rendering budget: " + scene)
+        }
+        for invalidScale: CGFloat in [0, -1, .infinity, .nan] {
+            let size = SceneDrawing.previewPixelSize(scene: "contour", size: CGSize(width: 220, height: 138), backingScale: invalidScale)
+            precondition(size == CGSize(width: 220, height: 138), "Invalid backing scales must safely fall back to 1x")
+        }
+        let invalidSize = SceneDrawing.previewPixelSize(scene: "contour", size: CGSize(width: .nan, height: -.infinity), backingScale: 2)
+        precondition(invalidSize == CGSize(width: 2, height: 2), "Invalid preview dimensions must safely fall back to one point")
+
         let device = MTLCreateSystemDefaultDevice()!
         let library = try device.makeLibrary(source: String(contentsOfFile: "Sources/Flua/ScenePreview.metal", encoding: .utf8), options: nil)
         let descriptor = MTLRenderPipelineDescriptor()

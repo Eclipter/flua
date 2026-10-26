@@ -116,9 +116,36 @@ private final class ScenePreviewWorker: @unchecked Sendable {
         return submittedFrames
     }
 
-    @MainActor func resize(frame: CGRect, drawableSize: CGSize) {
+    func frameChecksum() async -> UInt64? {
+        await withCheckedContinuation { continuation in
+            renderQueue.async { [self] in
+                guard let texture = compositeTexture else { continuation.resume(returning: nil); return }
+                let rowBytes = (texture.width * 4 + 255) / 256 * 256
+                guard let buffer = resources.device.makeBuffer(length: rowBytes * texture.height, options: .storageModeShared),
+                      let command = resources.queue.makeCommandBuffer(), let blit = command.makeBlitCommandEncoder() else {
+                    continuation.resume(returning: nil); return
+                }
+                blit.copy(from: texture, sourceSlice: 0, sourceLevel: 0, sourceOrigin: MTLOrigin(x: 0, y: 0, z: 0),
+                    sourceSize: MTLSize(width: texture.width, height: texture.height, depth: 1), to: buffer,
+                    destinationOffset: 0, destinationBytesPerRow: rowBytes, destinationBytesPerImage: rowBytes * texture.height)
+                blit.endEncoding()
+                command.commit()
+                command.waitUntilCompleted()
+                guard command.status == .completed else { continuation.resume(returning: nil); return }
+                let pixels = buffer.contents().assumingMemoryBound(to: UInt8.self)
+                var hash: UInt64 = 14695981039346656037
+                for y in 0..<texture.height {
+                    for x in 0..<(texture.width * 4) { hash = (hash ^ UInt64(pixels[y * rowBytes + x])) &* 1099511628211 }
+                }
+                continuation.resume(returning: hash)
+            }
+        }
+    }
+
+    @MainActor func resize(frame: CGRect, drawableSize: CGSize, backingScale: CGFloat) {
         // Core Animation owns presentation synchronization; view geometry stays on the main actor.
         layer.frame = frame
+        layer.contentsScale = backingScale
         sizeLock.lock()
         pendingDrawableSize = drawableSize
         sizeLock.unlock()
@@ -258,8 +285,8 @@ final class ScenePreviewRenderer: NSObject {
         displayLink?.invalidate()
     }
 
-    func resize(frame: CGRect, drawableSize: CGSize) {
-        worker.resize(frame: frame, drawableSize: drawableSize)
+    func resize(frame: CGRect, drawableSize: CGSize, backingScale: CGFloat) {
+        worker.resize(frame: frame, drawableSize: drawableSize, backingScale: backingScale)
     }
 
     func setPaused(_ paused: Bool) {
@@ -268,6 +295,8 @@ final class ScenePreviewRenderer: NSObject {
         resetClockPending = true
         displayLink?.isPaused = paused
     }
+
+    func frameChecksum() async -> UInt64? { await worker.frameChecksum() }
 
     func updateSpeed(_ speed: Double) { self.speed = speed }
 

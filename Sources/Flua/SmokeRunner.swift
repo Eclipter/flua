@@ -359,6 +359,9 @@ enum SmokeRunner {
             let duration = CACurrentMediaTime() - start
             frameRates[kind] = Double(preview.frameCount - initialFrames) / duration
             cpuUsage[kind] = (processCPUTime() - cpuStart) / duration * 100
+            if args.contains("--preview-hold"), kind == AmbientSceneView.scenes.last?.id {
+                await pause(30)
+            }
             preview.isPaused = true
             window.close()
             await pause(0.1)
@@ -1066,9 +1069,14 @@ enum SmokeRunner {
                 results["render_" + kind] = surface.subviews.count > 0 || (surface.layer?.sublayers?.count ?? 0) > 0
                 if let scene = surface.subviews.compactMap({ $0 as? AmbientSceneView }).first {
                     let frames = scene.frameCount
+                    let firstPixels = await scene.frameChecksum()
                     await pause(0.2)
                     if scene.previewError != nil || scene.frameCount <= frames { failures.append("Animated preview: " + kind) }
                     if ["ink", "dunes", "contour", "opal"].contains(kind) {
+                        let laterPixels = await scene.frameChecksum()
+                        let moves = firstPixels != nil && laterPixels != nil && firstPixels != laterPixels
+                        results["scenePixelMotion_" + kind] = moves
+                        if !moves { failures.append("Rendered scene pixels must animate: " + kind) }
                         capture(testWindow, to: out.appendingPathComponent("Flua-scene-" + kind + ".png"))
                     }
                 }
