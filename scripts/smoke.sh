@@ -12,11 +12,15 @@ require_no_flua() {
 }
 require_no_flua
 mkdir -p build/verification
-run_dir=$(mktemp -d "$PWD/build/verification/run.XXXXXX")
-app="$PWD/build/Flua.app"
+# Keep app reads and its working directory outside privacy-protected project folders.
+run_dir=$(mktemp -d /private/tmp/flua-smoke.XXXXXX)
+ln -s "$run_dir" "$PWD/build/verification/${run_dir:t}"
+print "Smoke workspace: $run_dir"
+app="$run_dir/Flua.app"
 FLUA_APP_PATH="$app" \
     FLUA_CATALOG_PATH="$run_dir/library/catalog.json" \
     ./scripts/build.sh
+cd "$run_dir"
 mkdir -p "$run_dir/results"
 bound_library="$run_dir/library"
 mkdir -p "$bound_library"

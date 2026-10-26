@@ -68,6 +68,10 @@ with tempfile.TemporaryDirectory(prefix='flua-smoke-tests-') as temporary:
     subprocess.run(['git', 'init', '-b', 'test/nested'], cwd=root, check=True, capture_output=True)
     subprocess.run(['git', '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid',
                     'commit', '--allow-empty', '-m', 'fixture'], cwd=root, check=True, capture_output=True)
+    standard_app = root / 'build/Flua.app'
+    standard_app.mkdir(parents=True)
+    standard_sentinel = standard_app / 'must-remain-untouched'
+    standard_sentinel.write_text('preserve')
     build = root / 'scripts/build.sh'
     build.write_text('''#!/bin/zsh
 set -eu
@@ -77,8 +81,11 @@ print -r -- "$FLUA_CATALOG_PATH" >> catalogs.txt
 cat > "$FLUA_APP_PATH/Contents/MacOS/Flua" <<'PYTHON'
 #!/usr/bin/env python3
 import json
+import os
 from pathlib import Path
 import sys
+with open(os.environ['FLUA_TEST_LAUNCH_LOG'], 'a') as launches:
+    launches.write(json.dumps({'app': str(Path(sys.argv[0]).parents[2]), 'cwd': os.getcwd(), 'kind': 'binary'}) + '\\n')
 if '--accessibility-audit' in sys.argv and '--data-dir' not in sys.argv:
     print('Smoke verification requires an isolated --data-dir.', file=sys.stderr)
     sys.exit(1)
@@ -104,34 +111,70 @@ chmod +x "$FLUA_APP_PATH/Contents/MacOS/Flua"
     fake_bin.mkdir()
     temporary = root / 'tmp'
     temporary.mkdir()
+    launch_log = root / 'launches.jsonl'
+    catalog_log = root / 'catalogs.txt'
     opener = fake_bin / 'open'
     opener.write_text('''#!/bin/zsh
 set -eu
 [[ "$1" == -g && "$2" == -W && "$4" == --args ]]
 [[ "$5" == --data-dir && "$7" == --smoke-test ]]
-[[ "$(cat catalogs.txt | tail -1)" == "$6/catalog.json" ]]
+[[ "$(tail -1 "$FLUA_TEST_CATALOG_LOG")" == "$6/catalog.json" ]]
 [[ -x "$3/Contents/MacOS/Flua" ]]
+python3 - "$3" <<'PYTHON'
+import json, os, sys
+with open(os.environ['FLUA_TEST_LAUNCH_LOG'], 'a') as launches:
+    launches.write(json.dumps({'app': sys.argv[1], 'cwd': os.getcwd(), 'kind': 'open'}) + '\\n')
+PYTHON
 mkdir -p "$8" "$6"
 print '{"nativePlayback":{}}' > "$6/library.json"
 print '{"passed":true,"failures":[]}' > "$8/smoke-results.json"
 ''')
     opener.chmod(0o755)
     environment = dict(os.environ, PATH=f'{fake_bin}:{os.environ["PATH"]}', TMPDIR=str(temporary),
+                       FLUA_TEST_LAUNCH_LOG=str(launch_log), FLUA_TEST_CATALOG_LOG=str(catalog_log),
                        FLUA_SYSTEM_TEST_LOCK_PATH=str(root / 'system-test.lock'))
-    for detached in (False, True):
-        if detached:
-            subprocess.run(['git', 'checkout', '--detach'], cwd=root, check=True, capture_output=True)
-        subprocess.run([str(lock_script), 'outer smoke', 'make', '-f', str(source / 'Makefile'), 'smoke'],
-                       cwd=root, env=environment, check=True)
-        assert Path((root / 'builds.txt').read_text().splitlines()[-1]) == root / 'build/Flua.app'
-    direct = subprocess.run(
-        [str(root / 'scripts/smoke.sh')], cwd=root,
-        env=dict(environment, FLUA_SYSTEM_TEST_LOCK_FD='99999'),
-        check=True, capture_output=True, text=True,
-    )
-    assert 'Acquired Flua system-test lock for smoke.' in direct.stdout
-    assert len((root / 'builds.txt').read_text().splitlines()) == 3
-    catalogs = (root / 'catalogs.txt').read_text().splitlines()
-    assert len(set(catalogs)) == 3
-    assert all(Path(catalog).is_relative_to(root / 'build/verification') for catalog in catalogs)
-print('PASS: one smoke build per run, stable bundle path and isolated catalogs')
+    try:
+        for detached in (False, True):
+            if detached:
+                subprocess.run(['git', 'checkout', '--detach'], cwd=root, check=True, capture_output=True)
+            subprocess.run([str(lock_script), 'outer smoke', 'make', '-f', str(source / 'Makefile'), 'smoke'],
+                           cwd=root, env=environment, check=True)
+        direct = subprocess.run(
+            [str(root / 'scripts/smoke.sh')], cwd=root,
+            env=dict(environment, FLUA_SYSTEM_TEST_LOCK_FD='99999'),
+            check=True, capture_output=True, text=True,
+        )
+        assert 'Acquired Flua system-test lock for smoke.' in direct.stdout
+        builds = [Path(path) for path in (root / 'builds.txt').read_text().splitlines()]
+        assert len(builds) == 3 and len(set(builds)) == 3
+        assert all(path.is_relative_to(Path('/private/tmp')) for path in builds)
+        assert all(not path.is_relative_to(root) and not path.is_relative_to(temporary) for path in builds)
+        assert all(path.name == 'Flua.app' for path in builds)
+        assert standard_sentinel.read_text() == 'preserve'
+        catalogs = [Path(path) for path in catalog_log.read_text().splitlines()]
+        assert len(catalogs) == 3 and len(set(catalogs)) == 3
+        assert all(path == build.parent / 'library/catalog.json' for path, build in zip(catalogs, builds))
+        assert all(path.is_relative_to(Path('/private/tmp')) for path in catalogs)
+        assert all(not path.is_relative_to(root) and not path.is_relative_to(temporary) for path in catalogs)
+        verification = root / 'build/verification'
+        links = [path for path in verification.iterdir() if path.is_symlink()]
+        assert len(links) == 3
+        assert {link.resolve() for link in links} == {build.parent for build in builds}
+        assert all(link.resolve().is_relative_to(Path('/private/tmp')) for link in links)
+        launches = [json.loads(line) for line in launch_log.read_text().splitlines()]
+        assert {Path(item['app']) for item in launches} == set(builds)
+        assert launches and all(Path(item['app']).parent.is_relative_to(Path('/private/tmp')) for item in launches)
+        assert all(Path(item['cwd']).is_relative_to(Path('/private/tmp')) for item in launches)
+        assert all(not Path(item['cwd']).is_relative_to(root) for item in launches)
+        assert all(not Path(item['cwd']).is_relative_to(temporary) for item in launches)
+        assert all(not Path(item['app']).is_relative_to(root) for item in launches)
+        assert all(not Path(item['app']).is_relative_to(temporary) for item in launches)
+    finally:
+        import shutil
+        for link in (root / 'build/verification').glob('*'):
+            if link.is_symlink():
+                target = link.resolve()
+                if target.parent.is_relative_to(Path('/private/tmp')) and target.name.startswith('flua-smoke.'):
+                    shutil.rmtree(target, ignore_errors=True)
+                link.unlink(missing_ok=True)
+print('PASS: smoke builds and launches use unique, isolated temporary app bundles')
