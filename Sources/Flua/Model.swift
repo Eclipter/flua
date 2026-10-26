@@ -22,6 +22,34 @@ struct Wallpaper: Codable, Identifiable, Equatable, Sendable {
     var metadata: SceneMetadata?
     var mediaFacts: MediaFacts?
     var dateAdded: Date?
+    var sourceAttribution: WallpaperSourceAttribution?
+}
+
+struct WallpaperSourceAttribution: Codable, Equatable, Sendable {
+    static let maximumModificationNoticeCount = 4096
+    static let videoExportNotice = "Re-encoded and exported without audio by Flua."
+
+    var catalogItemID: String
+    var sourceName: String
+    var sourceURL: String
+    var creator: String
+    var licenseName: String
+    var licenseURL: String
+    var modificationNotice: String?
+
+    var isValid: Bool {
+        let source = URLComponents(string: sourceURL)
+        let license = URLComponents(string: licenseURL)
+        return !catalogItemID.isEmpty && catalogItemID.count <= 200
+            && !sourceName.isEmpty && sourceName.count <= 200
+            && source?.scheme?.lowercased() == "https" && source?.host != nil
+            && source?.user == nil && source?.password == nil
+            && !creator.isEmpty && creator.count <= 500 && !licenseName.isEmpty && licenseName.count <= 200
+            && license?.scheme?.lowercased() == "https" && license?.host != nil
+            && license?.user == nil && license?.password == nil
+            && (modificationNotice?.count ?? 0) <= Self.maximumModificationNoticeCount
+                + ((modificationNotice?.contains(Self.videoExportNotice) ?? false) ? Self.videoExportNotice.count + 1 : 0)
+    }
 }
 
 struct PlaybackPolicy: Codable, Equatable, Sendable {

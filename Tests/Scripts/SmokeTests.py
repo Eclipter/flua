@@ -32,7 +32,7 @@ func evaluate(_ check: String, _ value: Bool?) -> (Bool, [String]) {{
     var results: [String: Any] = [:]
     var failures: [String] = []
     {required_checks}
-    for key in required + ["compactWindow"] {{ results[key] = true }}
+    for key in required + ["compactWindow", "downloadsCompactWindow"] {{ results[key] = true }}
     if let value {{ results[check] = value }} else {{ results.removeValue(forKey: check) }}
     {aggregation}
     {passed_assignment}

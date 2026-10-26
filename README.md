@@ -28,7 +28,7 @@
 | Wallpaper playlists | ✅ |
 | Low Power Mode, low battery and on-battery pauses | ✅ |
 | Curate your own local wallpaper library | ✅ |
-| Online wallpaper catalog | ❌ |
+| Online wallpaper downloads | Search and browse 6 live publisher collections |
 
 ## • >1 physical displays •
 

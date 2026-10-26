@@ -541,6 +541,8 @@ struct TrayView: View {
 
 struct LibraryView: View {
     @StateObject private var ui = ViewState()
+    @StateObject private var onlineDownloads = OnlineDownloadCoordinator()
+    @StateObject private var onlineCatalogBrowser = OnlineCatalogBrowser(loader: OnlineCatalogProviderService())
     @EnvironmentObject var library: Library
     var body: some View {
         GeometryReader { windowGeometry in
@@ -572,7 +574,7 @@ struct LibraryView: View {
                                 .background(LibraryHeaderTarget().allowsHitTesting(false))
                             ScrollViewReader { proxy in
                                 ScrollView {
-                                    libraryContent(width: geometry.size.width)
+                                    primaryContent(width: geometry.size.width)
                                         .padding(.bottom, ui.transportHeight)
                                 }
                                 .overlay(alignment: .bottom) {
@@ -698,6 +700,14 @@ struct LibraryView: View {
         } message: { Text("The wallpaper will be removed from playlists and stopped on any display. Imported files are kept in Flua’s media folder.") }
     }
     private var displayed: [Wallpaper] { library.visible }
+    @ViewBuilder
+    private func primaryContent(width: CGFloat) -> some View {
+        if library.section == "downloads" {
+            OnlineDownloadsView(browser: onlineCatalogBrowser).environmentObject(onlineDownloads)
+        } else {
+            libraryContent(width: width)
+        }
+    }
     private var sectionSelection: Binding<String?> {
         Binding(get: { library.section }, set: { value in
             guard let value, value != library.section else { return }
@@ -793,9 +803,11 @@ struct LibraryView: View {
                 if library.section.hasPrefix("playlist:") {
                     Button("Add Wallpapers…") { ui.playlistPicker = String(library.section.dropFirst(9)) }.fluaGlassButton()
                 }
-                Button { library.chooseMedia() } label: { Label(library.importing ? "Adding…" : "Add Wallpaper…", systemImage: "plus") }
-                    .disabled(library.importing)
-                    .fluaProminentButton().tint(library.accentOverride)
+                if library.section != "downloads" {
+                    Button { library.chooseMedia() } label: { Label(library.importing ? "Adding…" : "Add Wallpaper…", systemImage: "plus") }
+                        .disabled(library.importing)
+                        .fluaProminentButton().tint(library.accentOverride)
+                }
             }
         }
     }
@@ -875,6 +887,7 @@ struct LibraryView: View {
             Section("Library") {
                 Label("Wallpapers", systemImage: "rectangle.grid.2x2").tag("all")
                 Label("Favorites", systemImage: "heart").tag("favorites")
+                Label("Discover", systemImage: "globe.americas").tag("downloads")
             }
             Section("Playlists") {
                 Button { ui.creatingPlaylist = true } label: { Label("Create playlist", systemImage: "plus") }
@@ -1020,10 +1033,11 @@ struct SurfacePreview: NSViewRepresentable {
         view.cleanup()
     }
     func makeCoordinator() -> Coordinator { Coordinator() }
-    private func configure(_ view: MediaSurface, coordinator: Coordinator) {
+    func configure(_ view: MediaSurface, coordinator: Coordinator) {
         let resolvedMode = mode ?? .animated
         if coordinator.current == wallpaper, coordinator.mode == resolvedMode { return }
-        if let current = coordinator.current, current.id == wallpaper.id, coordinator.mode == resolvedMode,
+        if let current = coordinator.current, current.id == wallpaper.id,
+           current.file == wallpaper.file, current.kind == wallpaper.kind, coordinator.mode == resolvedMode,
            !(resolvedMode == .still && wallpaper.kind == "video" && stillStamp(for: current) != stillStamp(for: wallpaper)) {
             view.updateParameters(wallpaper)
             coordinator.current = wallpaper
@@ -1097,6 +1111,7 @@ struct InspectorView: View {
                     SurfacePreview(wallpaper: w, url: library.disk.url(for: w), mode: library.surfaceMode)
                         .id(w.id).aspectRatio(16/10, contentMode: .fit).clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                     detailsSection(w)
+                    sourceAttributionSection(w)
                     Divider().opacity(0.3)
                     settingsSection(w)
                     if w.kind == "video", let source = library.disk.url(for: w) {
@@ -1134,6 +1149,26 @@ struct InspectorView: View {
             .fluaGlassMenu()
             .frame(maxWidth: .infinity)
             .padding(.top, 24)
+        }
+    }
+
+    @ViewBuilder
+    private func sourceAttributionSection(_ wallpaper: Wallpaper) -> some View {
+        if let attribution = wallpaper.sourceAttribution {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Source and license").font(.caption.weight(.semibold))
+                Text("\(attribution.sourceName) · \(attribution.creator)").font(.caption).foregroundStyle(.secondary)
+                HStack(spacing: 8) {
+                    if let url = URL(string: attribution.sourceURL) { Link("Source", destination: url).font(.caption) }
+                    if let url = URL(string: attribution.licenseURL) { Link("License", destination: url).font(.caption).fixedSize() }
+                }
+                if let notice = attribution.modificationNotice {
+                    Text(notice).font(.caption2).foregroundStyle(.secondary)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(12)
+            .fluaGlass(in: RoundedRectangle(cornerRadius: 12, style: .continuous))
         }
     }
 

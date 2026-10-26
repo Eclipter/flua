@@ -218,6 +218,7 @@ extension Bundle {
         try await largeCatalogSaveTests(dir.appendingPathComponent("large-catalog", isDirectory: true))
         try await importImageDecoderTests(dir.appendingPathComponent("image-import", isDirectory: true))
         try await importReferenceMovieTests(dir.appendingPathComponent("video-import", isDirectory: true))
+        try await sourceDownloadDuplicateTests(dir.appendingPathComponent("online-download-import", isDirectory: true))
 
         try stopRoutingFailureTests(dir.appendingPathComponent("stop-routing", isDirectory: true))
 
@@ -640,6 +641,81 @@ extension Bundle {
         }.value
         precondition(decodedFrame, "Imported video stopped playing after its original source moved")
         print("PASS: video import rejects external references and preserves self-contained playback after the source moves")
+    }
+
+    @MainActor
+    static func sourceDownloadDuplicateTests(_ root: URL) async throws {
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let library = try Library(root: root.appendingPathComponent("Library", isDirectory: true), systemPlaybackEnabled: false)
+        let attribution = WallpaperSourceAttribution(catalogItemID: "nasa-test-item", sourceName: "NASA SVS",
+            sourceURL: "https://svs.gsfc.nasa.gov/12729/", creator: "NASA/JHUAPL", licenseName: "Public domain",
+            licenseURL: "https://svs.gsfc.nasa.gov/help/", modificationNotice: nil)
+        let existingFile = library.disk.assets.appendingPathComponent("already.mov")
+        try Data("existing media".utf8).write(to: existingFile)
+        var existing = Wallpaper(id: "existing", title: "Edited title", kind: "video", file: "already.mov",
+            tags: "saved tags", favorite: true, metadata: SceneMetadata(details: "kept details"),
+            dateAdded: Date(timeIntervalSince1970: 42), sourceAttribution: attribution)
+        library.state.wallpapers = [existing]
+        var duplicateCompleted = false
+        let duplicateTask = library.importMedia([root.appendingPathComponent("unused.mov")], sourceAttribution: attribution) { ids, error in
+            duplicateCompleted = ids.isEmpty && error?.contains("already in your library") == true
+        }
+        precondition(duplicateTask == nil && duplicateCompleted)
+        precondition(library.state.wallpapers == [existing], "Duplicate catalog download changed its existing library item")
+
+        try FileManager.default.removeItem(at: existingFile)
+        let source = root.appendingPathComponent("replacement.mov")
+        try await writeVideoFixture(source)
+        let oldDate = existing.dateAdded
+        existing.metadata?.details = "saved details"
+        library.state.wallpapers = [existing]
+        library.state.playlists = [Playlist(id: "kept", name: "Kept playlist", items: [existing.id])]
+        library.importMedia([source], sourceAttribution: attribution, titleOverride: "Catalog title")
+        await waitForImport(library)
+        let repaired = library.state.wallpapers.filter { $0.sourceAttribution?.catalogItemID == attribution.catalogItemID }
+        precondition(repaired.count == 1 && repaired[0].id == existing.id, "Re-download created a duplicate wallpaper")
+        precondition(repaired[0].title == existing.title && repaired[0].tags == existing.tags && repaired[0].favorite,
+                     "Re-download overwrote local wallpaper edits")
+        precondition(repaired[0].dateAdded == oldDate
+            && repaired[0].metadata?.details == existing.metadata?.details
+            && repaired[0].metadata?.category == existing.metadata?.category
+            && repaired[0].metadata?.creditTitle == existing.metadata?.creditTitle
+            && repaired[0].metadata?.creditURL == existing.metadata?.creditURL,
+            "Re-download overwrote saved metadata")
+        precondition(library.lastImportIDs.isEmpty && library.importNotice == nil,
+                     "Repair offered Undo for an existing wallpaper")
+        library.undoImport()
+        let afterUndo = library.state.wallpapers.filter { $0.sourceAttribution?.catalogItemID == attribution.catalogItemID }
+        precondition(afterUndo.count == 1 && afterUndo[0].id == existing.id && afterUndo[0].title == existing.title
+            && afterUndo[0].tags == existing.tags && afterUndo[0].favorite
+            && library.state.playlist("kept")?.items == [existing.id],
+            "Undo after repair removed the existing wallpaper or its saved edits and playlist membership")
+        guard let repairedURL = library.disk.url(for: repaired[0]) else { preconditionFailure("Re-download has no local media path") }
+        let asset = AVURLAsset(url: repairedURL,
+            options: [AVURLAssetReferenceRestrictionsKey: AVAssetReferenceRestrictions.forbidAll.rawValue])
+        let repairedTracks = try await asset.loadTracks(withMediaType: .video)
+        precondition(!repairedTracks.isEmpty, "Re-download was not playable media")
+        let unsafeRoot = root.appendingPathComponent("UnsafeLibrary", isDirectory: true)
+        let unsafeLibrary = try Library(root: unsafeRoot, systemPlaybackEnabled: false)
+        var unsafeAttribution = attribution
+        unsafeAttribution.catalogItemID = "nasa-unsafe-id"
+        let outsideMedia = root.appendingPathComponent("escaped.mov")
+        precondition(!FileManager.default.fileExists(atPath: outsideMedia.path))
+        unsafeLibrary.state.wallpapers = [Wallpaper(id: "../../escaped", title: "Kept title", kind: "video",
+            file: "missing.mov", tags: "kept tags", favorite: true, sourceAttribution: unsafeAttribution)]
+        unsafeLibrary.importMedia([source], sourceAttribution: unsafeAttribution)
+        await waitForImport(unsafeLibrary)
+        guard let repairedUnsafe = unsafeLibrary.state.item("../../escaped"),
+              let repairedUnsafeURL = unsafeLibrary.disk.url(for: repairedUnsafe) else {
+            preconditionFailure("Repair lost the existing wallpaper ID or its safe media path")
+        }
+        precondition(repairedUnsafe.title == "Kept title" && repairedUnsafe.tags == "kept tags" && repairedUnsafe.favorite
+            && repairedUnsafeURL.deletingLastPathComponent() == unsafeLibrary.disk.assets
+            && repairedUnsafeURL.lastPathComponent == repairedUnsafe.file
+            && FileManager.default.fileExists(atPath: repairedUnsafeURL.path)
+            && !FileManager.default.fileExists(atPath: outsideMedia.path),
+            "Repair escaped Media or changed the existing wallpaper record")
+        print("PASS: catalog downloads preserve existing records, reject duplicates, and repair missing media without losing edits")
     }
 
     @MainActor

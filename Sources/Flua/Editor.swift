@@ -157,8 +157,9 @@ enum VideoTools {
 
 struct EditorPlayer: NSViewRepresentable {
     let player: AVPlayer
-    func makeNSView(context: Context) -> EditorFrameView { EditorFrameView(player: player) }
-    func updateNSView(_ view: EditorFrameView, context: Context) {}
+    var aspectFill = false
+    func makeNSView(context: Context) -> EditorFrameView { EditorFrameView(player: player, aspectFill: aspectFill) }
+    func updateNSView(_ view: EditorFrameView, context: Context) { view.setAspectFill(aspectFill) }
     static func dismantleNSView(_ view: EditorFrameView, coordinator: ()) { view.cleanup() }
 }
 
@@ -169,12 +170,14 @@ final class EditorFrameView: NSView {
     private var timer: Timer?
     private weak var item: AVPlayerItem?
     private var transform = CGAffineTransform.identity
-    init(player: AVPlayer) {
+    private var aspectFill: Bool
+    init(player: AVPlayer, aspectFill: Bool = false) {
         self.player = player
+        self.aspectFill = aspectFill
         super.init(frame: .zero)
         wantsLayer = true
         layer?.backgroundColor = NSColor.black.cgColor
-        layer?.contentsGravity = .resizeAspect
+        layer?.contentsGravity = aspectFill ? .resizeAspectFill : .resizeAspect
         item = player.currentItem
         item?.add(output)
         Task { @MainActor [weak self, weak player] in
@@ -185,6 +188,11 @@ final class EditorFrameView: NSView {
         RunLoop.main.add(timer!, forMode: .common)
     }
     required init?(coder: NSCoder) { fatalError() }
+    func setAspectFill(_ aspectFill: Bool) {
+        guard self.aspectFill != aspectFill else { return }
+        self.aspectFill = aspectFill
+        layer?.contentsGravity = aspectFill ? .resizeAspectFill : .resizeAspect
+    }
     private func drawFrame() {
         let time = player.currentTime()
         guard output.hasNewPixelBuffer(forItemTime: time), let pixels = output.pixelBufferAndDisplayTime(forItemTime: time).pixelBuffer else { return }
@@ -316,7 +324,19 @@ extension Library {
         let thumbnailTime = min(max(0, edit.thumbnail - edit.start), max(0, clip.duration.seconds - 1.0 / 600))
         try await VideoTools.thumbnail(source: video, time: thumbnailTime).write(to: staging.appendingPathComponent("thumbnail.png"))
         let metadata = wallpaper.metadata ?? SceneMetadata()
-        let manifest: [String: Any] = ["type": "video", "title": wallpaper.title, "details": metadata.details, "categoryIdentifier": metadata.category, "linkTitle": metadata.creditTitle, "linkURL": metadata.creditURL, "color": wallpaper.color, "motionIntensity": wallpaper.motion, "tags": normalizedTags(wallpaper.tags), "files": ["asset": "asset.mp4", "largeThumbnail": "thumbnail.png"], "thumbnailTimestamp": thumbnailTime, "duration": clip.duration.seconds, "createdBy": "Flua 1.2"]
+        var manifest: [String: Any] = ["type": "video", "title": wallpaper.title, "details": metadata.details, "categoryIdentifier": metadata.category, "linkTitle": metadata.creditTitle, "linkURL": metadata.creditURL, "color": wallpaper.color, "motionIntensity": wallpaper.motion, "tags": normalizedTags(wallpaper.tags), "files": ["asset": "asset.mp4", "largeThumbnail": "thumbnail.png"], "thumbnailTimestamp": thumbnailTime, "duration": clip.duration.seconds, "createdBy": "Flua 1.2"]
+        if var attribution = wallpaper.sourceAttribution {
+            let exportNotice = WallpaperSourceAttribution.videoExportNotice
+            let existingNotice = attribution.modificationNotice?.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !(existingNotice?.contains(exportNotice) ?? false) {
+                attribution.modificationNotice = [existingNotice, exportNotice]
+                    .compactMap { $0 }
+                    .filter { !$0.isEmpty }
+                    .joined(separator: " ")
+            }
+            let attributionData = try JSONEncoder().encode(attribution)
+            manifest["sourceAttribution"] = try JSONSerialization.jsonObject(with: attributionData)
+        }
         try JSONSerialization.data(withJSONObject: manifest, options: [.prettyPrinted, .sortedKeys]).write(to: staging.appendingPathComponent("manifest.json"))
         try fm.moveItem(at: staging, to: destination)
     }

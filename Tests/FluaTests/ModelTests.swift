@@ -410,10 +410,37 @@ import Foundation
         }
         let oldSchema = Data("{\"id\":\"old\",\"title\":\"Old scene\",\"kind\":\"video\",\"tags\":\"\",\"favorite\":false,\"speed\":1,\"volume\":0,\"dimming\":0,\"fit\":false}".utf8)
         let oldWallpaper = try JSONDecoder().decode(Wallpaper.self, from: oldSchema)
-        precondition(oldWallpaper.videoEdit == nil && oldWallpaper.metadata == nil)
+        precondition(oldWallpaper.videoEdit == nil && oldWallpaper.metadata == nil && oldWallpaper.sourceAttribution == nil)
         // Regression: older persisted catalogs carrying `volume` still decode; the dropped field is not re-published.
         let reencoded = String(data: try JSONEncoder().encode(oldWallpaper), encoding: .utf8)!
         precondition(!reencoded.contains("volume"))
+        var attributedWallpaper = oldWallpaper
+        attributedWallpaper.sourceAttribution = WallpaperSourceAttribution(
+            catalogItemID: "nasa-third-stage-firing", sourceName: "NASA SVS",
+            sourceURL: "https://svs.gsfc.nasa.gov/12729/", creator: "NASA/JHUAPL",
+            licenseName: "Public domain", licenseURL: "https://svs.gsfc.nasa.gov/help/",
+            modificationNotice: "Preview excerpt resized for Flua.")
+        let savedAttribution = try JSONDecoder().decode(Wallpaper.self, from: JSONEncoder().encode(attributedWallpaper)).sourceAttribution
+        precondition(savedAttribution == attributedWallpaper.sourceAttribution)
+        precondition(savedAttribution?.isValid == true)
+        var archivedSourceAttribution = attributedWallpaper
+        archivedSourceAttribution.sourceAttribution = WallpaperSourceAttribution(
+            catalogItemID: "wikimediaCommons:12", sourceName: "Wikimedia Commons",
+            sourceURL: "https://commons.wikimedia.org/wiki/File:Landscape.webm", creator: "Kevinpcarter",
+            licenseName: "CC BY-SA 3.0", licenseURL: "https://creativecommons.org/licenses/by-sa/3.0/",
+            modificationNotice: "Downloaded as a server-generated QuickTime transcode.")
+        let restoredArchivedAttribution = try JSONDecoder().decode(
+            Wallpaper.self, from: JSONEncoder().encode(archivedSourceAttribution)).sourceAttribution
+        precondition(restoredArchivedAttribution == archivedSourceAttribution.sourceAttribution,
+                     "Removing a Discover source must not discard existing attribution records")
+        var unsafeAttribution = attributedWallpaper.sourceAttribution!
+        unsafeAttribution.licenseURL = "javascript:alert(1)"
+        precondition(!unsafeAttribution.isValid)
+        unsafeAttribution.licenseURL = "https://creativecommons.org/licenses/by/4.0/"
+        unsafeAttribution.modificationNotice = String(repeating: "a", count: WallpaperSourceAttribution.maximumModificationNoticeCount)
+        precondition(unsafeAttribution.isValid, "valid long attribution must survive package export notices")
+        unsafeAttribution.modificationNotice?.append(" \(WallpaperSourceAttribution.videoExportNotice)")
+        precondition(unsafeAttribution.isValid, "video export notices must fit without truncating the original attribution")
         let oldEdit = try JSONDecoder().decode(VideoEdit.self, from: Data("{\"start\":0.25,\"end\":0.75,\"thumbnail\":0.5,\"includeAudio\":true,\"quality\":\"medium\"}".utf8))
         precondition(oldEdit == VideoEdit(start: 0.25, end: 0.75, thumbnail: 0.5, quality: "medium"))
         let reencodedEdit = try JSONEncoder().encode(oldEdit)

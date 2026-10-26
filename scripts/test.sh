@@ -7,6 +7,44 @@ python3 Tests/Scripts/ReleaseTests.py
 mkdir -p build/tests
 swiftc Sources/Flua/Model.swift Sources/Flua/LibraryPaths.swift Tests/FluaTests/ModelTests.swift -o build/tests/model-tests
 build/tests/model-tests
+swiftc -target arm64-apple-macosx27.0 \
+    Sources/Flua/Model.swift \
+    Sources/Flua/OnlineCatalog.swift \
+    Sources/Flua/OnlineRangePreview.swift \
+    Tests/FluaTests/OnlineDownloadTests.swift \
+    -o build/tests/online-download-tests
+build/tests/online-download-tests
+swiftc -parse-as-library -target arm64-apple-macosx27.0 \
+    Sources/Flua/Model.swift \
+    Sources/Flua/OnlineCatalog.swift \
+    Sources/Flua/OnlineCatalogBrowser.swift \
+    Sources/Flua/OnlineCatalogProviders.swift \
+    Sources/Flua/OnlineCatalogPublicProviders.swift \
+    Sources/Flua/OnlineCatalogStockProviders.swift \
+    Tests/FluaTests/OnlineCatalogBrowsingTests.swift \
+    -o build/tests/online-catalog-browsing-tests
+build/tests/online-catalog-browsing-tests
+swiftc -parse-as-library -target arm64-apple-macosx27.0 \
+    Sources/Flua/Model.swift \
+    Sources/Flua/OnlineCatalog.swift \
+    Sources/Flua/OnlineCatalogBrowser.swift \
+    Sources/Flua/OnlineCatalogProviders.swift \
+    Sources/Flua/OnlineCatalogPublicProviders.swift \
+    Sources/Flua/OnlineCatalogStockProviders.swift \
+    Tests/FluaTests/OnlineCatalogProviderTestFixture.swift \
+    Tests/FluaTests/OnlineCatalogPublicProviderTests.swift \
+    -o build/tests/online-catalog-public-provider-tests
+build/tests/online-catalog-public-provider-tests
+swiftc -parse-as-library -target arm64-apple-macosx27.0 \
+    Sources/Flua/Model.swift \
+    Sources/Flua/OnlineCatalog.swift \
+    Sources/Flua/OnlineCatalogBrowser.swift \
+    Sources/Flua/OnlineCatalogProviders.swift \
+    Sources/Flua/OnlineCatalogPublicProviders.swift \
+    Sources/Flua/OnlineCatalogStockProviders.swift \
+    Tests/FluaTests/OnlineCatalogStockProviderTests.swift \
+    -o build/tests/online-catalog-stock-provider-tests
+build/tests/online-catalog-stock-provider-tests
 swiftc -O \
     Sources/Flua/Model.swift \
     Sources/Flua/LibraryPaths.swift \

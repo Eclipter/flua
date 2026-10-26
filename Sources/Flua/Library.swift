@@ -39,6 +39,7 @@ import UniformTypeIdentifiers
     private var pendingNativeAssignmentDisplays = Set<String>()
     private var pendingNativeEdits = Set<String>()
     var importTasks = Set<UUID>()
+    private var pendingCatalogImports = Set<String>()
     var onChange: (() -> Void)?
 
     init(root: URL, systemPlaybackEnabled: Bool = true) throws {
@@ -119,6 +120,7 @@ import UniformTypeIdentifiers
     }
     var sectionTitle: String {
         switch section {
+        case "downloads": return "Discover Wallpapers"
         case "discover": return "Wallpapers"
         case "browse": return "Wallpapers"
         case "favorites": return "Favorites"
@@ -469,6 +471,7 @@ import UniformTypeIdentifiers
         var updated = value
         updated.mediaFacts = state.wallpapers[i].mediaFacts
         updated.dateAdded = state.wallpapers[i].dateAdded
+        if updated.sourceAttribution == nil { updated.sourceAttribution = state.wallpapers[i].sourceAttribution }
         if updated.metadata == nil { updated.metadata = state.wallpapers[i].metadata }
         if updated.metadata?.color == nil { updated.metadata?.color = state.wallpapers[i].metadata?.color }
         if updated.metadata?.motion == nil { updated.metadata?.motion = state.wallpapers[i].metadata?.motion }
@@ -623,16 +626,35 @@ import UniformTypeIdentifiers
         }
         if !urls.isEmpty { importMedia(urls) }
     }
-    func importMedia(_ urls: [URL], playlistID: String? = nil) {
-        guard !saveBlocked else { error = LibraryError.invalidLibrary.localizedDescription; return }
+    @discardableResult
+    func importMedia(_ urls: [URL], playlistID: String? = nil,
+                     sourceAttribution: WallpaperSourceAttribution? = nil, titleOverride: String? = nil,
+                     completion: (([String], String?) -> Void)? = nil) -> Task<Void, Never>? {
+        guard !saveBlocked else { error = LibraryError.invalidLibrary.localizedDescription; completion?([], error); return nil }
+        if let sourceAttribution,
+           let existing = state.wallpapers.first(where: { $0.sourceAttribution?.catalogItemID == sourceAttribution.catalogItemID }),
+           let file = disk.url(for: existing),
+           (try? file.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true {
+            completion?([], "This wallpaper is already in your library.")
+            return nil
+        }
         let taskID = UUID()
         importTasks.insert(taskID)
         importing = true
-        Task { @MainActor [weak self] in
+        let task = Task { @MainActor [weak self] in
             guard let self else { return }
             var failures: [String] = []
             var addedIDs: [String] = []
+            var newIDs = Set<String>()
+            var replacedWallpapers: [String: Wallpaper] = [:]
+            var createdFiles: [URL] = []
             for url in urls {
+                guard !Task.isCancelled else { break }
+                var stagedFile: URL?
+                var reservedCatalogID: String?
+                defer {
+                    if let reservedCatalogID { self.pendingCatalogImports.remove(reservedCatalogID) }
+                }
                 do {
                     let isDirectory = (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true
                     let isPackage = isDirectory || ["zip", "json", "bdpkg"].contains(url.pathExtension.lowercased())
@@ -641,6 +663,25 @@ import UniformTypeIdentifiers
                         package = try await Task.detached(priority: .userInitiated) { try ScenePackage.inspect(url) }.value
                     } else { package = nil }
                     defer { package?.cleanup() }
+                    guard !Task.isCancelled else { break }
+                    let packageAttribution: WallpaperSourceAttribution?
+                    if let manifestAttribution = package?.manifest["sourceAttribution"] {
+                        guard JSONSerialization.isValidJSONObject(manifestAttribution),
+                              let data = try? JSONSerialization.data(withJSONObject: manifestAttribution),
+                              let decoded = try? JSONDecoder().decode(WallpaperSourceAttribution.self, from: data),
+                              decoded.isValid else {
+                            throw ScenePackageError.invalid("sourceAttribution must contain valid source and license details.")
+                        }
+                        packageAttribution = decoded
+                    } else { packageAttribution = nil }
+                    let attribution = sourceAttribution ?? packageAttribution
+                    if let sourceAttribution {
+                        guard self.pendingCatalogImports.insert(sourceAttribution.catalogItemID).inserted else {
+                            failures.append("\(url.lastPathComponent): This wallpaper is already being added.")
+                            continue
+                        }
+                        reservedCatalogID = sourceAttribution.catalogItemID
+                    }
                     let mediaURL = package?.assetURL ?? url.resolvingSymlinksInPath()
                     guard (try? mediaURL.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true else {
                         throw LibraryError.unreadableMedia(url.lastPathComponent)
@@ -662,11 +703,29 @@ import UniformTypeIdentifiers
                         }
                         kind = "video"
                     }
-                    let id = UUID().uuidString
-                    let file = id + "." + mediaURL.pathExtension.lowercased()
+                    guard !Task.isCancelled else { break }
+                    let existingIndex = sourceAttribution.flatMap { value in
+                        self.state.wallpapers.firstIndex(where: { $0.sourceAttribution?.catalogItemID == value.catalogItemID })
+                    }
+                    let existingWallpaper = existingIndex.map { self.state.wallpapers[$0] }
+                    if let existingWallpaper, let existingURL = self.disk.url(for: existingWallpaper),
+                       (try? existingURL.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true {
+                        failures.append("\(url.lastPathComponent): This wallpaper is already in your library.")
+                        continue
+                    }
+                    let id = existingWallpaper?.id ?? UUID().uuidString
+                    let file = (existingWallpaper == nil ? id : UUID().uuidString)
+                        + "." + mediaURL.pathExtension.lowercased()
                     let dest = self.disk.assets.appendingPathComponent(file)
                     try await Task.detached(priority: .userInitiated) { try FileManager.default.copyItem(at: mediaURL, to: dest) }.value
-                    var w = Wallpaper(id: id, title: package?.title ?? url.deletingPathExtension().lastPathComponent, kind: kind, file: file)
+                    stagedFile = dest
+                    guard !Task.isCancelled else { try? FileManager.default.removeItem(at: dest); stagedFile = nil; break }
+                    var w = existingWallpaper ?? Wallpaper(id: id,
+                        title: titleOverride ?? package?.title ?? url.deletingPathExtension().lastPathComponent,
+                        kind: kind, file: file, sourceAttribution: attribution)
+                    w.kind = kind
+                    w.file = file
+                    w.sourceAttribution = attribution
                     if let package {
                         w.tags = package.tags
                         let manifest = package.manifest
@@ -684,30 +743,66 @@ import UniformTypeIdentifiers
                     let inspection = await Task.detached(priority: .utility) {
                         await MediaInspection.load(url: dest, kind: kind, thumbnail: thumbnail)
                     }.value
+                    guard !Task.isCancelled else { try? FileManager.default.removeItem(at: dest); stagedFile = nil; break }
                     w.mediaFacts = inspection.facts
-                    w.dateAdded = Date()
+                    w.dateAdded = existingWallpaper?.dateAdded ?? Date()
                     if w.metadata == nil { w.metadata = SceneMetadata() }
                     if w.metadata?.color == nil { w.metadata?.color = inspection.color }
-                    self.state.wallpapers.append(w)
-                    if let playlistID, let i = self.state.playlists.firstIndex(where: { $0.id == playlistID }) { self.state.playlists[i].items.append(id) }
+                    guard !Task.isCancelled else { try? FileManager.default.removeItem(at: dest); stagedFile = nil; break }
+                    createdFiles.append(dest)
+                    if let existingIndex, let existingWallpaper {
+                        replacedWallpapers[id] = existingWallpaper
+                        self.state.wallpapers[existingIndex] = w
+                    } else {
+                        self.state.wallpapers.append(w)
+                        newIDs.insert(id)
+                        if let playlistID, let i = self.state.playlists.firstIndex(where: { $0.id == playlistID }) {
+                            self.state.playlists[i].items.append(id)
+                        }
+                    }
                     self.generateThumbnail(w)
                     addedIDs.append(id)
-                } catch { failures.append("\(url.lastPathComponent): \(error.localizedDescription)") }
+                    stagedFile = nil
+                } catch {
+                    if let stagedFile { try? FileManager.default.removeItem(at: stagedFile) }
+                    if !Task.isCancelled { failures.append("\(url.lastPathComponent): \(error.localizedDescription)") }
+                }
             }
             self.importTasks.remove(taskID)
             self.importing = !self.importTasks.isEmpty
             if !addedIDs.isEmpty {
-                self.lastImportIDs = addedIDs
+                self.lastImportIDs = addedIDs.filter { newIDs.contains($0) }
                 self.clearFilters()
                 self.section = "all"
                 self.browseSort = "recent"
                 self.selection = addedIDs.last
-                self.importNotice = "Added \(addedIDs.count) wallpaper(s)."
+                self.importNotice = self.lastImportIDs.isEmpty ? nil : "Added \(self.lastImportIDs.count) wallpaper(s)."
             }
-            self.activity = "Added \(addedIDs.count) wallpaper(s)."
-            self.save()
+            self.activity = replacedWallpapers.isEmpty
+                ? "Added \(self.lastImportIDs.count) wallpaper(s)."
+                : (self.lastImportIDs.isEmpty ? "Updated \(replacedWallpapers.count) wallpaper(s)."
+                                              : "Added \(self.lastImportIDs.count) and updated \(replacedWallpapers.count) wallpaper(s).")
+            let persisted = self.save()
+            let includesAttribution = addedIDs.contains { self.state.item($0)?.sourceAttribution != nil }
+            if includesAttribution && !persisted {
+                self.state.wallpapers.removeAll { newIDs.contains($0.id) }
+                for (id, original) in replacedWallpapers {
+                    if let index = self.state.wallpapers.firstIndex(where: { $0.id == id }) {
+                        self.state.wallpapers[index] = original
+                    }
+                }
+                for index in self.state.playlists.indices { self.state.playlists[index].items.removeAll { newIDs.contains($0) } }
+                for file in createdFiles { try? FileManager.default.removeItem(at: file) }
+                for id in addedIDs { self.thumbnails.removeValue(forKey: id) }
+                self.lastImportIDs = []
+                self.importNotice = nil
+                self.onChange?()
+                addedIDs.removeAll()
+            }
             if !failures.isEmpty { self.error = failures.joined(separator: "\n") }
+            completion?(addedIDs, persisted ? failures.first : (self.error ?? "The wallpaper could not be saved to the library."))
         }
+        return task
     }
     func undoImport() {
         for id in lastImportIDs {

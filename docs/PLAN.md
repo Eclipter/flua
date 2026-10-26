@@ -1,15 +1,10 @@
 # Remaining work
 
-Current capabilities and limitations are listed in [FEATURES.md](FEATURES.md). This plan contains only unresolved implementation and validation work. Remove completed tasks instead of keeping checked entries; record verified capabilities and evidence in FEATURES.md and the relevant documentation. Apart from the external wallpaper sources planned below, network services remain outside its scope, along with community features, profiles and third-party runtime dependencies.
+Current capabilities and limitations are listed in [FEATURES.md](FEATURES.md). This plan contains only unresolved implementation and validation work. Remove completed tasks instead of keeping checked entries; record verified capabilities and evidence in FEATURES.md and the relevant documentation. The live online wallpaper catalog is the sole network feature; other network services, community features, profiles and third-party runtime dependencies remain out of scope.
 
-## Online wallpaper previews and downloads
+## NASA SVS API reachability
 
-- Integrate these seven sources into an in-app catalog: [Dareful](https://dareful.com/), [NASA SVS](https://svs.gsfc.nasa.gov/), [Wikimedia Commons](https://commons.wikimedia.org/wiki/Category:Videos), [ISO Republic](https://isorepublic.com/), [Cute Stock Footage](https://cutestockfootage.com/), [Grand Canyon's video archive](https://www.nps.gov/grca/learn/photosmultimedia/b-roll_hd_index.htm), and [Joshua Tree's video archive](https://www.nps.gov/jotr/learn/photosmultimedia/broll.htm). Treat the two National Park Service collections as separate catalog sources.
-- Verify each source's current terms, per-clip license, preview rights and supported access/download method before integration. Include only clips already licensed for redistribution without contacting creators; preserve required credits, license links and modification notices. Exclude content needing individual permission, separately restricted audio and sponsored third-party content. Do not assume a public API exists or bypass access restrictions.
-- Show thumbnails and playable previews before downloading the full wallpaper, with the source, creator and license visible alongside each item. Keep previews lightweight and avoid downloading full-resolution videos merely to browse.
-- Provide a one-click download directly into the local Flua library without requiring a browser or manual file handling. Show progress, cancellation, retry and an already-downloaded state; report unavailable clips clearly. Determine a permitted direct-delivery approach for each source, using a curated catalog where appropriate; identify any source that cannot support this flow before promising integration.
-- Validate downloaded media at the import boundary, preserve existing files and persist source/license details with each wallpaper. Downloaded wallpapers must remain usable offline; local library use and playback must continue without a network connection. Keep networking limited to explicit catalog browsing, previews and downloads, without telemetry, accounts or cloud storage.
-- Add deterministic coverage for catalog/license metadata, failed and cancelled downloads, duplicate downloads and unsafe or invalid media. Verify browsing, previews, downloads and offline playback in a real app window with a disposable library under the shared system-test lock. Update capability and architecture documentation only when implemented and verified.
+- Verify live NASA SVS search and item loading from a network that can reach the API. The app’s connection error and Retry state were verified here, but its native requests fail with `NSURLErrorDomain -1004`. See [online wallpaper source evidence](ONLINE_WALLPAPERS.md).
 
 ## Real-system validation
 

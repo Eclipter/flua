@@ -704,6 +704,15 @@ enum SmokeRunner {
         var failures: [String] = []
         results["systemPlayback"] = "Not exercised: saved assignments and provider descriptors are validated without OS integration."
         results["backgroundLaunch"] = !NSApp.isActive
+        results["onlinePreviewFrameLayout"] = previewFrameLayoutPasses()
+        let catalogSources = Set(OnlineCatalog.items.map(\.sourceName))
+        let requiredCatalogSources = Set(["Dareful", "NASA SVS", "ISO Republic", "Cute Stock Footage",
+            "Grand Canyon National Park", "Joshua Tree National Park"])
+        results["onlineCatalogContract"] = OnlineCatalog.items.count == 6
+            && Set(OnlineCatalog.items.map(\.id)).count == OnlineCatalog.items.count
+            && catalogSources == requiredCatalogSources
+            && OnlineCatalog.unavailableSources.isEmpty
+            && OnlineCatalog.items.allSatisfy { (try? $0.validate()) != nil }
         let activationObserver = NotificationCenter.default.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { _ in
             MainActor.assumeIsolated { failures.append("Smoke verification activated Flua") }
         }
@@ -896,6 +905,32 @@ enum SmokeRunner {
             let surface = MediaSurface(frame: NSRect(x: 0, y: 0, width: 192, height: 108))
             testWindow.contentView = surface
             defer { surface.cleanup(); testWindow.close() }
+            let repairPreviewURL = out.appendingPathComponent("repair-preview.mov")
+            let repairPreviewWallpaper = Wallpaper(id: "repair-preview", title: "Repair preview", kind: "video", file: repairPreviewURL.lastPathComponent)
+            let repairPreview = SurfacePreview(wallpaper: repairPreviewWallpaper, url: repairPreviewURL, mode: .animated)
+            let repairPreviewCoordinator = SurfacePreview.Coordinator()
+            repairPreview.configure(surface, coordinator: repairPreviewCoordinator)
+            let repairedPreviewURL = out.appendingPathComponent("repair-preview-repaired.mov")
+            try FileManager.default.copyItem(at: library.disk.url(for: videos[0])!, to: repairedPreviewURL)
+            var repairedPreviewWallpaper = repairPreviewWallpaper
+            repairedPreviewWallpaper.file = repairedPreviewURL.lastPathComponent
+            let repairedPreview = SurfacePreview(wallpaper: repairedPreviewWallpaper, url: repairedPreviewURL, mode: .animated)
+            repairedPreview.configure(surface, coordinator: repairPreviewCoordinator)
+            let repairedPreviewDeadline = Date().addingTimeInterval(5)
+            while !surface.mediaReady && Date() < repairedPreviewDeadline { await pause(0.05) }
+            results["sameIDAnimatedPreviewReloadedAfterRepair"] = surface.mediaReady
+            surface.cleanup()
+            try FileManager.default.removeItem(at: repairedPreviewURL)
+            let stillRepairPreview = SurfacePreview(wallpaper: repairPreviewWallpaper, url: repairPreviewURL, mode: .still)
+            let stillRepairCoordinator = SurfacePreview.Coordinator()
+            stillRepairPreview.configure(surface, coordinator: stillRepairCoordinator)
+            try FileManager.default.copyItem(at: library.disk.url(for: videos[0])!, to: repairedPreviewURL)
+            let repairedStillPreview = SurfacePreview(wallpaper: repairedPreviewWallpaper, url: repairedPreviewURL, mode: .still)
+            repairedStillPreview.configure(surface, coordinator: stillRepairCoordinator)
+            let repairedStillDeadline = Date().addingTimeInterval(5)
+            while !surface.showsStillImage && Date() < repairedStillDeadline { await pause(0.05) }
+            results["sameIDStillPreviewReloadedAfterRepair"] = surface.showsStillImage
+            surface.cleanup()
             surface.onError = { failures.append($0) }
             let video = videos[0]
             let copiedBytes = (try FileManager.default.attributesOfItem(atPath: library.disk.url(for: video)!.path)[.size] as? NSNumber)?.int64Value
@@ -1205,8 +1240,16 @@ enum SmokeRunner {
             catch { results["rejectInvalidTrim"] = true }
             do { try await VideoTools.export(exportSession, source: videoURL, destination: videoURL); results["preserveSourceOnExport"] = false }
             catch { results["preserveSourceOnExport"] = FileManager.default.fileExists(atPath: videoURL.path) }
+            var attributedVideo = edited
+            let longLicenseNotice = String(repeating: "a", count: WallpaperSourceAttribution.maximumModificationNoticeCount)
+            attributedVideo.sourceAttribution = WallpaperSourceAttribution(
+                catalogItemID: "dareful-koolau-mountains", sourceName: "Dareful",
+                sourceURL: "https://dareful.com/koolau-mountains-aerial/", creator: "Joel Holland",
+                licenseName: "CC BY 4.0", licenseURL: "https://creativecommons.org/licenses/by/4.0/",
+                modificationNotice: longLicenseNotice)
+            _ = library.edit(attributedVideo)
             let packageURL = out.appendingPathComponent("Portable.flua", isDirectory: true)
-            try await Library.exportPackage(edited, source: videoURL, destination: packageURL)
+            try await Library.exportPackage(attributedVideo, source: videoURL, destination: packageURL)
             let manifestURL = packageURL.appendingPathComponent("manifest.json")
             var manifest = try JSONSerialization.jsonObject(with: Data(contentsOf: manifestURL)) as! [String: Any]
             manifest["width"] = 99999
@@ -1220,9 +1263,17 @@ enum SmokeRunner {
             while library.importing && Date() < packageDeadline { await pause(0.1) }
             results["packageRoundTrip"] = library.state.wallpapers.contains {
                 $0.id != video.id && $0.kind == "video" && $0.tags == edited.tags && $0.metadata == edited.metadata
+                    && $0.sourceAttribution?.catalogItemID == attributedVideo.sourceAttribution?.catalogItemID
+                    && $0.sourceAttribution?.creator == "Joel Holland"
+                    && $0.sourceAttribution?.licenseURL == "https://creativecommons.org/licenses/by/4.0/"
+                    && $0.sourceAttribution?.modificationNotice?.hasPrefix(longLicenseNotice) == true
+                    && $0.sourceAttribution?.modificationNotice?.contains("exported without audio") == true
                     && $0.color == "Purple" && $0.motion == "High" && $0.dateAdded != nil
                     && $0.mediaFacts?.width == exportedInfo.width && abs(($0.mediaFacts?.sourceDuration ?? 0) - 0.5) < 0.06
             }
+            results["attributedPackageVariant"] = library.state.wallpapers.filter {
+                $0.sourceAttribution?.catalogItemID == attributedVideo.sourceAttribution?.catalogItemID
+            }.count == 2
             var unclassified = edited
             unclassified.tags = "unknown-color"
             unclassified.metadata?.color = "Unknown"
@@ -1593,6 +1644,10 @@ enum SmokeRunner {
                     results["windowNarrowerThanHalfScreen"] = window.frame.width < screen.frame.width / 2
                 }
                 captureView(window, to: out.appendingPathComponent("Flua-minimum-size.png"))
+                library.section = "downloads"
+                await pause(0.5)
+                captureView(window, to: out.appendingPathComponent("Flua-downloads-compact.png"))
+                results["downloadsCompactWindow"] = library.section == "downloads" && window.frame.width <= 720
                 library.section = "browse"
                 await pause(0.3)
                 captureView(window, to: out.appendingPathComponent("Flua-minimum-browse.png"))
@@ -1657,14 +1712,27 @@ enum SmokeRunner {
                 !window.isVisible || window.alphaValue == 0
             }
             if results["nonPlaybackWindowsHidden"] as? Bool != true { failures.append("nonPlaybackWindowsHidden") }
-            let required = [ "libraryWindowChrome", "instantInspectorResize", "independentPlaylistTimers", "linkedPlaylistAdvancesOnce", "configurationDraftPreviewUsesLivePlaylist", "configurationDraftPreservesPlaylistProgress", "configurationDraftPreservesRemoval", "applySelectedSurfaceOnly", "applyLockScreenOnly", "surfaceControlsApplyHiddenMode", "configurePickerLinkedNormalizesToDesktop", "fileDrop", "fileDropUndo", "blockedImportRevealed", "importRevealsAdded", "editorCancel", "editorSave", "editorSaveFailureRetry", "editorSaveFailureWindowVisible", "editorPreservesNewerEdits", "editorRejectsInvalidDraft", "editorRejectsMissingWallpaper", "playlistFileImport", "importUndo", "playlistExistingAdd", "inspectorSceneInteraction", "inspectorVideoInteraction", "explicitSystemAccent", "systemAccentDefault", "accentSelection", "unknownAccentFallback", "systemAccentReset", "importFacts", "rotatedFacts", "missingFacts", "legacyBackfill", "staleEditPreservesFacts", "unknownColorBackfill", "unknownColorRoundTrip", "blockedDiscover", "tagFiltering", "combinedBrowsing", "clearFiltersPreservesBlockedTags", "clearFilters", "imageImport", "imageExportCancellation", "imageExportReplacement", "imageExportPreservesSource", "videoImport", "symlinkImportIsIndependent", "videoReady", "videoPlaying", "videoLooped", "videoPaused", "videoResumed", "liveAdjustmentPreservesTime", "liveAdjustmentSpeed", "stillHeld", "stillIgnoresResume", "stillPreservesSource", "sceneStillMode", "desktopStill", "desktopStillSurvivesPause", "playlistPauseStatus", "playlistResumeStatus", "desktopStillPersisted", "desktopStillPreservesSource", "render_image", "render_aurora", "render_cosmos", "render_ocean", "render_ember", "systemWallpaperPreserved", "libraryAssignmentValidated", "nativeDescriptorValidation", "nativeDescriptorValidationRejectsMissing", "nativeCatalogMismatchRejected", "backgroundLaunch", "videoPreviewWindowVisible", "inspectorPreviewOnScreen", "scenePreviewWindowVisible", "scenePreviewReshownWindowVisible", "playlistStart", "playlistNext", "libraryStop", "libraryRoundTrip", "discoverWindow", "windowSnapshot", "videoInformation", "trimmedPlayback", "trimmedExport", "thumbnailExport", "rejectInvalidTrim", "preserveSourceOnExport", "packageRoundTrip", "editorPersistence", "editorWindow", "silentExport", "desktopPlaylistPreservesLockScreen", "desktopStopPreservesLockScreen", "surfaceAssignmentsPersisted"]
-            for key in required + ["compactWindow"] where results[key] as? Bool != true { failures.append(key) }
+            let required = [ "onlineCatalogContract", "onlinePreviewFrameLayout", "attributedPackageVariant", "libraryWindowChrome", "instantInspectorResize", "independentPlaylistTimers", "linkedPlaylistAdvancesOnce", "configurationDraftPreviewUsesLivePlaylist", "configurationDraftPreservesPlaylistProgress", "configurationDraftPreservesRemoval", "applySelectedSurfaceOnly", "applyLockScreenOnly", "surfaceControlsApplyHiddenMode", "configurePickerLinkedNormalizesToDesktop", "fileDrop", "fileDropUndo", "blockedImportRevealed", "importRevealsAdded", "editorCancel", "editorSave", "editorSaveFailureRetry", "editorSaveFailureWindowVisible", "editorPreservesNewerEdits", "editorRejectsInvalidDraft", "editorRejectsMissingWallpaper", "playlistFileImport", "importUndo", "playlistExistingAdd", "inspectorSceneInteraction", "inspectorVideoInteraction", "explicitSystemAccent", "systemAccentDefault", "accentSelection", "unknownAccentFallback", "systemAccentReset", "importFacts", "rotatedFacts", "missingFacts", "legacyBackfill", "staleEditPreservesFacts", "unknownColorBackfill", "unknownColorRoundTrip", "blockedDiscover", "tagFiltering", "combinedBrowsing", "clearFiltersPreservesBlockedTags", "clearFilters", "imageImport", "imageExportCancellation", "imageExportReplacement", "imageExportPreservesSource", "videoImport", "symlinkImportIsIndependent", "sameIDAnimatedPreviewReloadedAfterRepair", "sameIDStillPreviewReloadedAfterRepair", "videoReady", "videoPlaying", "videoLooped", "videoPaused", "videoResumed", "liveAdjustmentPreservesTime", "liveAdjustmentSpeed", "stillHeld", "stillIgnoresResume", "stillPreservesSource", "sceneStillMode", "desktopStill", "desktopStillSurvivesPause", "playlistPauseStatus", "playlistResumeStatus", "desktopStillPersisted", "desktopStillPreservesSource", "render_image", "render_aurora", "render_cosmos", "render_ocean", "render_ember", "systemWallpaperPreserved", "libraryAssignmentValidated", "nativeDescriptorValidation", "nativeDescriptorValidationRejectsMissing", "nativeCatalogMismatchRejected", "backgroundLaunch", "videoPreviewWindowVisible", "inspectorPreviewOnScreen", "scenePreviewWindowVisible", "scenePreviewReshownWindowVisible", "playlistStart", "playlistNext", "libraryStop", "libraryRoundTrip", "discoverWindow", "windowSnapshot", "videoInformation", "trimmedPlayback", "trimmedExport", "thumbnailExport", "rejectInvalidTrim", "preserveSourceOnExport", "packageRoundTrip", "editorPersistence", "editorWindow", "silentExport", "desktopPlaylistPreservesLockScreen", "desktopStopPreservesLockScreen", "surfaceAssignmentsPersisted"]
+            for key in required + ["compactWindow", "downloadsCompactWindow"] where results[key] as? Bool != true { failures.append(key) }
             for (key, value) in results where key.hasPrefix("surfaceControls") && value as? Bool != true { failures.append(key) }
         } catch { failures.append(String(reflecting: error)) }
         results["failures"] = failures
         results["passed"] = failures.isEmpty
         if let data = try? JSONSerialization.data(withJSONObject: results, options: [.prettyPrinted, .sortedKeys]) { try? data.write(to: out.appendingPathComponent("smoke-results.json")) }
         NSApp.terminate(nil)
+    }
+
+    @MainActor private static func previewFrameLayoutPasses() -> Bool {
+        let sourceSizes: [(CGFloat, CGFloat)] = [(1080, 1920), (4096, 2304), (3000, 500)]
+        return sourceSizes.allSatisfy { width, height in
+            let host = NSHostingView(rootView: OnlinePreviewFrame {
+                Rectangle().fill(.red).frame(width: width, height: height)
+            }.frame(width: 320))
+            host.layoutSubtreeIfNeeded()
+            let expectedHeight = 320 / OnlinePreviewFrameLayout.aspectRatio
+            return abs(host.fittingSize.width - 320) < 1
+                && abs(host.fittingSize.height - expectedHeight) < 1
+        }
     }
     @MainActor private static func verifySymlinkImport(library: Library, image: URL, output: URL) async throws -> Bool {
         let linked = output.appendingPathComponent("linked-source.png")
