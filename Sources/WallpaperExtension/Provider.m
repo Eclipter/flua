@@ -1558,7 +1558,7 @@ int main(int argc,const char **argv) { @autoreleasepool {
     NSMutableDictionary *scenePlayback=[@{@"version":@1,@"kind":@"aurora",@"fit":@"fill",@"speed":@2,@"dimming":@0,@"modes":@{@"desktop":@"still",@"lockScreen":@"animated"}} mutableCopy];
     NSMutableArray *sceneSums=NSMutableArray.new;
     BOOL scenesDrawn=YES, artworkAnimated=YES;
-    for (NSString *scene in @[@"aurora",@"cosmos",@"ocean",@"ember",@"ink",@"dunes",@"contour",@"opal"]) {
+    for (NSString *scene in @[@"aurora",@"cosmos",@"ocean",@"ember",@"ink",@"dunes",@"contour",@"opal",@"pelagic",@"lanterns",@"rain"]) {
         scenePlayback[@"kind"]=scene;
         creation[@"configuration"]=[[NSJSONSerialization dataWithJSONObject:scenePlayback options:0 error:nil] base64EncodedStringWithOptions:0];
         __block BOOL sceneAcquired=NO;
@@ -1572,7 +1572,7 @@ int main(int argc,const char **argv) { @autoreleasepool {
         if (!sceneAcquired || !opaque || !colored || sceneSession.renderer.scopedFileCount!=0 || !sceneSession.renderer.holdsStill) scenesDrawn=NO;
         if (sceneSnap[@"checksum"]) [sceneSums addObject:sceneSnap[@"checksum"]];
         [provider invalidateWithId:ident reply:^(NSError *error){}];
-        if ([@[@"ink",@"dunes",@"contour",@"opal"] containsObject:scene]) {
+        if ([@[@"ink",@"dunes",@"contour",@"opal",@"pelagic",@"lanterns",@"rain"] containsObject:scene]) {
             scenePlayback[@"modes"]=@{@"desktop":@"animated",@"lockScreen":@"still"};
             creation[@"configuration"]=[[NSJSONSerialization dataWithJSONObject:scenePlayback options:0 error:nil] base64EncodedStringWithOptions:0];
             [provider acquireWithId:ident request:FSCreateRequest(creation,@[]) reply:^(id remote,NSError *error){}];
@@ -1587,7 +1587,7 @@ int main(int argc,const char **argv) { @autoreleasepool {
             scenePlayback[@"modes"]=@{@"desktop":@"still",@"lockScreen":@"animated"};
         }
     }
-    BOOL distinctScenes=sceneSums.count==8 && [NSSet setWithArray:sceneSums].count==8;
+    BOOL distinctScenes=sceneSums.count==11 && [NSSet setWithArray:sceneSums].count==11;
     creation[@"destination"][@"size"]=@[@3840,@2160];
     scenePlayback[@"kind"]=@"aurora";
     scenePlayback[@"modes"]=@{@"desktop":@"still",@"lockScreen":@"still"};

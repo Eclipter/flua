@@ -264,7 +264,7 @@ struct ConfigurationDraft {
 }
 
 struct LibraryState: Codable {
-    private(set) var builtInSceneCatalogVersion = 1
+    private(set) var builtInSceneCatalogVersion = 2
     var wallpapers: [Wallpaper] = []
     var playlists: [Playlist] = []
     var displays: [String: DisplayAssignment] = [:]
@@ -363,6 +363,10 @@ struct LibraryState: Codable {
             wallpapers.append(contentsOf: Self.addedBuiltInScenes.filter { scene in !wallpapers.contains { $0.id == scene.id } })
             builtInSceneCatalogVersion = 1
         }
+        if builtInSceneCatalogVersion < 2 {
+            wallpapers.append(contentsOf: Self.newBuiltInScenes.filter { scene in !wallpapers.contains { $0.id == scene.id } })
+            builtInSceneCatalogVersion = 2
+        }
         if !showsMenuBar { hideFromDock = nil }
     }
     static var initial: LibraryState {
@@ -374,6 +378,7 @@ struct LibraryState: Codable {
             Wallpaper(id: "ember", title: "Ember glow", kind: "ember", tags: "warm, abstract, orange", metadata: SceneMetadata(category: "Abstract", color: "Orange", motion: "Medium"))
         ]
         s.wallpapers.append(contentsOf: Self.addedBuiltInScenes)
+        s.wallpapers.append(contentsOf: Self.newBuiltInScenes)
         s.playlists = [Playlist(id: "ambient", name: "Slow mornings", items: ["aurora", "ocean", "cosmos", "ember"])]
         s.displayMode = "mirrored"
         s.interval = 3600
@@ -387,6 +392,11 @@ struct LibraryState: Codable {
         Wallpaper(id: "dunes", title: "Sahara", kind: "dunes", tags: "desert, dunes, terracotta, sand", metadata: SceneMetadata(category: "Nature", color: "Orange", motion: "Low")),
         Wallpaper(id: "contour", title: "Contour Atlas", kind: "contour", tags: "topographic, jade, map, lines", metadata: SceneMetadata(category: "Abstract", color: "Green", motion: "Low")),
         Wallpaper(id: "opal", title: "Optical Current", kind: "opal", tags: "op art, monochrome, stripes", metadata: SceneMetadata(category: "Abstract", color: "Neutral", motion: "Medium"))
+    ]
+    private static let newBuiltInScenes: [Wallpaper] = [
+        Wallpaper(id: "pelagic", title: "Pelagic", kind: "pelagic", tags: "jellyfish, ocean, bioluminescence", metadata: SceneMetadata(category: "Nature", color: "Cyan", motion: "High")),
+        Wallpaper(id: "lanterns", title: "Lantern Festival", kind: "lanterns", tags: "lanterns, night sky, paper", metadata: SceneMetadata(category: "Nature", color: "Orange", motion: "Medium")),
+        Wallpaper(id: "rain", title: "After Hours", kind: "rain", tags: "rain, city, night, neon", metadata: SceneMetadata(category: "Nature", color: "Blue", motion: "High"))
     ]
     func item(_ id: String?) -> Wallpaper? { wallpapers.first { $0.id == id } }
     func playlist(_ id: String?) -> Playlist? { playlists.first { $0.id == id } }
@@ -596,7 +606,7 @@ func publishedSurfaceMode(_ surface: WallpaperSurface, wallpaper id: String, in 
     return modes.count == 1 ? modes.first! : .animated
 }
 
-let builtInSceneKinds: Set<String> = ["aurora", "cosmos", "ocean", "ember", "ink", "dunes", "contour", "opal"]
+let builtInSceneKinds: Set<String> = ["aurora", "cosmos", "ocean", "ember", "ink", "dunes", "contour", "opal", "pelagic", "lanterns", "rain"]
 
 func providerCatalog(from state: LibraryState) -> ProviderCatalog {
     let playbackPolicy = PlaybackPolicy(

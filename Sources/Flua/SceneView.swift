@@ -10,7 +10,10 @@ final class AmbientSceneView: NSView {
         ("ink", "Ink Mountains", "Drifting mist and distant birds"),
         ("dunes", "Sahara", "Windblown grains and dust plumes"),
         ("contour", "Contour Atlas", "Streamlets trace the waterways"),
-        ("opal", "Optical Current", "Ink blooms and flowing pigment trails")
+        ("opal", "Optical Current", "Ink blooms and flowing pigment trails"),
+        ("pelagic", "Pelagic", "Bioluminescent jellyfish drift through deep water"),
+        ("lanterns", "Lantern Festival", "Paper lanterns rise into a night sky"),
+        ("rain", "After Hours", "Neon city lights shimmer through the rain")
     ]
 
     let scene: String

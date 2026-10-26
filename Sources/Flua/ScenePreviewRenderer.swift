@@ -60,6 +60,10 @@ private final class ScenePreviewResources: @unchecked Sendable {
         let options: [MTKTextureLoader.Option: Any] = [
             .SRGB: false, .origin: MTKTextureLoader.Origin.bottomLeft, .generateMipmaps: true
         ]
+        guard SceneDrawing.motionImages.count == 11,
+              SceneDrawing.motionImages[8...9].allSatisfy({ $0.width > 1 && $0.height > 1 }) else {
+            throw NativeWallpaperError("The bundled wallpaper subjects are missing.")
+        }
         motionTextures = try SceneDrawing.motionImages.map { try loader.newTexture(cgImage: $0, options: options) }
         var masks: [String: MTLTexture] = [:]
         for scene in SceneDrawing.artworkScenes {
@@ -98,7 +102,7 @@ private final class ScenePreviewWorker: @unchecked Sendable {
     @MainActor init(resources: ScenePreviewResources, scene: String) {
         self.resources = resources
         self.scene = scene
-        kind = UInt32(["aurora", "cosmos", "ocean", "ember", "ink", "dunes", "contour", "opal"].firstIndex(of: scene) ?? 0)
+        kind = UInt32(["aurora", "cosmos", "ocean", "ember", "ink", "dunes", "contour", "opal", "pelagic", "lanterns", "rain"].firstIndex(of: scene) ?? 0)
         artwork = resources.artworks[scene] ?? resources.artworks["ink"]!
         layer.device = resources.device
         layer.pixelFormat = .bgra8Unorm
@@ -216,7 +220,7 @@ private final class ScenePreviewWorker: @unchecked Sendable {
             encoder.setVertexBuffer(buffer, offset: 0, index: 0)
             encoder.setVertexBytes(&geometry, length: MemoryLayout<SIMD4<Float>>.stride, index: 1)
             for (index, texture) in resources.motionTextures.enumerated() { encoder.setFragmentTexture(texture, index: index) }
-            encoder.setFragmentTexture(resources.motionMasks[scene], index: 8)
+            encoder.setFragmentTexture(resources.motionMasks[scene], index: 11)
             encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4, instanceCount: sprites.count)
         }
         encoder.endEncoding()

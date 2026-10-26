@@ -15,7 +15,7 @@
 
 | Feature | Support |
 | --- | :---: |
-| Live wallpapers | ✅ |
+| Live wallpapers, including 11 built-in scenes | ✅ |
 | Per-display wallpapers | ✅ |
 | Lock Screen wallpapers | ✅ |
 | Screen Saver wallpapers | ✅ |

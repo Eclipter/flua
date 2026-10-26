@@ -2,10 +2,11 @@ import Foundation
 
 @main struct ModelTests {
     static func builtInSceneCatalogTests() {
-        let expected = ["aurora", "cosmos", "ocean", "ember", "ink", "dunes", "contour", "opal"]
+        let expected = ["aurora", "cosmos", "ocean", "ember", "ink", "dunes", "contour", "opal", "pelagic", "lanterns", "rain"]
         let initial = LibraryState.initial
         precondition(initial.wallpapers.map(\.id) == expected, "initial library scene catalog order changed")
-        let expectedColors = ["ink": "Neutral", "dunes": "Orange", "contour": "Green", "opal": "Neutral"]
+        let expectedColors = ["ink": "Neutral", "dunes": "Orange", "contour": "Green", "opal": "Neutral",
+                              "pelagic": "Cyan", "lanterns": "Orange", "rain": "Blue"]
         let newScenes = initial.wallpapers.filter { expectedColors[$0.id] != nil }
         precondition(newScenes.count == expectedColors.count)
         for scene in newScenes {
@@ -18,7 +19,7 @@ import Foundation
                      "built-in scene provider descriptors must be playable and file-free")
 
         var legacy = LibraryState.initial
-        legacy.wallpapers.removeAll { ["ink", "dunes", "contour", "opal", "cosmos"].contains($0.id) }
+        legacy.wallpapers.removeAll { ["ink", "dunes", "contour", "opal", "pelagic", "lanterns", "rain", "cosmos"].contains($0.id) }
         legacy.wallpapers[0].title = "My edited aurora"
         legacy.wallpapers[0].favorite = true
         let encoder = JSONEncoder()
@@ -27,26 +28,42 @@ import Foundation
         object.removeValue(forKey: "builtInSceneCatalogVersion")
         let legacyData = try! JSONSerialization.data(withJSONObject: object)
         let upgraded = try! JSONDecoder().decode(LibraryState.self, from: legacyData)
-        precondition(Set(upgraded.wallpapers.map(\.id)).isSuperset(of: ["ink", "dunes", "contour", "opal"]), "legacy library did not receive added scenes")
+        precondition(Set(upgraded.wallpapers.map(\.id)).isSuperset(of: Set(expected).subtracting(["cosmos"])),
+                     "version 0 library did not receive both catalog additions")
         precondition(upgraded.item("cosmos") == nil, "upgrade resurrected a deleted original scene")
         precondition(upgraded.item("aurora")?.title == "My edited aurora" && upgraded.item("aurora")?.favorite == true,
                      "upgrade discarded user edits")
 
-        var collision = LibraryState.initial
-        collision.wallpapers.removeAll { ["ink", "dunes", "contour", "opal"].contains($0.id) }
-        let customInk = Wallpaper(id: "ink", title: "My ink import", kind: "image", file: "ink.png")
-        collision.wallpapers.append(customInk)
-        var collisionObject = try! JSONSerialization.jsonObject(with: encoder.encode(collision)) as! [String: Any]
-        collisionObject.removeValue(forKey: "builtInSceneCatalogVersion")
-        let collisionData = try! JSONSerialization.data(withJSONObject: collisionObject)
-        let collisionUpgrade = try! JSONDecoder().decode(LibraryState.self, from: collisionData)
-        precondition(collisionUpgrade.wallpapers.filter { $0.id == "ink" }.count == 1
-                     && collisionUpgrade.item("ink") == customInk, "upgrade duplicated or replaced a colliding user ID")
+        var versionOne = LibraryState.initial
+        versionOne.wallpapers.removeAll { ["pelagic", "lanterns", "rain", "cosmos", "ink"].contains($0.id) }
+        var versionOneObject = try! JSONSerialization.jsonObject(with: encoder.encode(versionOne)) as! [String: Any]
+        versionOneObject["builtInSceneCatalogVersion"] = 1
+        let versionOneData = try! JSONSerialization.data(withJSONObject: versionOneObject)
+        let versionOneUpgrade = try! JSONDecoder().decode(LibraryState.self, from: versionOneData)
+        precondition(Set(versionOneUpgrade.wallpapers.map(\.id)).isSuperset(of: ["pelagic", "lanterns", "rain"])
+                     && versionOneUpgrade.item("cosmos") == nil && versionOneUpgrade.item("ink") == nil, "version 1 upgrade added the new scenes or restored an old deletion incorrectly")
+
+        for (id, version) in [("ink", 0), ("pelagic", 1)] {
+            var collision = LibraryState.initial
+            collision.wallpapers.removeAll { ["ink", "dunes", "contour", "opal", "pelagic", "lanterns", "rain"].contains($0.id) }
+            let customScene = Wallpaper(id: id, title: "My imported artwork", kind: "image", file: "custom.png")
+            collision.wallpapers.append(customScene)
+            var collisionObject = try! JSONSerialization.jsonObject(with: encoder.encode(collision)) as! [String: Any]
+            collisionObject["builtInSceneCatalogVersion"] = version
+            let collisionData = try! JSONSerialization.data(withJSONObject: collisionObject)
+            let collisionUpgrade = try! JSONDecoder().decode(LibraryState.self, from: collisionData)
+            precondition(collisionUpgrade.wallpapers.filter { $0.id == id }.count == 1
+                         && collisionUpgrade.item(id) == customScene, "upgrade duplicated or replaced a colliding user ID")
+        }
 
         var deleted = upgraded
         deleted.wallpapers.removeAll { $0.id == "ink" }
         let roundTrip = try! JSONDecoder().decode(LibraryState.self, from: encoder.encode(deleted))
         precondition(!roundTrip.wallpapers.contains { $0.id == "ink" }, "saved scene deletion was resurrected")
+        var currentVersionDeleted = LibraryState.initial
+        currentVersionDeleted.wallpapers.removeAll { $0.id == "rain" }
+        let currentVersionRoundTrip = try! JSONDecoder().decode(LibraryState.self, from: encoder.encode(currentVersionDeleted))
+        precondition(!currentVersionRoundTrip.wallpapers.contains { $0.id == "rain" }, "current-version scene deletion was resurrected")
     }
 
     static func playlistTargetTests() {
@@ -156,7 +173,7 @@ import Foundation
         newlyBlockedCurrent.assign("aurora", display: "blocked-current", playlistID: "ambient")
         newlyBlockedCurrent.blockedTags = ["nature"]
         precondition(newlyBlockedCurrent.advance(display: "blocked-current", force: true)?.id == "ocean")
-        blockedPlaylist.blockedTags = ["nature", "space", "stars", "blue", "water", "calm", "warm", "abstract", "orange", "ink", "mountains", "rice paper", "desert", "dunes", "terracotta", "topographic", "jade", "map", "lines", "op art", "monochrome", "stripes"]
+        blockedPlaylist.blockedTags = ["nature", "space", "stars", "blue", "water", "calm", "warm", "abstract", "orange", "ink", "mountains", "rice paper", "desert", "dunes", "terracotta", "topographic", "jade", "map", "lines", "op art", "monochrome", "stripes", "jellyfish", "ocean", "bioluminescence", "lanterns", "night sky", "paper", "rain", "city", "night", "neon"]
         let assignmentBeforeBlockedAdvance = blockedPlaylist.displays["playlist-test"]
         precondition(blockedPlaylist.advance(display: "playlist-test", force: true) == nil)
         precondition(blockedPlaylist.displays["playlist-test"] == assignmentBeforeBlockedAdvance)
@@ -279,7 +296,7 @@ import Foundation
         print("PASS: library path resolution preserves existing data and leaves unrelated directories untouched")
         let disk = try LibraryDisk(root: dir)
         var state = try disk.load()
-        precondition(state.wallpapers.count == 8)
+        precondition(state.wallpapers.count == 11)
         precondition(state.displayMode == "mirrored")
         precondition(state.accentColor == nil)
         precondition(state.nativePlayback.isEmpty)

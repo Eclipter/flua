@@ -22,7 +22,7 @@ enum SceneDrawing {
         case "cosmos": cosmos(c, time)
         case "ocean": ocean(c, time)
         case "ember": ember(c, time)
-        case "ink", "dunes", "contour", "opal": artwork(scene: scene, time: time, in: c, size: bounds.size)
+        case "ink", "dunes", "contour", "opal", "pelagic", "lanterns", "rain": artwork(scene: scene, time: time, in: c, size: bounds.size)
         default: aurora(c, time)
         }
         let shade = dimming.isFinite ? CGFloat(min(max(dimming, 0), 0.9)) : 0.12
@@ -63,7 +63,8 @@ enum SceneDrawing {
         }
     }
 
-    static let artworkScenes = ["ink", "dunes", "contour", "opal"]
+    static let artworkScenes = ["ink", "dunes", "contour", "opal", "pelagic", "lanterns", "rain"]
+    static let dynamicScenes = ["pelagic", "lanterns", "rain"]
 
     private static func loadSceneImage(_ name: String) -> CGImage? {
         #if SWIFT_PACKAGE
@@ -143,6 +144,28 @@ enum SceneDrawing {
     }()
 
     static let motionImages: [CGImage] = (0..<5).map(makeMotionImage) + pineImages.map(\.image)
+        + ["jellyfish", "lantern"].map { name in
+            loadSceneImage(name) ?? makeRGBAImage(width: 1, height: 1, pixels: [0, 0, 0, 0])!
+        } + [makeRainImage()]
+
+    private static func makeRainImage() -> CGImage {
+        let width = 64, height = 256
+        var pixels = [UInt8](repeating: 0, count: width * height * 4)
+        for y in 0..<height {
+            let v = Double(y) / Double(height - 1)
+            let taper = pow(sin(v * .pi), 0.7)
+            for x in 0..<width {
+                let u = (Double(x) / Double(width - 1) - 0.5) * 2
+                let alpha = exp(-u * u * 28) * taper
+                let offset = (y * width + x) * 4
+                pixels[offset] = UInt8(174 * alpha)
+                pixels[offset + 1] = UInt8(211 * alpha)
+                pixels[offset + 2] = UInt8(255 * alpha)
+                pixels[offset + 3] = UInt8(255 * alpha)
+            }
+        }
+        return makeRGBAImage(width: width, height: height, pixels: pixels)!
+    }
 
     static let treePlacements: [SIMD4<Float>] = [
         SIMD4(0.805, 0.015, 0.14, 0), SIMD4(0.875, 0.025, 0.20, 1),
@@ -211,6 +234,51 @@ enum SceneDrawing {
         }
 
         switch scene {
+        case "pelagic":
+            // Each animal swims independently; the water and light shafts stay fixed.
+            for i in 0..<11 {
+                let depth = Double(noise(i * 19 + 700))
+                let speed = 0.037 + depth * 0.028
+                let p = phase(Double(noise(i * 23 + 70)), speed: speed)
+                let beat = t * (2.6 + depth * 0.8) + Double(i) * 2.1
+                let pulse = 0.5 + 0.5 * sin(beat)
+                let height = (0.19 + depth * 0.33) * (0.95 + pulse * 0.08)
+                let width = height * (5.0 / 12) * (1.08 - pulse * 0.16)
+                let x = 0.08 + Double(noise(i * 31 + 401)) * 0.84
+                    + 0.045 * sin(t * 0.55 + Double(i) * 1.7)
+                let y = -0.35 + p * 1.7 + 0.012 * sin(beat)
+                add(x, y, width, height, 0.11 * sin(t * 0.7 + Double(i)),
+                    fade(p, edge: 0.13) * (0.5 + depth * 0.5), 8, masked: false)
+            }
+        case "lanterns":
+            // Draw distant lanterns first and let the foreground cross the whole sky.
+            for i in 0..<44 {
+                let depth = Double(i) / 43
+                let p = phase(Double(noise(i * 29 + 31)), speed: 0.024 + depth * 0.038)
+                let height = 0.035 + pow(depth, 2.2) * 0.23
+                let x = 0.04 + Double(noise(i * 13 + 41)) * 0.92
+                    + 0.055 * sin(t * 0.34 + Double(i) * 2.4) + (p - 0.5) * 0.10
+                let y = -0.22 + p * 1.48
+                let angle = 0.08 * sin(t * 0.9 + Double(i)) + 0.025 * sin(t * 1.7 + Double(i) * 2)
+                add(x, y, height * (5.0 / 12), height, angle,
+                    fade(p, edge: 0.12) * (0.52 + depth * 0.48), 9, masked: false)
+            }
+        case "rain":
+            for i in 0..<600 {
+                let depth = Double(noise(i * 11 + 77))
+                let p = phase(Double(noise(i * 17 + 3)), speed: 0.50 + depth * 0.65)
+                let x = Double(noise(i * 37 + 42)) * 1.3 - 0.15 + p * 0.12
+                let y = 1.15 - p * 1.45
+                let height = 0.025 + depth * depth * 0.16
+                add(x, y, 0.0014 + depth * depth * 0.004, height, 0.10,
+                    0.18 + depth * 0.47, 10, masked: false)
+            }
+            for i in 0..<65 {
+                let p = phase(Double(noise(i * 41 + 35)), speed: 0.8 + Double(noise(i + 17)) * 0.6)
+                let width = 0.006 + p * 0.025
+                add(Double(noise(i * 13 + 74)), Double(noise(i * 11 + 61)) * 0.24,
+                    width, width * 0.16, 0, sin(p * .pi) * (1 - p) * 0.55, 3, masked: false)
+            }
         case "ink":
             for i in 0..<26 {
                 let seed = noise(i * 17 + 31)

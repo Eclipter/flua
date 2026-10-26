@@ -172,7 +172,7 @@ vertex MotionVertex motionVertex(uint id [[vertex_id]], uint instance [[instance
 }
 
 fragment float4 motionFragment(MotionVertex in [[stage_in]],
-    array<texture2d<float>, 8> textures [[texture(0)]], texture2d<float> mask [[texture(8)]],
+    array<texture2d<float>, 11> textures [[texture(0)]], texture2d<float> mask [[texture(11)]],
     constant float &dimming [[buffer(2)]]) {
     constexpr sampler spriteSampler(coord::normalized, address::clamp_to_zero, filter::linear, mip_filter::linear);
     float4 color = textures[in.textureIndex].sample(spriteSampler, in.uv) * in.opacity;
@@ -194,7 +194,7 @@ fragment float4 sceneFragment(SceneVertex in [[stage_in]], constant float4 &u [[
         case 1: color = cosmos(in.uv, u.z, pixel, noise); break;
         case 2: color = ocean(in.uv, u.z, pixel, noise); break;
         case 3: color = ember(in.uv, u.z, pixel, noise); break;
-        case 4: case 5: case 6: case 7: color = artwork(in.uv, u.xy, image); break;
+        case 4: case 5: case 6: case 7: case 8: case 9: case 10: color = artwork(in.uv, u.xy, image); break;
         default: color = aurora(in.uv, u.z, pixel, noise); break;
     }
     return float4(color * (1 - dimming), 1);

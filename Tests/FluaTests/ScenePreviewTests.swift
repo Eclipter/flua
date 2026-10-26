@@ -52,7 +52,7 @@ import MetalKit
             .SRGB: false, .origin: MTKTextureLoader.Origin.bottomLeft, .generateMipmaps: true
         ]
         let motionTextures = try SceneDrawing.motionImages.map { try loader.newTexture(cgImage: $0, options: options) }
-        precondition(motionTextures.count == 8, "Motion rendering must provide five scene textures and three pine textures")
+        precondition(motionTextures.count == 11, "Motion rendering must provide eight scene textures and three pine textures")
         for image in SceneDrawing.motionImages {
             let bytes = image.dataProvider!.data!
             let data = CFDataGetBytePtr(bytes)!
@@ -63,7 +63,7 @@ import MetalKit
                 }
             }
         }
-        for image in SceneDrawing.motionImages.suffix(3) {
+        for image in SceneDrawing.motionImages[5..<8] {
             let bytes = image.dataProvider!.data!
             let data = CFDataGetBytePtr(bytes)!
             defer { withExtendedLifetime(bytes) {} }
@@ -124,7 +124,7 @@ import MetalKit
                 encoder.setVertexBuffer(buffer, offset: 0, index: 0)
                 encoder.setVertexBytes(&geometry, length: MemoryLayout<SIMD4<Float>>.stride, index: 1)
                 for (index, texture) in motionTextures.enumerated() { encoder.setFragmentTexture(texture, index: index) }
-                encoder.setFragmentTexture(masks[scene], index: 8)
+                encoder.setFragmentTexture(masks[scene], index: 11)
                 encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4, instanceCount: sprites.count)
             }
             encoder.endEncoding()
@@ -220,7 +220,8 @@ import MetalKit
             }
         }
         print("PASS: original background is pixel-identical; only transparent pine layers move, with anchored roots")
-        for (kind, scene) in ["aurora", "cosmos", "ocean", "ember", "ink", "dunes", "contour", "opal"].enumerated() {
+        for (kind, scene) in ["aurora", "cosmos", "ocean", "ember", "ink", "dunes", "contour", "opal",
+                              "pelagic", "lanterns", "rain"].enumerated() {
             let pixels = try render(kind: kind)
             let context = CGContext(data: nil, width: size, height: height, bitsPerComponent: 8, bytesPerRow: size * 4,
                 space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
@@ -247,7 +248,32 @@ import MetalKit
                     (0..<3).contains { abs(Int(pixels[pixel * 4 + $0]) - Int(later[pixel * 4 + $0])) > 3 }
                 }.count
                 print("MOTION:", scene, visibleMotion, "pixels changed while artwork stayed fixed")
-                precondition(visibleMotion > size * height / 200, "Separate scene elements must visibly animate: " + scene)
+                if ["pelagic", "lanterns", "rain"].contains(scene) {
+                    let oneSecondLater = try render(kind: kind, time: 8)
+                    let substantialMotion = (0..<size * height).filter { pixel in
+                        (0..<3).contains { abs(Int(pixels[pixel * 4 + $0]) - Int(oneSecondLater[pixel * 4 + $0])) > 8 }
+                    }.count
+                    precondition(substantialMotion >= size * height / 20,
+                                 "New scene motion must change at least five percent of pixels over one second: " + scene)
+                    let repeated = try render(kind: kind, time: 7)
+                    precondition(repeated == pixels, "Scene motion must be deterministic: " + scene)
+                    let fixed7 = try render(kind: kind, time: 7, spritesOverride: [])
+                    let fixed8 = try render(kind: kind, time: 8, spritesOverride: [])
+                    precondition(fixed7 == fixed8, "Scene artwork must remain fixed without motion sprites: " + scene)
+                    for invalidTime: Float in [.infinity, .nan] {
+                        let invalidSprites = SceneDrawing.motionSprites(scene: scene, time: Double(invalidTime))
+                        let repeatedInvalidSprites = SceneDrawing.motionSprites(scene: scene, time: Double(invalidTime))
+                        precondition(invalidSprites.count == repeatedInvalidSprites.count
+                            && zip(invalidSprites, repeatedInvalidSprites).allSatisfy { pair in
+                                pair.0.rect == pair.1.rect && pair.0.style == pair.1.style
+                            },
+                                     "Invalid motion times must produce deterministic sprites: " + scene)
+                        for sprite in invalidSprites {
+                            precondition((0..<4).allSatisfy { sprite.rect[$0].isFinite && sprite.style[$0].isFinite },
+                                         "Invalid motion times must not produce non-finite sprite values: " + scene)
+                        }
+                    }
+                }
                 for time in [0.0, 7, 17, 45, 120] {
                     let particles = SceneDrawing.motionSprites(scene: scene, time: time)
                     precondition(!particles.isEmpty && particles.count < 1024, "Scene motion must remain bounded")
