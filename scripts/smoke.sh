@@ -12,11 +12,11 @@ require_no_flua() {
 }
 require_no_flua
 mkdir -p build/verification
-# Keep app reads and its working directory outside privacy-protected project folders.
+# Keep test data and the launch working directory outside privacy-protected folders.
 run_dir=$(mktemp -d /private/tmp/flua-smoke.XXXXXX)
 ln -s "$run_dir" "$PWD/build/verification/${run_dir:t}"
 print "Smoke workspace: $run_dir"
-app="$run_dir/Flua.app"
+app="$PWD/build/Flua.app"
 FLUA_APP_PATH="$app" \
     FLUA_CATALOG_PATH="$run_dir/library/catalog.json" \
     ./scripts/build.sh

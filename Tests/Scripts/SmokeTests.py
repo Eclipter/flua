@@ -70,8 +70,6 @@ with tempfile.TemporaryDirectory(prefix='flua-smoke-tests-') as temporary:
                     'commit', '--allow-empty', '-m', 'fixture'], cwd=root, check=True, capture_output=True)
     standard_app = root / 'build/Flua.app'
     standard_app.mkdir(parents=True)
-    standard_sentinel = standard_app / 'must-remain-untouched'
-    standard_sentinel.write_text('preserve')
     build = root / 'scripts/build.sh'
     build.write_text('''#!/bin/zsh
 set -eu
@@ -146,28 +144,25 @@ print '{"passed":true,"failures":[]}' > "$8/smoke-results.json"
         )
         assert 'Acquired Flua system-test lock for smoke.' in direct.stdout
         builds = [Path(path) for path in (root / 'builds.txt').read_text().splitlines()]
-        assert len(builds) == 3 and len(set(builds)) == 3
-        assert all(path.is_relative_to(Path('/private/tmp')) for path in builds)
-        assert all(not path.is_relative_to(root) and not path.is_relative_to(temporary) for path in builds)
-        assert all(path.name == 'Flua.app' for path in builds)
-        assert standard_sentinel.read_text() == 'preserve'
+        assert builds == [standard_app] * 3
         catalogs = [Path(path) for path in catalog_log.read_text().splitlines()]
         assert len(catalogs) == 3 and len(set(catalogs)) == 3
-        assert all(path == build.parent / 'library/catalog.json' for path, build in zip(catalogs, builds))
+        assert all(path.parts[-2:] == ('library', 'catalog.json') for path in catalogs)
         assert all(path.is_relative_to(Path('/private/tmp')) for path in catalogs)
         assert all(not path.is_relative_to(root) and not path.is_relative_to(temporary) for path in catalogs)
         verification = root / 'build/verification'
         links = [path for path in verification.iterdir() if path.is_symlink()]
         assert len(links) == 3
-        assert {link.resolve() for link in links} == {build.parent for build in builds}
+        assert {link.resolve() for link in links} == {catalog.parent.parent for catalog in catalogs}
         assert all(link.resolve().is_relative_to(Path('/private/tmp')) for link in links)
         launches = [json.loads(line) for line in launch_log.read_text().splitlines()]
         assert {Path(item['app']) for item in launches} == set(builds)
-        assert launches and all(Path(item['app']).parent.is_relative_to(Path('/private/tmp')) for item in launches)
+        assert len(launches) == 18
+        assert sum(item['kind'] == 'open' for item in launches) == 3
+        assert {Path(item['cwd']) for item in launches} == {catalog.parent.parent for catalog in catalogs}
         assert all(Path(item['cwd']).is_relative_to(Path('/private/tmp')) for item in launches)
         assert all(not Path(item['cwd']).is_relative_to(root) for item in launches)
         assert all(not Path(item['cwd']).is_relative_to(temporary) for item in launches)
-        assert all(not Path(item['app']).is_relative_to(root) for item in launches)
         assert all(not Path(item['app']).is_relative_to(temporary) for item in launches)
     finally:
         import shutil
@@ -177,4 +172,4 @@ print '{"passed":true,"failures":[]}' > "$8/smoke-results.json"
                 if target.parent.is_relative_to(Path('/private/tmp')) and target.name.startswith('flua-smoke.'):
                     shutil.rmtree(target, ignore_errors=True)
                 link.unlink(missing_ok=True)
-print('PASS: smoke builds and launches use unique, isolated temporary app bundles')
+print('PASS: smoke uses build/Flua.app with isolated temporary data and working directories')

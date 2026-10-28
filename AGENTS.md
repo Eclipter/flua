@@ -57,11 +57,11 @@ Run the narrowest relevant checks, then expand when the change crosses boundarie
 
 - Model, persistence, paths, or package import: `make test`.
 - Main app build or compile-sensitive changes not covered by smoke: `make build`.
-- Playback, UI, import/export, or end-to-end behavior: `make smoke`. It builds its disposable app itself; do not run a separate `make build` first.
+- Playback, UI, import/export, or end-to-end behavior: `make smoke`. It builds `build/Flua.app` itself; do not run a separate `make build` first.
 - Wallpaper provider changes: `make wallpaper-test`.
 - Release packaging changes: run `python3 Tests/Scripts/ReleaseTests.py` in disposable fixtures. Only when the user explicitly requests a release, run `make release` and verify the produced archive under `dist/`.
 
-Smoke app bundles and test data live in a fresh workspace under `/private/tmp/flua-smoke.*/`, linked from `build/verification/`. Keep the smoke app, test data and launch working directory outside privacy-protected folders such as Documents; leave the normal `build/Flua.app` unchanged. Do not claim multi-display, sleep/wake, fullscreen, battery, login startup, system-provider activation, or other hardware/OS integration behavior was verified unless it was tested on the relevant real setup.
+Smoke builds `build/Flua.app` with its catalog pointing to a fresh test library. Test data, results and the launch working directory live under `/private/tmp/flua-smoke.*/`, linked from `build/verification/`; keep them outside privacy-protected folders such as Documents. Smoke replaces the normal app build; run `make build` afterward to restore the standard library binding. Do not claim multi-display, sleep/wake, fullscreen, battery, login startup, system-provider activation, or other hardware/OS integration behavior was verified unless it was tested on the relevant real setup.
 
 ## Tests and documentation
 
