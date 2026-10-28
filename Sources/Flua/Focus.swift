@@ -7,7 +7,10 @@ func segmentedPickerTabTarget<Value: Hashable>(selection: Value, choices: [(Stri
 final class FocusClearView: NSView {
     private let configureWindow: (NSWindow) -> Void
 
-    init(configureWindow: @escaping (NSWindow) -> Void) {
+    var onDelete: (() -> Bool)?
+
+    init(onDelete: (() -> Bool)? = nil, configureWindow: @escaping (NSWindow) -> Void) {
+        self.onDelete = onDelete
         self.configureWindow = configureWindow
         super.init(frame: .zero)
     }
@@ -17,6 +20,7 @@ final class FocusClearView: NSView {
     private var closeObserver: Any?
     private var becomeKeyObserver: Any?
     private var mouseMonitor: Any?
+    private var keyMonitor: Any?
 
     override var canBecomeKeyView: Bool { false }
     override var acceptsFirstResponder: Bool { false }
@@ -47,6 +51,12 @@ final class FocusClearView: NSView {
             MainActor.assumeIsolated { _ = window?.makeFirstResponder(nil) }
         }
 
+        if onDelete != nil {
+            keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+                self?.handleDelete(event) == true ? nil : event
+            }
+        }
+
         mouseMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown]) { [weak self] event in
             if let window = self?.window, event.window == window {
                 DispatchQueue.main.async { [weak window] in
@@ -58,6 +68,14 @@ final class FocusClearView: NSView {
             }
             return event
         }
+    }
+
+    func handleDelete(_ event: NSEvent) -> Bool {
+        guard event.type == .keyDown, event.keyCode == 51 || event.keyCode == 117,
+              event.modifierFlags.intersection([.command, .control, .option, .shift]).isEmpty,
+              let window, event.window === window, window.attachedSheet == nil,
+              !(window.firstResponder is NSTextView) else { return false }
+        return onDelete?() ?? false
     }
 
     private func clearFocus(in window: NSWindow) {
@@ -81,6 +99,10 @@ final class FocusClearView: NSView {
         if let mouseMonitor {
             NSEvent.removeMonitor(mouseMonitor)
             self.mouseMonitor = nil
+        }
+        if let keyMonitor {
+            NSEvent.removeMonitor(keyMonitor)
+            self.keyMonitor = nil
         }
     }
 

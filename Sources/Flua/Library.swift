@@ -608,8 +608,8 @@ import UniformTypeIdentifiers
         panel.allowsMultipleSelection = true
         panel.canChooseDirectories = true
         panel.treatsFilePackagesAsDirectories = true
-        panel.title = "Add Wallpaper"
-        panel.prompt = "Add"
+        panel.title = "Import"
+        panel.prompt = "Import"
         panel.message = "Choose images, videos or supported wallpaper packages. Source files are preserved."
         panel.begin { [weak self] response in
             if self?.activeOpenPanel === panel { self?.activeOpenPanel = nil }

@@ -92,6 +92,30 @@ import AppKit
         RunLoop.main.run(until: Date().addingTimeInterval(0.1))
         precondition(window.firstResponder is NSWindow, "Closing window must reset first responder")
 
+        var removals = 0
+        clearView.onDelete = { removals += 1; return true }
+        func key(_ code: UInt16, flags: NSEvent.ModifierFlags = [], in target: NSWindow? = nil) -> NSEvent {
+            NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: flags, timestamp: 0,
+                            windowNumber: (target ?? window).windowNumber, context: nil,
+                            characters: "", charactersIgnoringModifiers: "", isARepeat: false, keyCode: code)!
+        }
+        window.makeFirstResponder(nil)
+        precondition(clearView.handleDelete(key(51)), "Backspace must remove a selected wallpaper with window focus")
+        precondition(clearView.handleDelete(key(117)), "Forward Delete must use the same confirmation path")
+        precondition(removals == 2)
+        for modifier: NSEvent.ModifierFlags in [.command, .control, .option, .shift] {
+            precondition(!clearView.handleDelete(key(51, flags: modifier)))
+        }
+        precondition(!clearView.handleDelete(key(0)), "Other keys must remain untouched")
+        window.makeFirstResponder(textView)
+        precondition(!clearView.handleDelete(key(51)), "Text editing must keep Delete")
+        window.makeFirstResponder(nil)
+        let otherWindow = NSWindow(contentRect: .zero, styleMask: [.titled], backing: .buffered, defer: false)
+        precondition(!clearView.handleDelete(key(51, in: otherWindow)), "Other windows must keep their Delete events")
+        precondition(removals == 2, "Rejected events must not invoke removal")
+        clearView.onDelete = { false }
+        precondition(!clearView.handleDelete(key(51)), "A missing or hidden selection must leave Delete unhandled")
+
         print("PASS: keyboard-only focus navigation: initial window focus suppression, single tab target, mouse focus reset, and Tab-triggered focus")
     }
 }

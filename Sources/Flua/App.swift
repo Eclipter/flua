@@ -104,6 +104,23 @@ import Combine
 }
 
 
+private struct LibraryCommandActions {
+    let find: () -> Void
+    let createPlaylist: () -> Void
+}
+
+private struct LibraryCommandActionsKey: FocusedValueKey {
+    typealias Value = LibraryCommandActions
+}
+
+extension FocusedValues {
+    fileprivate var libraryCommands: LibraryCommandActions? {
+        get { self[LibraryCommandActionsKey.self] }
+        set { self[LibraryCommandActionsKey.self] = newValue }
+    }
+}
+
+
 extension Library {
     func navigate(to section: String) {
         if self.section == "settings" || section == "settings" {
@@ -238,8 +255,11 @@ private struct ToolbarWindowObserver: NSViewRepresentable {
 }
 
 struct ClearInitialFocus: NSViewRepresentable {
-    func makeNSView(context: Context) -> NSView { FocusClearView { SmokeRunner.configureVerificationWindow($0) } }
-    func updateNSView(_ nsView: NSView, context: Context) {}
+    var onDelete: (() -> Bool)? = nil
+    func makeNSView(context: Context) -> FocusClearView {
+        FocusClearView(onDelete: onDelete) { SmokeRunner.configureVerificationWindow($0) }
+    }
+    func updateNSView(_ nsView: FocusClearView, context: Context) { nsView.onDelete = onDelete }
 }
 
 struct FluaSegmentedPicker<Value: Hashable>: View {
@@ -366,8 +386,8 @@ extension View {
     func fluaGlassRow<Content: View>(@ViewBuilder content: () -> Content) -> some View {
         HStack(spacing: 8, content: content)
     }
-    func fluaClearInitialFocus() -> some View {
-        background(ClearInitialFocus())
+    func fluaClearInitialFocus(onDelete: (() -> Bool)? = nil) -> some View {
+        background(ClearInitialFocus(onDelete: onDelete))
     }
     func fluaBackdrop(accent: Color) -> some View {
         background {
@@ -408,6 +428,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var openLibrary: (() -> Void)?
     private var terminationReady = false
     private var terminationPending = false
+    private var configuringFullscreenShortcut = false
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         openLibrary?()
@@ -429,7 +450,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Returning first lets a Quit requested inside a main-actor task finish that task.
         return .terminateCancel
     }
+    @objc private func menuItemChanged(_ notification: Notification) {
+        if let menu = notification.object as? NSMenu { configureFullscreenShortcut(in: menu) }
+    }
+    private func configureFullscreenShortcut(in menu: NSMenu) {
+        guard !configuringFullscreenShortcut else { return }
+        configuringFullscreenShortcut = true
+        defer { configuringFullscreenShortcut = false }
+        for item in menu.items where item.action == #selector(NSWindow.toggleFullScreen(_:)) {
+            if item.keyEquivalent != "f" { item.keyEquivalent = "f" }
+            if item.keyEquivalentModifierMask != [.control, .command] {
+                item.keyEquivalentModifierMask = [.control, .command]
+            }
+        }
+    }
     func applicationWillFinishLaunching(_ notification: Notification) {
+        for name in [NSMenu.didAddItemNotification, NSMenu.didChangeItemNotification] {
+            NotificationCenter.default.addObserver(self, selector: #selector(menuItemChanged(_:)), name: name, object: nil)
+        }
         AppContext.library.applyTheme()
         let arguments = ProcessInfo.processInfo.arguments
         if arguments.contains("--accessibility-audit") || arguments.contains("--preview-smoke") || arguments.contains("--smoke-test") {
@@ -439,6 +477,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         AppContext.library.applyPresence()
     }
     func applicationDidFinishLaunching(_ notification: Notification) {
+        for menu in NSApp.mainMenu?.items.compactMap(\.submenu) ?? [] {
+            configureFullscreenShortcut(in: menu)
+        }
         if ProcessInfo.processInfo.arguments.contains("--accessibility-audit") {
             for window in NSApp.windows { SmokeRunner.park(window) }
             Task { await SmokeRunner.runAuditIfRequested(library: AppContext.library) }
@@ -460,6 +501,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
     @Environment(\.openWindow) private var openWindow
     @StateObject var library = AppContext.library
+    @FocusedValue(\.libraryCommands) private var libraryCommands
 
     init() {
         guard !LibraryWindowLaunchPolicy.isVerificationLaunch(arguments: ProcessInfo.processInfo.arguments) else { return }
@@ -503,7 +545,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }.keyboardShortcut(",")
             }
             CommandGroup(after: .newItem) {
-                Button("Add Wallpaper…") { library.chooseMedia() }.keyboardShortcut("n")
+                Button("New Playlist…") { libraryCommands?.createPlaylist() }
+                    .keyboardShortcut("n").disabled(libraryCommands == nil)
+                Button("Import…") { library.chooseMedia() }.keyboardShortcut("i")
+            }
+            CommandGroup(after: .textEditing) {
+                Button("Find…") { libraryCommands?.find() }
+                    .keyboardShortcut("f").disabled(libraryCommands == nil)
             }
             CommandMenu("Playback") {
                 Button(library.state.paused ? "Resume playlists" : "Pause playlists") { library.togglePlaylistPause() }.keyboardShortcut("p", modifiers: [.command, .shift])
@@ -540,6 +588,7 @@ struct TrayView: View {
 }
 
 struct LibraryView: View {
+    @FocusState private var searchFocused: Bool
     @StateObject private var ui = ViewState()
     @StateObject private var onlineDownloads = OnlineDownloadCoordinator()
     @StateObject private var onlineCatalogBrowser = OnlineCatalogBrowser(loader: OnlineCatalogProviderService())
@@ -673,7 +722,19 @@ struct LibraryView: View {
             if ui.isFullScreen { Color(nsColor: .windowBackgroundColor).ignoresSafeArea() }
         }
         .fluaBackdrop(accent: library.accent)
-        .fluaClearInitialFocus()
+        .fluaClearInitialFocus(onDelete: {
+            guard library.section != "settings", library.section != "downloads",
+                  let selected = library.selected, displayed.contains(where: { $0.id == selected.id }) else { return false }
+            ui.deleting = selected
+            return true
+        })
+        .focusedSceneValue(\.libraryCommands, LibraryCommandActions(
+            find: {
+                ui.columnVisibility = .all
+                DispatchQueue.main.async { searchFocused = true }
+            },
+            createPlaylist: { ui.creatingPlaylist = true }
+        ))
         .toggleStyle(.switch)
         .textFieldStyle(FluaGlassTextFieldStyle())
         .overlay {
@@ -804,7 +865,7 @@ struct LibraryView: View {
                     Button("Add Wallpapers…") { ui.playlistPicker = String(library.section.dropFirst(9)) }.fluaGlassButton()
                 }
                 if library.section != "downloads" {
-                    Button { library.chooseMedia() } label: { Label(library.importing ? "Adding…" : "Add Wallpaper…", systemImage: "plus") }
+                    Button { library.chooseMedia() } label: { Label(library.importing ? "Importing…" : "Import…", systemImage: "plus") }
                         .disabled(library.importing)
                         .fluaProminentButton().tint(library.accentOverride)
                 }
@@ -918,6 +979,7 @@ struct LibraryView: View {
             HStack(spacing: 8) {
                 Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
                 TextField("Search", text: $library.query).textFieldStyle(.plain).accessibilityLabel("Search")
+                    .focused($searchFocused)
                     .onChange(of: library.query) { _, value in
                         if !value.isEmpty && library.section == "settings" { library.navigate(to: "all") }
                         if !value.isEmpty && library.section == "discover" { library.section = "browse" }

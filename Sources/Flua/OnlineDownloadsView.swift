@@ -139,7 +139,7 @@ struct OnlineDownloadsView: View {
                     Link("Unsplash", destination: URL(string: "https://unsplash.com/")!)
                 }
                 .font(.callout)
-                Button("Add Wallpaper…") { library.chooseMedia() }
+                Button("Import…") { library.chooseMedia() }
                     .fluaGlassButton().disabled(library.importing)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
