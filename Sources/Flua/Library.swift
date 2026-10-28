@@ -194,6 +194,15 @@ import UniformTypeIdentifiers
         onChange?()
         return true
     }
+    @discardableResult private func commitStateMutation(_ mutation: () -> Void) -> Bool {
+        let previousState = state
+        mutation()
+        guard save() else {
+            state = previousState
+            return false
+        }
+        return true
+    }
     private func publishCatalog() {
         catalogRevision += 1
         let revision = catalogRevision
@@ -224,6 +233,7 @@ import UniformTypeIdentifiers
     func settingChanged() { save() }
     @MainActor func applySelected() {
         guard !nativeSetupBusy, let w = selected else { return }
+        let previousState = state
         state = configuredState
         for index in state.wallpapers.indices {
             if let value = previewWallpaper(state.wallpapers[index].id) {
@@ -232,11 +242,11 @@ import UniformTypeIdentifiers
                 state.wallpapers[index].dimming = value.dimming
             }
         }
-        configurationDraft = ConfigurationDraft()
-        wallpaperDrafts.removeAll()
         let ids = playbackTargets.map(displayID)
         for id in ids { state.assign(w.id, display: id, surface: surface) }
-        save()
+        guard save() else { state = previousState; return }
+        configurationDraft = ConfigurationDraft()
+        wallpaperDrafts.removeAll()
         applySavedNativeAssignments(displays: ids, surface: surface)
     }
     @MainActor func startPlaylist(_ id: String) {
@@ -245,9 +255,10 @@ import UniformTypeIdentifiers
         guard let w = state.playableItems(in: p).first else { error = "This playlist has no playable wallpapers. Unblock a wallpaper or add another one."; return }
         let now = Date()
         let ids = playbackTargets.map(displayID)
+        let previousState = state
         for id in ids { state.assign(w.id, display: id, surface: surface, playlistID: p.id, now: now) }
+        guard save() else { state = previousState; return }
         activity = "Playlist: \(p.name)"
-        save()
         applySavedNativeAssignments(displays: ids, surface: surface)
     }
     @discardableResult func restoreAssignments(preferredDisplay: String? = nil) -> Bool {
@@ -283,8 +294,9 @@ import UniformTypeIdentifiers
             mirrored: resolvedDisplayMode(state.displayMode) == "mirrored", now: now,
             force: force, backwards: backwards)
         if !changed.isEmpty {
+            let previousState = state
             state = next
-            save()
+            guard save() else { state = previousState; return }
             applySavedNativeAssignments(displays: displayIDs.filter { changed[$0] != nil })
         }
     }
@@ -340,8 +352,7 @@ import UniformTypeIdentifiers
         save()
     }
     func togglePlaylistPause() {
-        state.paused.toggle()
-        settingChanged()
+        guard commitStateMutation({ state.paused.toggle() }) else { return }
         activity = state.paused ? "Playlists paused. Wallpapers keep playing." : "Playlists resumed."
     }
     private var nativeRoutingAvailable: Bool {
@@ -569,49 +580,48 @@ import UniformTypeIdentifiers
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         let p = Playlist(name: trimmed)
-        state.playlists.append(p)
+        guard commitStateMutation({ state.playlists.append(p) }) else { return }
         section = "playlist:" + p.id
-        save()
     }
     func updatePlaylist(_ id: String, interval: Double? = nil, shuffle: Bool? = nil) {
         guard let i = state.playlists.firstIndex(where: { $0.id == id }) else { return }
-        if let interval { state.playlists[i].interval = interval }
-        if let shuffle { state.playlists[i].shuffle = shuffle }
-        save()
+        commitStateMutation {
+            if let interval { state.playlists[i].interval = interval }
+            if let shuffle { state.playlists[i].shuffle = shuffle }
+        }
     }
     func duplicatePlaylist(_ id: String) {
         guard let source = state.playlist(id) else { return }
         let copy = Playlist(name: source.name + " Copy", items: source.items,
                             interval: source.interval, shuffle: source.shuffle)
-        state.playlists.append(copy)
+        guard commitStateMutation({ state.playlists.append(copy) }) else { return }
         section = "playlist:" + copy.id
-        save()
     }
     func toggleInPlaylist(_ wallpaper: String, _ playlist: String) {
         guard let i = state.playlists.firstIndex(where: { $0.id == playlist }) else { return }
-        if state.playlists[i].items.contains(wallpaper) { state.playlists[i].items.removeAll { $0 == wallpaper } }
-        else { state.playlists[i].items.append(wallpaper) }
-        save()
+        commitStateMutation {
+            if state.playlists[i].items.contains(wallpaper) { state.playlists[i].items.removeAll { $0 == wallpaper } }
+            else { state.playlists[i].items.append(wallpaper) }
+        }
     }
     func moveInPlaylist(_ wallpaper: String, playlist: String, delta: Int) {
         guard let p = state.playlists.firstIndex(where: { $0.id == playlist }), let index = state.playlists[p].items.firstIndex(of: wallpaper) else { return }
         let destination = index + delta
         guard state.playlists[p].items.indices.contains(destination) else { return }
-        state.playlists[p].items.swapAt(index, destination)
-        save()
+        commitStateMutation { state.playlists[p].items.swapAt(index, destination) }
     }
     func deletePlaylist(_ id: String) {
-        state.removePlaylist(id)
+        guard commitStateMutation({ state.removePlaylist(id) }) else { return }
         section = "all"
-        save()
     }
     func remove(_ w: Wallpaper) {
         let previousAssignments = state.displays
+        let previousState = state
         state.remove(w.id)
         let displayIDs = Set(previousAssignments.keys).union(state.displays.keys)
         let changed = state.nativeAssignmentChanges(from: previousAssignments, displays: Array(displayIDs))
         state.nativeCleanupDisplays.formUnion(changed.filter { state.nativePlayback[$0] == true })
-        save()
+        guard save() else { state = previousState; return }
         scheduleNativeAssignmentRefresh(for: changed)
         // Retain the imported file so accidental removal never destroys the user's media.
         thumbnails.removeValue(forKey: w.id)
@@ -853,10 +863,11 @@ import UniformTypeIdentifiers
     }
     func addToPlaylist(_ ids: Set<String>, playlistID: String) {
         guard let index = state.playlists.firstIndex(where: { $0.id == playlistID }) else { return }
-        for wallpaper in state.wallpapers where ids.contains(wallpaper.id) && !state.playlists[index].items.contains(wallpaper.id) {
-            state.playlists[index].items.append(wallpaper.id)
+        commitStateMutation {
+            for wallpaper in state.wallpapers where ids.contains(wallpaper.id) && !state.playlists[index].items.contains(wallpaper.id) {
+                state.playlists[index].items.append(wallpaper.id)
+            }
         }
-        save()
     }
     func backfillMetadata() {
         Task { @MainActor [weak self] in
