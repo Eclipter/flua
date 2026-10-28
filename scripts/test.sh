@@ -59,6 +59,8 @@ swiftc -target arm64-apple-macosx27.0 Sources/Flua/ImageThumbnail.swift Tests/Fl
 build/tests/image-thumbnail-tests
 swiftc -parse-as-library -target arm64-apple-macosx27.0 Sources/Flua/Model.swift Sources/Flua/LibraryPaths.swift Sources/Flua/Engine.swift Sources/Flua/NativeWallpaperStore.swift Sources/Flua/NativeWallpaper.swift Sources/Flua/ImageThumbnail.swift Sources/Flua/MediaFacts.swift Sources/Flua/SceneView.swift Sources/Flua/ScenePreviewRenderer.swift Sources/Flua/SceneDrawing.swift Sources/Flua/ScenePackage.swift Sources/Flua/Library.swift Tests/FluaTests/ClearFiltersSortTests.swift -o build/tests/clear-filters-sort-tests
 build/tests/clear-filters-sort-tests
+swiftc -parse-as-library -target arm64-apple-macosx27.0 Sources/Flua/Model.swift Sources/Flua/LibraryPaths.swift Sources/Flua/Engine.swift Sources/Flua/NativeWallpaperStore.swift Tests/FluaTests/NativeRefreshStub.swift Sources/Flua/ImageThumbnail.swift Sources/Flua/MediaFacts.swift Sources/Flua/SceneView.swift Sources/Flua/ScenePreviewRenderer.swift Sources/Flua/SceneDrawing.swift Sources/Flua/ScenePackage.swift Sources/Flua/Library.swift Tests/FluaTests/NativeRefreshDrainTests.swift -o build/tests/native-refresh-drain-tests
+build/tests/native-refresh-drain-tests
 swiftc -target arm64-apple-macosx27.0 Sources/Flua/ScenePackage.swift Tests/FluaTests/ScenePackageTests.swift -o build/tests/package-tests
 build/tests/package-tests
 swiftc -target arm64-apple-macosx27.0 Sources/Flua/ImageExport.swift Tests/FluaTests/ImageExportTests.swift -o build/tests/image-export-tests

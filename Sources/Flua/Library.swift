@@ -33,6 +33,8 @@ import UniformTypeIdentifiers
     private var saveBlocked = false
     private var catalogRevision = 0
     private var nativeRefreshTask: Task<Void, Never>?
+    private var nativeRefreshDebouncing = false
+    private var nativeRefreshRevision = 0
     private var thumbnailPublicationTask: Task<Void, Never>?
     private var automaticPlaylistPlaybackEnabled = false
     private var stoppedNativeDisplays = Set<String>()
@@ -503,11 +505,29 @@ import UniformTypeIdentifiers
         pendingNativeAssignmentDisplays.formUnion(refreshDisplays)
         scheduleNativeRefresh()
     }
-    private func scheduleNativeRefresh() {
+    @MainActor func finishNativeWork() async {
+        while true {
+            while nativeSetupBusy { try? await Task.sleep(for: .milliseconds(10)) }
+            if nativeRefreshDebouncing {
+                scheduleNativeRefresh(delay: false)
+            }
+            let revision = nativeRefreshRevision
+            if let task = nativeRefreshTask { await task.value }
+            await finishCatalogWrites()
+            if revision == nativeRefreshRevision && !nativeSetupBusy && !nativeRefreshDebouncing { return }
+        }
+    }
+    private func scheduleNativeRefresh(delay: Bool = true) {
         nativeRefreshTask?.cancel()
+        nativeRefreshRevision += 1
+        nativeRefreshDebouncing = delay
         nativeRefreshTask = Task { @MainActor [weak self] in
-            do { try await Task.sleep(nanoseconds: 500_000_000) } catch { return }
-            guard let self, !self.saveBlocked, self.nativeRoutingAvailable else { return }
+            if delay {
+                do { try await Task.sleep(nanoseconds: 500_000_000) } catch { return }
+            }
+            guard let self else { return }
+            self.nativeRefreshDebouncing = false
+            guard !self.saveBlocked, self.nativeRoutingAvailable else { return }
             if self.nativeSetupBusy { self.scheduleNativeRefresh(); return }
             do { try await self.publishCurrentCatalog() }
             catch {

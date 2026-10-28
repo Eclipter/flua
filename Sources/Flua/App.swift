@@ -440,10 +440,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard !terminationPending else { return .terminateCancel }
         terminationPending = true
         Task { @MainActor in
-            repeat {
-                while AppContext.library.nativeSetupBusy { try? await Task.sleep(for: .milliseconds(10)) }
-                await AppContext.library.finishCatalogWrites()
-            } while AppContext.library.nativeSetupBusy
+            await AppContext.library.finishNativeWork()
             terminationReady = true
             sender.terminate(nil)
         }
