@@ -128,6 +128,23 @@ struct OnlineDownloadsView: View {
                     Button("Cancel") { browser.cancel() }.fluaGlassButton()
                 }
             }
+            VStack(alignment: .leading, spacing: 10) {
+                Text("More Wallpaper Sources").font(.headline)
+                Text("Licensing restrictions prevent us from including some free wallpapers with Flua. Download images or videos from these sites yourself, then add them to Flua.")
+                    .font(.callout).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                HStack(spacing: 16) {
+                    Link("Pexels", destination: URL(string: "https://www.pexels.com/videos/")!)
+                    Link("Pixabay", destination: URL(string: "https://pixabay.com/videos/")!)
+                    Link("Unsplash", destination: URL(string: "https://unsplash.com/")!)
+                }
+                .font(.callout)
+                Button("Add Wallpaper…") { library.chooseMedia() }
+                    .fluaGlassButton().disabled(library.importing)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(14)
+            .fluaGlass(in: RoundedRectangle(cornerRadius: 14, style: .continuous))
             if browser.isLoading && browser.items.isEmpty {
                 ProgressView("Loading source collections…")
                     .frame(maxWidth: .infinity, minHeight: 220)
