@@ -244,6 +244,7 @@ actor ImportInspectionGate {
         try await importImageDecoderTests(dir.appendingPathComponent("image-import", isDirectory: true))
         try await importReferenceMovieTests(dir.appendingPathComponent("video-import", isDirectory: true))
         try await sourceDownloadDuplicateTests(dir.appendingPathComponent("online-download-import", isDirectory: true))
+        try await pendingImportCommitTests(dir.appendingPathComponent("pending-import-commit", isDirectory: true))
 
         try stopRoutingFailureTests(dir.appendingPathComponent("stop-routing", isDirectory: true))
 
@@ -810,6 +811,84 @@ actor ImportInspectionGate {
             && !FileManager.default.fileExists(atPath: outsideMedia.path),
             "Repair escaped Media or changed the existing wallpaper record")
         print("PASS: catalog downloads preserve existing records, reject duplicates, and repair missing media without losing edits")
+    }
+
+    @MainActor
+    static func pendingImportCommitTests(_ root: URL) async throws {
+        let library = try Library(root: root, systemPlaybackEnabled: false)
+        library.tick?.invalidate()
+        let committedFile = library.disk.assets.appendingPathComponent("committed.mov")
+        try Data("previously committed media".utf8).write(to: committedFile)
+        var existing = Wallpaper(id: "committed", title: "Committed title", kind: "video", file: "committed.mov")
+        let playlist = Playlist(id: "pending-playlist", name: "Pending")
+        library.state.wallpapers = [existing]
+        library.state.playlists = [playlist]
+        precondition(library.save())
+
+        let source = root.appendingPathComponent("pending.mov")
+        try await writeVideoFixture(source)
+        let attribution = WallpaperSourceAttribution(catalogItemID: "pending-import-test", sourceName: "Test source",
+            sourceURL: "https://example.com/source", creator: "Test creator", licenseName: "Test license",
+            licenseURL: "https://example.com/license", modificationNotice: nil)
+        let inspectionGate = ImportInspectionGate()
+        library.mediaInspectionLoader = { url, kind, thumbnail in
+            await inspectionGate.hold()
+            return await MediaInspection.load(url: url, kind: kind, thumbnail: thumbnail)
+        }
+        library.importMedia([source], playlistID: playlist.id, sourceAttribution: attribution)
+        await inspectionGate.waitUntilStarted()
+        precondition(library.state.item(existing.id) != nil
+            && !library.state.wallpapers.contains { $0.sourceAttribution?.catalogItemID == attribution.catalogItemID },
+            "Pending wallpaper became visible before the import commit")
+        precondition(library.state.playlist(playlist.id)?.items.isEmpty == true,
+            "Pending wallpaper entered a playlist before the import commit")
+
+        existing.title = "Intervening saved edit"
+        precondition(library.edit(existing), "Intervening save failed")
+        let interveningState = try LibraryDisk(root: root).load()
+        precondition(interveningState.item(existing.id)?.title == existing.title
+            && !interveningState.wallpapers.contains { $0.sourceAttribution?.catalogItemID == attribution.catalogItemID }
+            && interveningState.playlist(playlist.id)?.items.isEmpty == true,
+            "Intervening save committed pending import data")
+        let committedManifest = try Data(contentsOf: library.disk.manifest)
+        try FileManager.default.removeItem(at: library.disk.manifest)
+        try FileManager.default.createDirectory(at: library.disk.manifest, withIntermediateDirectories: false)
+        try Data("blocker".utf8).write(to: library.disk.manifest.appendingPathComponent("blocker"))
+
+        await inspectionGate.release()
+        await waitForImport(library)
+        precondition(library.state.item(existing.id)?.title == existing.title
+            && !library.state.wallpapers.contains { $0.sourceAttribution?.catalogItemID == attribution.catalogItemID },
+            "Failed import save did not restore the committed state")
+        precondition(library.error != nil, "Failed final import save was not reported")
+        try FileManager.default.removeItem(at: library.disk.manifest)
+        try committedManifest.write(to: library.disk.manifest, options: .atomic)
+        let reloaded = try LibraryDisk(root: root).load()
+        let remainingAssets = try FileManager.default.contentsOfDirectory(atPath: library.disk.assets.path)
+        let referencedFilesExist = reloaded.wallpapers.allSatisfy { wallpaper in
+            guard let url = library.disk.url(for: wallpaper) else { return false }
+            return (try? url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true
+        }
+        precondition(reloaded.item(existing.id)?.title == existing.title
+            && !reloaded.wallpapers.contains { $0.sourceAttribution?.catalogItemID == attribution.catalogItemID }
+            && reloaded.playlist(playlist.id)?.items.isEmpty == true,
+            "Reload did not preserve the intervening successful save")
+        precondition(referencedFilesExist, "A successful manifest reference points to deleted media")
+        precondition(remainingAssets == [committedFile.lastPathComponent], "Failed import left unreferenced media behind")
+
+        let duplicateLibrary = try Library(root: root.appendingPathComponent("batch-duplicate", isDirectory: true),
+            systemPlaybackEnabled: false)
+        duplicateLibrary.tick?.invalidate()
+        var duplicateAttribution = attribution
+        duplicateAttribution.catalogItemID = "pending-import-batch-duplicate"
+        duplicateLibrary.importMedia([source, source], sourceAttribution: duplicateAttribution)
+        await waitForImport(duplicateLibrary)
+        let batchDuplicates = duplicateLibrary.state.wallpapers.filter {
+            $0.sourceAttribution?.catalogItemID == duplicateAttribution.catalogItemID
+        }
+        precondition(batchDuplicates.count == 1 && duplicateLibrary.lastImportIDs.count == 1,
+            "Staging admitted the same catalog item twice in one batch")
+        print("PASS: pending imports stay out of intervening saves and failed commits preserve referenced media")
     }
 
     @MainActor

@@ -6,7 +6,6 @@ Current capabilities and limitations are listed in [FEATURES.md](FEATURES.md). T
 
 Keep the audit numbers below when referring to these tasks. Native coordination reproductions used a stubbed OS boundary; they do not establish real-system behavior.
 
-2. **P1 — Keep pending imports outside committed state.** A batch exposes records before its final save, allowing another save to commit them; a later import rollback can delete their already-committed media. Stage pending records privately until committing them and never delete media referenced by a successful commit. Test an intervening save followed by a failed final import save, then reload and verify every persisted media reference.
 4. **P2 — Handle removal during the first native Apply.** Removal can run before Apply records active playback, so it queues no cleanup; Apply then marks a removed assignment active. Guard removal during native transactions or reconcile mutations before accepting their completion. Add a deterministic test with a delayed stubbed Apply, asserting that removal cannot leave active playback without a saved assignment or cleanup request; verify OS restoration separately with disposable fixtures.
 5. **P2 — Verify native edit refresh after Quit.** Separately verify saved trim and cover settings in real native playback after Quit, using a disposable matching-catalog build and a reliably restorable system baseline. Blocked on the current host: the active Flua wallpaper provider runs from a deleted build path, so a host restart may prevent restoring its playback.
 

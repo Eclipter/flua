@@ -679,15 +679,17 @@ import UniformTypeIdentifiers
             var failures: [String] = []
             var addedIDs: [String] = []
             var newIDs = Set<String>()
-            var replacedWallpapers: [String: Wallpaper] = [:]
+            var pendingWallpapers: [Wallpaper] = []
+            var pendingRepairs: [String: Wallpaper] = [:]
+            var packageRepairIDs = Set<String>()
             var createdFiles: [URL] = []
+            var reservedCatalogIDs = Set<String>()
+            defer {
+                for id in reservedCatalogIDs { self.pendingCatalogImports.remove(id) }
+            }
             for url in urls {
                 guard !Task.isCancelled else { break }
                 var stagedFile: URL?
-                var reservedCatalogID: String?
-                defer {
-                    if let reservedCatalogID { self.pendingCatalogImports.remove(reservedCatalogID) }
-                }
                 do {
                     let isDirectory = (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true
                     let isPackage = isDirectory || ["zip", "json", "bdpkg"].contains(url.pathExtension.lowercased())
@@ -708,12 +710,12 @@ import UniformTypeIdentifiers
                         packageAttribution = decoded
                     } else { packageAttribution = nil }
                     let attribution = sourceAttribution ?? packageAttribution
-                    if let sourceAttribution {
-                        guard self.pendingCatalogImports.insert(sourceAttribution.catalogItemID).inserted else {
+                    if let attribution {
+                        guard self.pendingCatalogImports.insert(attribution.catalogItemID).inserted else {
                             failures.append("\(url.lastPathComponent): This wallpaper is already being added.")
                             continue
                         }
-                        reservedCatalogID = sourceAttribution.catalogItemID
+                        reservedCatalogIDs.insert(attribution.catalogItemID)
                     }
                     let mediaURL = package?.assetURL ?? url.resolvingSymlinksInPath()
                     guard (try? mediaURL.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true else {
@@ -800,17 +802,13 @@ import UniformTypeIdentifiers
                     w.kind = kind
                     w.file = file
                     w.sourceAttribution = attribution
-                    if let currentIndex {
-                        replacedWallpapers[id] = self.state.wallpapers[currentIndex]
-                        self.state.wallpapers[currentIndex] = w
+                    if currentIndex != nil {
+                        pendingRepairs[id] = w
+                        if package != nil { packageRepairIDs.insert(id) }
                     } else {
-                        self.state.wallpapers.append(w)
+                        pendingWallpapers.append(w)
                         newIDs.insert(id)
-                        if let playlistID, let i = self.state.playlists.firstIndex(where: { $0.id == playlistID }) {
-                            self.state.playlists[i].items.append(id)
-                        }
                     }
-                    self.generateThumbnail(w)
                     addedIDs.append(id)
                     stagedFile = nil
                 } catch {
@@ -820,36 +818,71 @@ import UniformTypeIdentifiers
             }
             self.importTasks.remove(taskID)
             self.importing = !self.importTasks.isEmpty
-            if !addedIDs.isEmpty {
-                self.lastImportIDs = addedIDs.filter { newIDs.contains($0) }
-                self.clearFilters()
-                self.section = "all"
-                self.browseSort = "recent"
-                self.selection = addedIDs.last
-                self.importNotice = self.lastImportIDs.isEmpty ? nil : "Added \(self.lastImportIDs.count) wallpaper(s)."
-            }
-            self.activity = replacedWallpapers.isEmpty
-                ? "Added \(self.lastImportIDs.count) wallpaper(s)."
-                : (self.lastImportIDs.isEmpty ? "Updated \(replacedWallpapers.count) wallpaper(s)."
-                                              : "Added \(self.lastImportIDs.count) and updated \(replacedWallpapers.count) wallpaper(s).")
-            let persisted = self.save()
-            let includesAttribution = addedIDs.contains { self.state.item($0)?.sourceAttribution != nil }
-            if includesAttribution && !persisted {
-                self.state.wallpapers.removeAll { newIDs.contains($0.id) }
-                for (id, original) in replacedWallpapers {
-                    if let index = self.state.wallpapers.firstIndex(where: { $0.id == id }) {
-                        self.state.wallpapers[index] = original
+            let previousState = self.state
+            for (id, staged) in Array(pendingRepairs) {
+                guard let index = self.state.wallpapers.firstIndex(where: { $0.id == id }) else {
+                    failures.append("\(staged.title): The wallpaper was removed before its repair could be saved.")
+                    pendingRepairs.removeValue(forKey: id)
+                    addedIDs.removeAll { $0 == id }
+                    let referencedFiles = Set(self.state.wallpapers.compactMap(\.file))
+                    if let file = self.disk.url(for: staged) {
+                        if !referencedFiles.contains(file.lastPathComponent) {
+                            try? FileManager.default.removeItem(at: file)
+                            createdFiles.removeAll { $0 == file }
+                        }
                     }
+                    continue
                 }
-                for index in self.state.playlists.indices { self.state.playlists[index].items.removeAll { newIDs.contains($0) } }
-                for file in createdFiles { try? FileManager.default.removeItem(at: file) }
-                for id in addedIDs { self.thumbnails.removeValue(forKey: id) }
+                var merged = self.state.wallpapers[index]
+                merged.kind = staged.kind
+                merged.file = staged.file
+                merged.sourceAttribution = staged.sourceAttribution
+                merged.mediaFacts = staged.mediaFacts
+                if packageRepairIDs.contains(id) {
+                    merged.tags = staged.tags
+                    merged.metadata = staged.metadata
+                    merged.videoEdit = staged.videoEdit
+                } else {
+                    if merged.metadata == nil { merged.metadata = SceneMetadata() }
+                    if merged.metadata?.color == nil { merged.metadata?.color = staged.metadata?.color }
+                }
+                self.state.wallpapers[index] = merged
+            }
+            self.state.wallpapers.append(contentsOf: pendingWallpapers)
+            if let playlistID, let index = self.state.playlists.firstIndex(where: { $0.id == playlistID }) {
+                self.state.playlists[index].items.append(contentsOf: pendingWallpapers.map(\.id))
+            }
+            let persisted = self.save()
+            if persisted {
+                if !addedIDs.isEmpty {
+                    self.lastImportIDs = addedIDs.filter { newIDs.contains($0) }
+                    self.clearFilters()
+                    self.section = "all"
+                    self.browseSort = "recent"
+                    self.selection = addedIDs.last
+                    self.importNotice = self.lastImportIDs.isEmpty ? nil : "Added \(self.lastImportIDs.count) wallpaper(s)."
+                }
+                self.activity = pendingRepairs.isEmpty
+                    ? "Added \(self.lastImportIDs.count) wallpaper(s)."
+                    : (self.lastImportIDs.isEmpty ? "Updated \(pendingRepairs.count) wallpaper(s)."
+                                                  : "Added \(self.lastImportIDs.count) and updated \(pendingRepairs.count) wallpaper(s).")
+                for id in addedIDs {
+                    if let wallpaper = self.state.item(id) { self.generateThumbnail(wallpaper) }
+                }
+            } else {
+                self.state = previousState
+                let referencedFiles = Set(previousState.wallpapers.compactMap(\.file))
+                for file in createdFiles where !referencedFiles.contains(file.lastPathComponent) {
+                    try? FileManager.default.removeItem(at: file)
+                }
                 self.lastImportIDs = []
                 self.importNotice = nil
                 self.onChange?()
                 addedIDs.removeAll()
             }
             if !failures.isEmpty { self.error = failures.joined(separator: "\n") }
+            for id in reservedCatalogIDs { self.pendingCatalogImports.remove(id) }
+            reservedCatalogIDs.removeAll()
             completion?(addedIDs, persisted ? failures.first : (self.error ?? "The wallpaper could not be saved to the library."))
         }
         return task
