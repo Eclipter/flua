@@ -17,4 +17,4 @@ release:
 wallpaper-test:
 	@sh Sources/WallpaperExtension/build-and-test.sh
 clean:
-	rm -rf .build build dist
+	rm -rf .build build dist Sources/WallpaperExtension/Built

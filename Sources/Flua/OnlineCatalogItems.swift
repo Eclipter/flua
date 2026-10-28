@@ -91,8 +91,6 @@ enum OnlineWallpaperItems {
         )
     ]
 
-    static let unavailableSources: [UnavailableWallpaperSource] = []
-
     private static func bundledPreview(_ name: String) -> URL {
         guard let url = Bundle.module.url(forResource: name, withExtension: "mp4") else {
             preconditionFailure("Missing bundled online wallpaper preview: \(name).mp4")

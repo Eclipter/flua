@@ -2,15 +2,40 @@ import Foundation
 
 enum OnlineWallpaperItems {
     static let all: [OnlineWallpaper] = []
-    static let unavailableSources: [UnavailableWallpaperSource] = []
 }
 
 @main struct OnlineCatalogStockProviderTests {
     static func main() throws {
+        try testStockPaginationRules()
         try testDarefulParsingAndPagination()
         try testISORepublicParsing()
         try testCuteStockFootageParsingAndPagination()
         print("PASS: stock provider item identity, license, preview/download routes, paging, search scoping, and restricted rows")
+    }
+
+    private static func testStockPaginationRules() throws {
+        let cases: [(url: String, query: String, accepted: Bool)] = [
+            ("/", "", true),
+            ("/page/3/", "", true),
+            ("/page/3/?s=forest", "forest", true),
+            ("/page/3/?s=other", "forest", false),
+            ("/page/3/?s=forest&extra=1", "forest", false),
+            ("/page/3/?s=forest&s=forest", "forest", false),
+            ("/page/nope/", "", false),
+            ("/page/3/extra/", "", false),
+            ("/other/", "", false)
+        ]
+        let darefulPage = URL(string: "https://dareful.com/")!
+        let cutePage = URL(string: "https://cutestockfootage.com/")!
+
+        for entry in cases {
+            let darefulHTML = #"<div class="pagination"><a href="https://dareful.com\#(entry.url)">Next</a></div>"#
+            let cuteHTML = #"<div class="pagination"><a href="https://cutestockfootage.com\#(entry.url)">Next</a></div>"#
+            let darefulNext = DarefulStockParser.nextPage(in: darefulHTML, current: darefulPage, query: entry.query)
+            let cuteNext = CuteStockFootageParser.nextPage(in: cuteHTML, current: cutePage, query: entry.query)
+            precondition((darefulNext != nil) == entry.accepted, "Dareful pagination case failed: \(entry.url)")
+            precondition((cuteNext != nil) == entry.accepted, "Cute Stock Footage pagination case failed: \(entry.url)")
+        }
     }
 
     private static func testDarefulParsingAndPagination() throws {

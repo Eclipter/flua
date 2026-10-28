@@ -714,7 +714,6 @@ enum SmokeRunner {
         results["onlineCatalogContract"] = OnlineCatalog.items.count == 6
             && Set(OnlineCatalog.items.map(\.id)).count == OnlineCatalog.items.count
             && catalogSources == requiredCatalogSources
-            && OnlineCatalog.unavailableSources.isEmpty
             && OnlineCatalog.items.allSatisfy { (try? $0.validate()) != nil }
         let activationObserver = NotificationCenter.default.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { _ in
             MainActor.assumeIsolated { failures.append("Smoke verification activated Flua") }

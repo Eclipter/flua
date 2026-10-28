@@ -64,7 +64,6 @@ enum SceneDrawing {
     }
 
     static let artworkScenes = ["ink", "dunes", "contour", "opal", "pelagic", "lanterns", "rain"]
-    static let dynamicScenes = ["pelagic", "lanterns", "rain"]
 
     private static func loadSceneImage(_ name: String) -> CGImage? {
         #if SWIFT_PACKAGE

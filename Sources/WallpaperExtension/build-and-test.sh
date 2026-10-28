@@ -31,9 +31,9 @@ xcrun clang -target "$FS_TARGET" -fobjc-arc \
     "$FS_SOURCE_DIR/image-decoder-test.m" "$FS_BUILD_DIR/MediaRenderer.o" \
     -o "$FS_BUILD_DIR/image-decoder-test"
 "$FS_BUILD_DIR/image-decoder-test"
-xcrun clang -target "$FS_TARGET" -fobjc-arc -DFS_SELF_TEST -framework Foundation -framework QuartzCore -framework IOSurface -framework CoreGraphics -framework CoreMedia -framework CoreGraphics -framework AVFoundation -framework CoreImage -framework CoreVideo -framework ImageIO "$FS_SOURCE_DIR/Provider.m" "$FS_BUILD_DIR/MediaRenderer.o" "$FS_BUILD_DIR/PlaybackPolicy.o" -framework IOKit -framework ColorSync -o "$FS_BUILD_DIR/provider-self-test"
+xcrun clang -target "$FS_TARGET" -fobjc-arc -DFS_SELF_TEST -framework Foundation -framework QuartzCore -framework IOSurface -framework CoreGraphics -framework CoreMedia -framework AVFoundation -framework CoreImage -framework CoreVideo -framework ImageIO "$FS_SOURCE_DIR/Provider.m" "$FS_BUILD_DIR/MediaRenderer.o" "$FS_BUILD_DIR/PlaybackPolicy.o" -framework IOKit -framework ColorSync -o "$FS_BUILD_DIR/provider-self-test"
 "$FS_BUILD_DIR/provider-self-test" > "$FS_BUILD_DIR/provider-self-test.json"
-xcrun clang -target "$FS_TARGET" -fobjc-arc -framework Foundation -framework QuartzCore -framework IOSurface -framework CoreGraphics -framework CoreMedia -framework CoreGraphics -framework AVFoundation -framework CoreImage -framework CoreVideo -framework ImageIO "$FS_SOURCE_DIR/Provider.m" "$FS_BUILD_DIR/MediaRenderer.o" "$FS_BUILD_DIR/PlaybackPolicy.o" -framework IOKit -framework ColorSync "$FS_SOURCE_DIR/wire-proof.m" -o "$FS_BUILD_DIR/wire-proof"
+xcrun clang -target "$FS_TARGET" -fobjc-arc -DFS_WIRE_PROOF -framework Foundation -framework QuartzCore -framework IOSurface -framework CoreGraphics -framework CoreMedia -framework AVFoundation -framework CoreImage -framework CoreVideo -framework ImageIO "$FS_SOURCE_DIR/Provider.m" "$FS_BUILD_DIR/MediaRenderer.o" "$FS_BUILD_DIR/PlaybackPolicy.o" -framework IOKit -framework ColorSync "$FS_SOURCE_DIR/wire-proof.m" -o "$FS_BUILD_DIR/wire-proof"
 "$FS_BUILD_DIR/wire-proof" > "$FS_BUILD_DIR/wire-proof.json"
 cat "$FS_BUILD_DIR/provider-self-test.json" "$FS_BUILD_DIR/wire-proof.json"
 

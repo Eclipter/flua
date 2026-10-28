@@ -28,8 +28,6 @@ protocol OnlineCatalogPageLoading: Sendable {
     func load(_ request: OnlineCatalogPageRequest) async throws -> OnlineCatalogPage
 }
 
-protocol OnlineCatalogSourceCollectionLoading: OnlineCatalogPageLoading {}
-
 private struct OnlineCatalogPageFailure: Error, Sendable {
     var message: String
 }

@@ -72,6 +72,7 @@
         self.payload = object;
 }
 @end
+#if defined(FS_SELF_TEST) || defined(FS_MEDIA_TEST) || defined(FS_WIRE_PROOF)
 NSDictionary *FSInspectSnapshot(id snapshot) {
     FSXPCBridgeCoder *c = FSXPCBridgeCoder.new;
     [snapshot encodeWithCoder:c];
@@ -92,6 +93,7 @@ NSDictionary *FSInspectSnapshot(id snapshot) {
     CFRelease(surface);
     return out;
 }
+#endif
 static NSDictionary *FSJSON(id object, NSString *key) {
     FSCaptureCoder *c = FSCaptureCoder.new;
     [object encodeWithCoder:c];
@@ -106,6 +108,7 @@ static id FSBox(NSString *className, NSString *key, id value) {
     c.objects = @{key : d ?: NSData.data, @"files" : @[]};
     return [[NSClassFromString(className) alloc] initWithCoder:c];
 }
+#if defined(FS_SELF_TEST) || defined(FS_MEDIA_TEST) || defined(FS_WIRE_PROOF)
 id FSCreateRequest(NSDictionary *creation, NSArray<NSURL *> *files) {
     NSMutableArray *wrappers=NSMutableArray.new;
     for (NSURL *url in files) {
@@ -125,6 +128,7 @@ NSDictionary *FSInspectCreation(id request) {
     }
     return @{@"files":urls,@"payload":FSJSON(request,@"codable") ?: @{}};
 }
+#endif
 static NSError *FSError(NSString *message) {
     return [NSError errorWithDomain:@"org.flua.WallpaperPrototype"
                                code:1
@@ -350,7 +354,9 @@ static NSDictionary *FSBuildSettingsModel(BOOL libraryOnly) {
 NSDictionary *FSSettingsModel(void) {
     return FSBuildSettingsModel([NSBundle.mainBundle.infoDictionary[@"FLUALibraryOnly"] boolValue]);
 }
+#if defined(FS_SELF_TEST) || defined(FS_MEDIA_TEST) || defined(FS_WIRE_PROOF)
 NSDictionary *FSInspectSettings(id settings) { return FSJSON(settings, @"WallpaperSettingsViewModels"); }
+#endif
 @interface FSSession : NSObject
 @property id context;
 @property CALayer *root;
@@ -1037,8 +1043,6 @@ static BOOL FSPlaybackMonitoringSelfTest(void) {
     return disabled && still && inapplicable && enabled && responsive && disabledAgain && powerEnabled && powerReused && powerRefreshed && idleAgain && rearmed && hostSuspended && stopped;
 }
 
-#endif
-
 int FSProviderSelfTest(void) {
     @autoreleasepool {
         if (!FSLoad())
@@ -1147,7 +1151,6 @@ int FSProviderSelfTest(void) {
         return acquired && updated && invalidated && snapshotted && settingsOK && noFixtures && playbackPolicyOK && policyPrecedence && playbackMonitoringOK ? 0 : 2;
     }
 }
-#ifdef FS_SELF_TEST
 int main() { return FSProviderSelfTest(); }
 #endif
 

@@ -41,15 +41,15 @@ enum EditorFailure: LocalizedError {
 }
 
 enum VideoTools {
-    static func range(_ edit: VideoEdit, duration: Double, maximum: Double? = nil) throws -> CMTimeRange {
+    static func range(_ edit: VideoEdit, duration: Double) throws -> CMTimeRange {
         let end = min(edit.end ?? duration, duration)
         guard edit.start.isFinite, end.isFinite, edit.start >= 0, end - edit.start >= 0.1, edit.start < duration else { throw EditorFailure.invalidRange }
-        return CMTimeRange(start: CMTime(seconds: edit.start, preferredTimescale: 600), duration: CMTime(seconds: min(end - edit.start, maximum ?? duration), preferredTimescale: 600))
+        return CMTimeRange(start: CMTime(seconds: edit.start, preferredTimescale: 600), duration: CMTime(seconds: end - edit.start, preferredTimescale: 600))
     }
-    static func exporter(source: URL, edit: VideoEdit, preview: Bool = false) async throws -> AVAssetExportSession {
+    static func exporter(source: URL, edit: VideoEdit) async throws -> AVAssetExportSession {
         let asset = AVURLAsset(url: source)
         let duration = try await asset.load(.duration).seconds
-        let clip = try range(edit, duration: duration, maximum: preview ? 5 : nil)
+        let clip = try range(edit, duration: duration)
         let composition = AVMutableComposition()
         // Exported wallpaper video is explicitly silent; no audio track is carried over.
         for sourceTrack in try await asset.loadTracks(withMediaType: .video) {

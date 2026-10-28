@@ -1,6 +1,6 @@
 import Foundation
 
-struct OnlineCatalogPublicProviderService: OnlineCatalogSourceCollectionLoading {
+struct OnlineCatalogPublicProviderService: OnlineCatalogPageLoading {
     private static let pageSize = 24
 
     func load(_ request: OnlineCatalogPageRequest) async throws -> OnlineCatalogPage {

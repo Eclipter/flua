@@ -1,6 +1,20 @@
 import Foundation
 
-struct OnlineCatalogStockProviderService: OnlineCatalogSourceCollectionLoading, Sendable {
+private enum StockCatalogPagination {
+    static func validSearchQuery(_ url: URL, expected query: String) -> Bool {
+        let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
+        guard items.allSatisfy({ $0.name == "s" }), items.count <= 1 else { return false }
+        return items.first?.value == (query.isEmpty ? nil : query)
+    }
+
+    static func validPagePath(_ path: String) -> Bool {
+        if path == "/" { return true }
+        let parts = path.split(separator: "/")
+        return parts.count == 2 && parts[0] == "page" && parts[1].allSatisfy(\.isNumber)
+    }
+}
+
+struct OnlineCatalogStockProviderService: OnlineCatalogPageLoading, Sendable {
     private static let pageSize = 24
     private static let pageLimit = 8_000_000
 
@@ -71,7 +85,6 @@ struct OnlineCatalogStockProviderService: OnlineCatalogSourceCollectionLoading, 
             rows[index].itemID = postID
         }
         guard !rows.contains(where: { $0.itemID.isEmpty }) else { throw OnlineCatalogProviderError.invalidResponse }
-        rows.removeAll { $0.itemID.isEmpty }
         let items = rows.compactMap(CuteStockFootageParser.item)
         let next = CuteStockFootageParser.nextPage(in: html, current: pageURL, query: request.query)
         return OnlineCatalogPage(items: items, nextCursor: next?.absoluteString)
@@ -105,8 +118,8 @@ struct OnlineCatalogStockProviderService: OnlineCatalogSourceCollectionLoading, 
         guard let url = URL(string: cursor),
               ["dareful.com", "www.dareful.com"].contains(url.host?.lowercased() ?? ""),
               url.scheme == "https",
-              validPagePath(url.path),
-              validSearchQuery(url, expected: request.query) else {
+              StockCatalogPagination.validPagePath(url.path),
+              StockCatalogPagination.validSearchQuery(url, expected: request.query) else {
             throw OnlineCatalogProviderError.invalidResponse
         }
         return url
@@ -121,23 +134,11 @@ struct OnlineCatalogStockProviderService: OnlineCatalogSourceCollectionLoading, 
         guard let url = URL(string: cursor),
               ["cutestockfootage.com", "www.cutestockfootage.com"].contains(url.host?.lowercased() ?? ""),
               url.scheme == "https",
-              validPagePath(url.path),
-              validSearchQuery(url, expected: request.query) else {
+              StockCatalogPagination.validPagePath(url.path),
+              StockCatalogPagination.validSearchQuery(url, expected: request.query) else {
             throw OnlineCatalogProviderError.invalidResponse
         }
         return url
-    }
-
-    private static func validSearchQuery(_ url: URL, expected query: String) -> Bool {
-        let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
-        guard items.allSatisfy({ $0.name == "s" }), items.count <= 1 else { return false }
-        return items.first?.value == (query.isEmpty ? nil : query)
-    }
-
-    private static func validPagePath(_ path: String) -> Bool {
-        if path == "/" { return true }
-        let parts = path.split(separator: "/")
-        return parts.count == 2 && parts[0] == "page" && parts[1].allSatisfy(\.isNumber)
     }
 }
 
@@ -207,7 +208,7 @@ enum DarefulStockParser {
 
     static func nextPage(in html: String, current: URL, query: String) -> URL? {
         CatalogHTML.nextAnchorURL(in: html, page: current).flatMap { url in
-            guard isListingURL(url), validSearchQuery(url, expected: query) else { return nil }
+            guard isListingURL(url), StockCatalogPagination.validSearchQuery(url, expected: query) else { return nil }
             return url
         }
     }
@@ -222,19 +223,7 @@ enum DarefulStockParser {
     private static func isListingURL(_ url: URL) -> Bool {
         ["dareful.com", "www.dareful.com"].contains(url.host?.lowercased() ?? "")
             && url.scheme == "https"
-            && validPagePath(url.path)
-    }
-
-    private static func validPagePath(_ path: String) -> Bool {
-        if path == "/" { return true }
-        let parts = path.split(separator: "/")
-        return parts.count == 2 && parts[0] == "page" && parts[1].allSatisfy(\.isNumber)
-    }
-
-    private static func validSearchQuery(_ url: URL, expected query: String) -> Bool {
-        let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
-        guard items.allSatisfy({ $0.name == "s" }), items.count <= 1 else { return false }
-        return items.first?.value == (query.isEmpty ? nil : query)
+            && StockCatalogPagination.validPagePath(url.path)
     }
 
     private static func restricted(_ html: String) -> Bool {
@@ -403,8 +392,8 @@ enum CuteStockFootageParser {
         CatalogHTML.nextAnchorURL(in: html, page: current).flatMap { url in
             guard ["cutestockfootage.com", "www.cutestockfootage.com"].contains(url.host?.lowercased() ?? ""),
                   url.scheme == "https",
-                  validPagePath(url.path),
-                  validSearchQuery(url, expected: query) else { return nil }
+                  StockCatalogPagination.validPagePath(url.path),
+                  StockCatalogPagination.validSearchQuery(url, expected: query) else { return nil }
             return url
         }
     }
@@ -431,18 +420,6 @@ enum CuteStockFootageParser {
 
     private static func isSlug(_ value: String) -> Bool {
         !value.isEmpty && value.range(of: #"^[a-z0-9-]+$"#, options: .regularExpression) != nil
-    }
-
-    private static func validSearchQuery(_ url: URL, expected query: String) -> Bool {
-        let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
-        guard items.allSatisfy({ $0.name == "s" }), items.count <= 1 else { return false }
-        return items.first?.value == (query.isEmpty ? nil : query)
-    }
-
-    private static func validPagePath(_ path: String) -> Bool {
-        if path == "/" { return true }
-        let parts = path.split(separator: "/")
-        return parts.count == 2 && parts[0] == "page" && parts[1].allSatisfy(\.isNumber)
     }
 }
 

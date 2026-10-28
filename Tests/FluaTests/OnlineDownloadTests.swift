@@ -91,7 +91,6 @@ enum OnlineWallpaperItems {
             previewURL: URL(string: "https://source.example/preview.mp4")!,
             downloadRoute: .cuteStockFootage(pageURL: pageURL, videoID: "501489629"), fileExtension: "mp4")
     ]
-    static let unavailableSources: [UnavailableWallpaperSource] = []
 }
 
 @main struct OnlineDownloadTests {

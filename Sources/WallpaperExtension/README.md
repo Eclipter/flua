@@ -54,13 +54,15 @@ From the repository root, on a Mac with the Command Line Tools and a macOS 26 or
 make wallpaper-test
 ```
 
-Alternatively, run `./Sources/WallpaperExtension/build-and-test.sh`; an optional first argument selects the build directory. The script builds and ad-hoc signs a separate `.appex`, validates its entrypoints and signature/plist, and runs three standalone tests. It performs no extension registration or wallpaper-store edits.
+Alternatively, run `./Sources/WallpaperExtension/build-and-test.sh`; an optional first argument selects the build directory. The script builds and ad-hoc signs a separate `.appex`, validates its entrypoints and signature/plist, and runs four standalone tests. It performs no extension registration or wallpaper-store edits.
 
 The executable's Mach-O entrypoint must be `_NSExtensionMain`, selected by passing `-Xlinker -e -Xlinker _NSExtensionMain` to `swiftc`. ExtensionFoundation then invokes the retained Swift entrypoint. Starting directly at Swift `main` trapped during real-host initialization. `verify-entrypoint.sh` checks the bootstrap symbol and that Swift `main` survives linking; it rejects an executable built without the linker override.
 
 Verified on arm64 macOS 27.0.1, build 26A434, with the macOS 27 SDK. Deployment target 26.0 is declared but has not been tested on macOS 26. The script builds for the current Mac architecture; Intel execution is unverified.
 
 `provider-self-test` verifies selective fullscreen queries and timer intervals for enabled, disabled, static, preview, Lock Screen and host-suspended sessions, idle timer cancellation and rearming, reuse and expiry of cached power readings, power/fullscreen policy decisions, descriptor fallback, catalog precedence, preview immunity, direct acquire, locked/suspended state update, 64×64 snapshot, settings catalog, and invalidation. `wire-proof` verifies acquire, update, 32×32 IOSurface snapshot, desktop/screen-saver catalog, boxed download status, and invalidation through an anonymous NSXPC listener using Apple's runtime protocol and private secure-coding classes. `media-self-test` verifies image/video creation with nonempty Apple file wrappers, rendered-frame changes, looping, suspension/resume, snapshots and cleanup. It also verifies a power-policy pause holds video frames and time, preserves host suspension, and resumes the saved speed and Animated mode. It also truncates an active copied video in place, checks the failed-session fallback, restores the bytes to the same file and verifies recovery. It draws all eleven built-in scenes with no file, including motion, dimming, suspension and a locked Still frame. Each artwork scene is also acquired in Animated mode and must advance frames and change its snapshot. A 3840×2160 still scene publishes a 3840×2160 surface. These standalone tests run outside the host sandbox, and both wire-test endpoints live in the test process. Real-host results are recorded separately below; standalone success alone does not establish system-host acceptance.
+
+Request and snapshot inspection adapters are compiled only into standalone test binaries.
 
 The build script writes the bundle and test results under `Sources/WallpaperExtension/Built/` by default. Sources and the bundled thumbnail are original Flua material.
 

@@ -1,8 +1,6 @@
 import Foundation
 
 struct OnlineCatalogProviderService: OnlineCatalogPageLoading {
-    private static let defaultPageSize = 24
-
     func load(_ request: OnlineCatalogPageRequest) async throws -> OnlineCatalogPage {
         try Task.checkCancellation()
         switch request.source {

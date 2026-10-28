@@ -222,19 +222,8 @@ enum OnlineWallpaperDownloadRoute: Equatable, Sendable {
     }
 }
 
-struct UnavailableWallpaperSource: Identifiable, Equatable, Sendable {
-    var id: String
-    var sourceURL: URL
-    var reason: String
-}
-
 enum OnlineCatalog {
     static let items = OnlineWallpaperItems.all
-    static let unavailableSources = OnlineWallpaperItems.unavailableSources
-
-    static func item(id: String) -> OnlineWallpaper? {
-        items.first { $0.id == id }
-    }
 }
 
 enum OnlineWallpaperError: LocalizedError {

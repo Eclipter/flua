@@ -2,10 +2,6 @@
 
 Current capabilities and limitations are listed in [FEATURES.md](FEATURES.md). This plan contains only unresolved implementation and validation work. Remove completed tasks instead of keeping checked entries; record verified capabilities and evidence in FEATURES.md and the relevant documentation. The live online wallpaper catalog is the sole network feature; other network services, community features, profiles and third-party runtime dependencies remain out of scope.
 
-## NASA SVS API reachability
-
-- Verify live NASA SVS search and item loading from a network that can reach the API. The app’s connection error and Retry state were verified here, but its native requests fail with `NSURLErrorDomain -1004`. See [online wallpaper source evidence](ONLINE_WALLPAPERS.md).
-
 ## Real-system validation
 
 Use disposable libraries and matching catalog builds. Follow the [integration and rollback procedure](DEVELOPMENT.md#lock-screen-integration-checks); standalone tests and application smoke do not establish system playback behavior.

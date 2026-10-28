@@ -5,6 +5,7 @@ Requires macOS 27+, Apple Silicon and Apple Swift command-line tools (`xcode-sel
 ```sh
 make build          # Flua.app with the wallpaper extension, ad-hoc signature
 make lint           # Swift whitespace policy, no source rewriting
+make clean          # remove SwiftPM, app, release and standalone provider build outputs
 make test           # model, library path, package security tests
 make smoke          # builds Flua.app for an isolated library, tests, then exits
 make run            # open the app
