@@ -615,6 +615,7 @@ import UniformTypeIdentifiers
         section = "all"
     }
     func remove(_ w: Wallpaper) {
+        guard !nativeSetupBusy else { error = "Wait for the wallpaper operation to finish before removing wallpapers."; return }
         let previousAssignments = state.displays
         let previousState = state
         state.remove(w.id)
@@ -888,6 +889,7 @@ import UniformTypeIdentifiers
         return task
     }
     func undoImport() {
+        guard !nativeSetupBusy else { error = "Wait for the wallpaper operation to finish before removing wallpapers."; return }
         for id in lastImportIDs {
             if let wallpaper = state.item(id) { remove(wallpaper) }
         }

@@ -6,8 +6,8 @@ Current capabilities and limitations are listed in [FEATURES.md](FEATURES.md). T
 
 Keep the audit numbers below when referring to these tasks. Native coordination reproductions used a stubbed OS boundary; they do not establish real-system behavior.
 
-4. **P2 — Handle removal during the first native Apply.** Removal can run before Apply records active playback, so it queues no cleanup; Apply then marks a removed assignment active. Guard removal during native transactions or reconcile mutations before accepting their completion. Add a deterministic test with a delayed stubbed Apply, asserting that removal cannot leave active playback without a saved assignment or cleanup request; verify OS restoration separately with disposable fixtures.
-5. **P2 — Verify native edit refresh after Quit.** Separately verify saved trim and cover settings in real native playback after Quit, using a disposable matching-catalog build and a reliably restorable system baseline. Blocked on the current host: the active Flua wallpaper provider runs from a deleted build path, so a host restart may prevent restoring its playback.
+4. **P2 — Verify native restoration after removal.** Verify OS restoration separately with disposable fixtures. Blocked on the current host: the prior Flua wallpaper provider ran from a deleted build path and has since exited; reliable restoration of that playback has not been established.
+5. **P2 — Verify native edit refresh after Quit.** Separately verify saved trim and cover settings in real native playback after Quit, using a disposable matching-catalog build and a reliably restorable system baseline. Blocked on the current host: the prior Flua wallpaper provider ran from a deleted build path and has since exited; reliable restoration of that playback has not been established.
 
 ## Real-system validation
 
