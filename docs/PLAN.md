@@ -2,6 +2,16 @@
 
 Current capabilities and limitations are listed in [FEATURES.md](FEATURES.md). This plan contains only unresolved implementation and validation work. Remove completed tasks instead of keeping checked entries; record verified capabilities and evidence in FEATURES.md and the relevant documentation. The live online wallpaper catalog is the sole network feature; other network services, community features, profiles and third-party runtime dependencies remain out of scope.
 
+## Audit follow-ups (2026-10-28)
+
+Keep the audit numbers below when referring to these tasks. Native coordination reproductions used a stubbed OS boundary; they do not establish real-system behavior.
+
+1. **P1 — Preserve record identity during download repair.** `Library.importMedia` retains an array index across asynchronous copying and inspection; removing a preceding wallpaper can overwrite another record or crash. Resolve the current record by ID after the asynchronous work and merge repairs into its latest value. Add regression tests for concurrent removal and editing, checking both memory and the saved manifest.
+2. **P1 — Keep pending imports outside committed state.** A batch exposes records before its final save, allowing another save to commit them; a later import rollback can delete their already-committed media. Stage pending records privately until committing them and never delete media referenced by a successful commit. Test an intervening save followed by a failed final import save, then reload and verify every persisted media reference.
+3. **P2 — Roll back failed removal and playlist saves.** These mutations ignore save failure, leaving memory and disk inconsistent; removal also continues thumbnail cleanup and native refresh scheduling. Restore the previous state on failure and perform follow-up actions only after a successful commit. Add failure tests covering wallpaper removal, playlist mutations, assignments, cleanup intent and reload consistency.
+4. **P2 — Handle removal during the first native Apply.** Removal can run before Apply records active playback, so it queues no cleanup; Apply then marks a removed assignment active. Guard removal during native transactions or reconcile mutations before accepting their completion. Add a deterministic test with a delayed stubbed Apply, asserting that removal cannot leave active playback without a saved assignment or cleanup request; verify OS restoration separately with disposable fixtures.
+5. **P2 — Drain queued native refreshes before Quit.** Termination waits for active native work and catalog writes but can exit during the 0.5-second refresh debounce. Flush pending refreshes before allowing termination. Test an edit followed immediately by the shutdown drain with a stubbed native boundary, ensuring refresh completion precedes exit; separately verify saved trim and cover settings in real native playback after Quit.
+
 ## Real-system validation
 
 Use disposable libraries and matching catalog builds. Follow the [integration and rollback procedure](DEVELOPMENT.md#lock-screen-integration-checks); standalone tests and application smoke do not establish system playback behavior.

@@ -20,6 +20,7 @@
 @property NSArray *fileWrappers;
 @property NSArray<NSURL *> *accessedURLs;
 @property NSUInteger frameCount;
+@property NSUInteger timerCallbackCount;
 @property BOOL suspended;
 @property BOOL disposed;
 @property NSString *fit;
@@ -215,11 +216,19 @@ static double FSClamped(id value, double fallback, double lo, double hi) {
     } else {
         _looper = [AVPlayerLooper playerLooperWithPlayer:_player templateItem:item];
     }
+}
+- (void)startVideoTimer {
+    if (!_player || _timer || _disposed) return;
     __weak FSMediaRenderer *weakSelf = self;
     _timer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, dispatch_get_main_queue());
     dispatch_source_set_timer(_timer, dispatch_time(DISPATCH_TIME_NOW, 0), NSEC_PER_SEC / 30, NSEC_PER_SEC / 300);
     dispatch_source_set_event_handler(_timer, ^{ [weakSelf tick]; });
     dispatch_resume(_timer);
+}
+- (void)stopVideoTimer {
+    if (!_timer) return;
+    dispatch_source_cancel(_timer);
+    _timer = nil;
 }
 - (BOOL)applySurfaceMode:(BOOL)force error:(NSError **)error {
     BOOL still = [self surfaceModeIsStill];
@@ -243,11 +252,15 @@ static double FSClamped(id value, double fallback, double lo, double hi) {
     if (![_kind isEqual:@"video"]) return YES;
     if (still) {
         [_player pause];
+        [self stopVideoTimer];
         return [self drawVideoFrameAtTime:_stillTime error:error];
     }
     [self ensureVideoPlayer];
     if (force && ![self drawVideoFrameAtTime:(_hasTrim ? _trimStart : 0) error:error]) return NO;
-    if (!_suspended) [_player playImmediatelyAtRate:_speed];
+    if (!_suspended) {
+        [self startVideoTimer];
+        [_player playImmediatelyAtRate:_speed];
+    }
     return YES;
 }
 - (void)setPresentation:(NSString *)presentation {
@@ -261,6 +274,7 @@ static double FSClamped(id value, double fallback, double lo, double hi) {
         _looper.status == AVPlayerLooperStatusFailed;
 }
 - (void)tick {
+    _timerCallbackCount++;
     if (_disposed || _suspended || _holdsStill) return;
     if (_player.currentItem.status == AVPlayerItemStatusReadyToPlay && fabs(_player.rate - _speed) > 0.05)
         _player.rate = _speed;
@@ -315,8 +329,13 @@ static double FSClamped(id value, double fallback, double lo, double hi) {
         return;
     }
     _suspended=suspended;
-    if (_holdsStill || suspended) [_player pause];
-    else [_player playImmediatelyAtRate:_speed];
+    if (_holdsStill || suspended) {
+        [_player pause];
+        [self stopVideoTimer];
+    } else {
+        [self startVideoTimer];
+        [_player playImmediatelyAtRate:_speed];
+    }
 }
 - (void)startSceneClock {
     if (_timer || _disposed) return;

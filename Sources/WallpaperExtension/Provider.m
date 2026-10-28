@@ -1155,6 +1155,10 @@ int main() { return FSProviderSelfTest(); }
 #endif
 
 #ifdef FS_MEDIA_TEST
+@interface FSMediaRenderer (MediaTest)
+@property(readonly) NSUInteger timerCallbackCount;
+@end
+
 static void FSPump(double seconds) {
     NSDate *deadline=[NSDate dateWithTimeIntervalSinceNow:seconds];
     while(deadline.timeIntervalSinceNow>0) [NSRunLoop.currentRunLoop runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.01]];
@@ -1236,9 +1240,12 @@ int main(int argc,const char **argv) { @autoreleasepool {
         NSInteger loops=session.renderer.loopCount;NSUInteger finalFrames=session.renderer.frameCount;
         BOOL resumed=![kind isEqual:@"video"] || finalFrames>pausedFrames;
         [provider invalidateWithId:ident reply:^(NSError *error){}];
+        NSUInteger disposedCallbacks=session.renderer.timerCallbackCount;
+        FSPump(0.15);
+        BOOL timerStoppedOnDispose=![kind isEqual:@"video"] || session.renderer.timerCallbackCount==disposedCallbacks;
         BOOL disposed=session.renderer.scopedFileCount==0 && session.renderer.activeScopeCount==0 && provider.sessions.count==0;
-        BOOL success=acquired && wrappers && before && after && paused && resumed && disposed && (![kind isEqual:@"video"] || (motion && loops>=1));
-        results[kind]=@{@"ok":@(success),@"acquired":@(acquired),@"nonemptyScopedFiles":@(wrappers),@"motion":@(motion),@"suspendedStable":@(paused),@"resumed":@(resumed),@"loopCount":@(loops),@"frames":@(finalFrames),@"disposed":@(disposed),@"error":errorText,@"snapshot":after ?: @{}};
+        BOOL success=acquired && wrappers && before && after && paused && resumed && timerStoppedOnDispose && disposed && (![kind isEqual:@"video"] || (motion && loops>=1));
+        results[kind]=@{@"ok":@(success),@"acquired":@(acquired),@"nonemptyScopedFiles":@(wrappers),@"motion":@(motion),@"suspendedStable":@(paused),@"resumed":@(resumed),@"loopCount":@(loops),@"frames":@(finalFrames),@"timerStoppedOnDispose":@(timerStoppedOnDispose),@"disposed":@(disposed),@"error":errorText,@"snapshot":after ?: @{}};
     }
     NSURL *stillFile = [dir URLByAppendingPathComponent:@"FluaStill.png"];
     NSURL *motionFile = [dir URLByAppendingPathComponent:@"FluaMotion.mov"];
@@ -1471,32 +1478,42 @@ int main(int argc,const char **argv) { @autoreleasepool {
     modeUpdate[@"presentationMode"]=@{@"default":@{}}; modeUpdate[@"activityState"]=@{@"suspended":@{}};
     [provider updateWithId:ident request:FSBox(@"WallpaperUpdateRequestXPC",@"WallpaperUpdateRequest",modeUpdate) reply:^(NSError *error){}];
     double heldTime=tunedSession.renderer.playbackTime; NSUInteger heldFrames=tunedSession.renderer.frameCount;
+    NSUInteger heldCallbacks=tunedSession.renderer.timerCallbackCount;
     FSPump(0.25);
-    BOOL suspendedHoldsMode=!tunedSession.renderer.holdsStill && tunedSession.renderer.playbackRate == 0 && tunedSession.renderer.frameCount == heldFrames && fabs(tunedSession.renderer.playbackTime - heldTime) < 0.05;
+    BOOL suspendedHoldsMode=!tunedSession.renderer.holdsStill && tunedSession.renderer.playbackRate == 0 && tunedSession.renderer.frameCount == heldFrames && tunedSession.renderer.timerCallbackCount == heldCallbacks && fabs(tunedSession.renderer.playbackTime - heldTime) < 0.05;
     modeUpdate[@"activityState"]=@{@"active":@{}};
     [provider updateWithId:ident request:FSBox(@"WallpaperUpdateRequestXPC",@"WallpaperUpdateRequest",modeUpdate) reply:^(NSError *error){}];
     FSPump(0.3);
-    BOOL resumedSameMode=!tunedSession.renderer.holdsStill && tunedSession.renderer.frameCount > heldFrames && tunedSession.renderer.playbackRate > 1;
+    BOOL resumedSameMode=!tunedSession.renderer.holdsStill && tunedSession.renderer.frameCount > heldFrames && tunedSession.renderer.timerCallbackCount > heldCallbacks && tunedSession.renderer.playbackRate > 1;
     modeUpdate[@"presentationMode"]=@{@"locked":@{}};
     [provider updateWithId:ident request:FSBox(@"WallpaperUpdateRequestXPC",@"WallpaperUpdateRequest",modeUpdate) reply:^(NSError *error){}];
     NSUInteger stillFrames=tunedSession.renderer.frameCount;
+    NSUInteger stillCallbacks=tunedSession.renderer.timerCallbackCount;
     FSPump(0.35);
-    BOOL lockedStill=tunedSession.renderer.holdsStill && tunedSession.renderer.playbackRate == 0 && tunedSession.renderer.frameCount == stillFrames;
+    BOOL lockedStill=tunedSession.renderer.holdsStill && tunedSession.renderer.playbackRate == 0 && tunedSession.renderer.frameCount == stillFrames && tunedSession.renderer.timerCallbackCount == stillCallbacks;
     modeUpdate[@"presentationMode"]=@{@"idle":@{}};
     [provider updateWithId:ident request:FSBox(@"WallpaperUpdateRequestXPC",@"WallpaperUpdateRequest",modeUpdate) reply:^(NSError *error){}];
     NSUInteger idleFrames=tunedSession.renderer.frameCount;
+    NSUInteger idleCallbacks=tunedSession.renderer.timerCallbackCount;
     FSPump(0.3);
-    BOOL idleUsesLock=tunedSession.renderer.holdsStill && tunedSession.renderer.playbackRate==0 && tunedSession.renderer.frameCount==idleFrames;
+    BOOL idleUsesLock=tunedSession.renderer.holdsStill && tunedSession.renderer.playbackRate==0 && tunedSession.renderer.frameCount==idleFrames && tunedSession.renderer.timerCallbackCount==idleCallbacks;
     modeUpdate[@"activityState"]=@{@"suspended":@{}};
     [provider updateWithId:ident request:FSBox(@"WallpaperUpdateRequestXPC",@"WallpaperUpdateRequest",modeUpdate) reply:^(NSError *error){}];
     modeUpdate[@"activityState"]=@{@"active":@{}};
     [provider updateWithId:ident request:FSBox(@"WallpaperUpdateRequestXPC",@"WallpaperUpdateRequest",modeUpdate) reply:^(NSError *error){}];
     FSPump(0.3);
-    BOOL idleResumeStill=tunedSession.renderer.holdsStill && tunedSession.renderer.playbackRate==0 && tunedSession.renderer.frameCount==idleFrames;
+    BOOL idleResumeStill=tunedSession.renderer.holdsStill && tunedSession.renderer.playbackRate==0 && tunedSession.renderer.frameCount==idleFrames && tunedSession.renderer.timerCallbackCount==idleCallbacks;
+    modeUpdate[@"activityState"]=@{@"suspended":@{}};
     modeUpdate[@"presentationMode"]=@{@"default":@{}};
     [provider updateWithId:ident request:FSBox(@"WallpaperUpdateRequestXPC",@"WallpaperUpdateRequest",modeUpdate) reply:^(NSError *error){}];
+    NSUInteger animatedSuspendedFrames=tunedSession.renderer.frameCount;
+    NSUInteger animatedSuspendedCallbacks=tunedSession.renderer.timerCallbackCount;
     FSPump(0.3);
-    BOOL desktopPlays=!tunedSession.renderer.holdsStill && tunedSession.renderer.frameCount > stillFrames;
+    BOOL animatedSuspended=!tunedSession.renderer.holdsStill && tunedSession.renderer.playbackRate==0 && tunedSession.renderer.frameCount==animatedSuspendedFrames && tunedSession.renderer.timerCallbackCount==animatedSuspendedCallbacks;
+    modeUpdate[@"activityState"]=@{@"active":@{}};
+    [provider updateWithId:ident request:FSBox(@"WallpaperUpdateRequestXPC",@"WallpaperUpdateRequest",modeUpdate) reply:^(NSError *error){}];
+    FSPump(0.3);
+    BOOL desktopPlays=!tunedSession.renderer.holdsStill && tunedSession.renderer.frameCount > animatedSuspendedFrames && tunedSession.renderer.timerCallbackCount > animatedSuspendedCallbacks;
     if (provider.playbackTimer) dispatch_source_cancel(provider.playbackTimer);
     provider.playbackTimer = nil;
     NSDictionary *savedPolicy = FSActivePlaybackPolicy;
@@ -1553,8 +1570,8 @@ int main(int argc,const char **argv) { @autoreleasepool {
     BOOL fitDiffers=filled && fitted && ![filled[@"checksum"] isEqual:fitted[@"checksum"]] && fitSum < 30 && fillSum > 80;
     [provider invalidateWithId:ident reply:^(NSError *error){}];
     BOOL dimOK=bright.count > 2 && dark.count > 2 && [bright[2] intValue] > 100 && [dark[2] intValue] < [bright[2] intValue];
-    BOOL playbackOK=powerPaused && hostPauseRetained && powerResumed && tunedAcquired && inTrim && moved && rate && suspendedHoldsMode && resumedSameMode && lockedStill && idleUsesLock && idleResumeStill && desktopPlays && sourceUntouched && dimOK && fitDiffers;
-    results[@"playback"]=@{@"ok":@(playbackOK),@"powerPaused":@(powerPaused),@"hostPauseRetained":@(hostPauseRetained),@"powerResumed":@(powerResumed),@"acquired":@(tunedAcquired),@"inTrim":@(inTrim),@"moved":@(moved),@"rate":@(rate),@"times":times,@"suspendedHoldsMode":@(suspendedHoldsMode),@"resumedSameMode":@(resumedSameMode),@"lockedStill":@(lockedStill),@"idleUsesLock":@(idleUsesLock),@"idleResumeStill":@(idleResumeStill),@"desktopPlays":@(desktopPlays),@"sourceUntouched":@(sourceUntouched),@"dimming":@(dimOK),@"fit":@(fitDiffers),@"bright":bright ?: @[],@"dark":dark ?: @[],@"fillSum":@(fillSum),@"fitSum":@(fitSum)};
+    BOOL playbackOK=powerPaused && hostPauseRetained && powerResumed && tunedAcquired && inTrim && moved && rate && suspendedHoldsMode && resumedSameMode && lockedStill && idleUsesLock && idleResumeStill && animatedSuspended && desktopPlays && sourceUntouched && dimOK && fitDiffers;
+    results[@"playback"]=@{@"ok":@(playbackOK),@"powerPaused":@(powerPaused),@"hostPauseRetained":@(hostPauseRetained),@"powerResumed":@(powerResumed),@"acquired":@(tunedAcquired),@"inTrim":@(inTrim),@"moved":@(moved),@"rate":@(rate),@"times":times,@"suspendedHoldsMode":@(suspendedHoldsMode),@"resumedSameMode":@(resumedSameMode),@"lockedStill":@(lockedStill),@"idleUsesLock":@(idleUsesLock),@"idleResumeStill":@(idleResumeStill),@"animatedSuspended":@(animatedSuspended),@"desktopPlays":@(desktopPlays),@"sourceUntouched":@(sourceUntouched),@"dimming":@(dimOK),@"fit":@(fitDiffers),@"bright":bright ?: @[],@"dark":dark ?: @[],@"fillSum":@(fillSum),@"fitSum":@(fitSum)};
     creation[@"destination"]=[@{@"size":@[@96,@64],@"scaleFactor":@1,@"colorSpace":creation[@"destination"][@"colorSpace"]} mutableCopy];
     creation[@"presentationMode"]=@{@"default":@{}};
     creation[@"activityState"]=@{@"active":@{}};
