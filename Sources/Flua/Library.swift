@@ -41,6 +41,9 @@ import UniformTypeIdentifiers
     var importTasks = Set<UUID>()
     private var pendingCatalogImports = Set<String>()
     var onChange: (() -> Void)?
+    var mediaInspectionLoader: @Sendable (URL, String, Double) async -> MediaInspection = {
+        await MediaInspection.load(url: $0, kind: $1, thumbnail: $2)
+    }
 
     init(root: URL, systemPlaybackEnabled: Bool = true) throws {
         self.systemPlaybackEnabled = systemPlaybackEnabled
@@ -720,12 +723,33 @@ import UniformTypeIdentifiers
                     try await Task.detached(priority: .userInitiated) { try FileManager.default.copyItem(at: mediaURL, to: dest) }.value
                     stagedFile = dest
                     guard !Task.isCancelled else { try? FileManager.default.removeItem(at: dest); stagedFile = nil; break }
-                    var w = existingWallpaper ?? Wallpaper(id: id,
+                    let existingVideoEdit = existingWallpaper.flatMap { original in
+                        self.state.item(original.id)?.videoEdit ?? original.videoEdit
+                    }
+                    let packageThumbnail = (package?.manifest["thumbnailTimestamp"] as? Double).flatMap {
+                        $0.isFinite && $0 >= 0 ? $0 : nil
+                    }
+                    let thumbnail = packageThumbnail ?? existingVideoEdit?.thumbnail ?? 0
+                    let inspectMedia = self.mediaInspectionLoader
+                    let inspection = await Task.detached(priority: .utility) {
+                        await inspectMedia(dest, kind, thumbnail)
+                    }.value
+                    guard !Task.isCancelled else { try? FileManager.default.removeItem(at: dest); stagedFile = nil; break }
+                    let currentIndex: Int?
+                    if let existingWallpaper {
+                        currentIndex = self.state.wallpapers.firstIndex(where: { $0.id == existingWallpaper.id })
+                        guard currentIndex != nil else {
+                            try? FileManager.default.removeItem(at: dest)
+                            stagedFile = nil
+                            failures.append("\(url.lastPathComponent): The wallpaper was removed before its repair completed.")
+                            continue
+                        }
+                    } else {
+                        currentIndex = nil
+                    }
+                    var w = currentIndex.map { self.state.wallpapers[$0] } ?? Wallpaper(id: id,
                         title: titleOverride ?? package?.title ?? url.deletingPathExtension().lastPathComponent,
                         kind: kind, file: file, sourceAttribution: attribution)
-                    w.kind = kind
-                    w.file = file
-                    w.sourceAttribution = attribution
                     if let package {
                         w.tags = package.tags
                         let manifest = package.manifest
@@ -735,24 +759,20 @@ import UniformTypeIdentifiers
                                                    creditURL: manifest["linkURL"] as? String ?? "",
                                                    color: manifest["color"] as? String,
                                                    motion: manifest["motionIntensity"] as? String)
-                        if let timestamp = manifest["thumbnailTimestamp"] as? Double, timestamp.isFinite, timestamp >= 0 {
-                            w.videoEdit = VideoEdit(thumbnail: timestamp)
-                        }
+                        if let packageThumbnail { w.videoEdit = VideoEdit(thumbnail: packageThumbnail) }
                     }
-                    let thumbnail = w.videoEdit?.thumbnail ?? 0
-                    let inspection = await Task.detached(priority: .utility) {
-                        await MediaInspection.load(url: dest, kind: kind, thumbnail: thumbnail)
-                    }.value
-                    guard !Task.isCancelled else { try? FileManager.default.removeItem(at: dest); stagedFile = nil; break }
                     w.mediaFacts = inspection.facts
-                    w.dateAdded = existingWallpaper?.dateAdded ?? Date()
+                    if currentIndex == nil { w.dateAdded = Date() }
                     if w.metadata == nil { w.metadata = SceneMetadata() }
                     if w.metadata?.color == nil { w.metadata?.color = inspection.color }
                     guard !Task.isCancelled else { try? FileManager.default.removeItem(at: dest); stagedFile = nil; break }
                     createdFiles.append(dest)
-                    if let existingIndex, let existingWallpaper {
-                        replacedWallpapers[id] = existingWallpaper
-                        self.state.wallpapers[existingIndex] = w
+                    w.kind = kind
+                    w.file = file
+                    w.sourceAttribution = attribution
+                    if let currentIndex {
+                        replacedWallpapers[id] = self.state.wallpapers[currentIndex]
+                        self.state.wallpapers[currentIndex] = w
                     } else {
                         self.state.wallpapers.append(w)
                         newIDs.insert(id)

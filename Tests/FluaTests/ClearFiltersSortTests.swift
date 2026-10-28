@@ -15,6 +15,31 @@ extension Bundle {
     static var module: Bundle { Bundle.main }
 }
 
+actor ImportInspectionGate {
+    private var started = false
+    private var startedWaiters: [CheckedContinuation<Void, Never>] = []
+    private var inspection: CheckedContinuation<Void, Never>?
+
+    func hold() async {
+        await withCheckedContinuation { continuation in
+            started = true
+            startedWaiters.forEach { $0.resume() }
+            startedWaiters.removeAll()
+            inspection = continuation
+        }
+    }
+
+    func waitUntilStarted() async {
+        if started { return }
+        await withCheckedContinuation { startedWaiters.append($0) }
+    }
+
+    func release() {
+        inspection?.resume()
+        inspection = nil
+    }
+}
+
 @main struct ClearFiltersSortTests {
     @MainActor
     static func waitForNativePublication(_ library: Library) async {
@@ -695,6 +720,75 @@ extension Bundle {
             options: [AVURLAssetReferenceRestrictionsKey: AVAssetReferenceRestrictions.forbidAll.rawValue])
         let repairedTracks = try await asset.loadTracks(withMediaType: .video)
         precondition(!repairedTracks.isEmpty, "Re-download was not playable media")
+
+        let concurrentRoot = root.appendingPathComponent("concurrent-repair", isDirectory: true)
+        let concurrentLibrary = try Library(root: concurrentRoot, systemPlaybackEnabled: false)
+        concurrentLibrary.tick?.invalidate()
+        var preceding = Wallpaper(id: "preceding", title: "Preceding", kind: "aurora")
+        var concurrentRepair = Wallpaper(id: "concurrent-repair", title: "Original title", kind: "video",
+            file: "missing.mov", tags: "original tags", metadata: SceneMetadata(details: "original details"),
+            dateAdded: Date(timeIntervalSince1970: 84), sourceAttribution: attribution)
+        var concurrentAttribution = attribution
+        concurrentAttribution.catalogItemID = "nasa-concurrent-repair"
+        concurrentRepair.sourceAttribution = concurrentAttribution
+        concurrentLibrary.state.wallpapers = [preceding, concurrentRepair]
+        precondition(concurrentLibrary.save())
+        let inspectionGate = ImportInspectionGate()
+        concurrentLibrary.mediaInspectionLoader = { url, kind, thumbnail in
+            await inspectionGate.hold()
+            return await MediaInspection.load(url: url, kind: kind, thumbnail: thumbnail)
+        }
+        concurrentLibrary.importMedia([source], sourceAttribution: concurrentAttribution)
+        await inspectionGate.waitUntilStarted()
+        preceding.title = "Removed while repair was suspended"
+        concurrentLibrary.remove(preceding)
+        concurrentRepair.title = "Edited during repair"
+        concurrentRepair.tags = "edited tags"
+        concurrentRepair.favorite = true
+        concurrentRepair.metadata?.details = "edited details"
+        precondition(concurrentLibrary.edit(concurrentRepair), "Concurrent edit did not commit")
+        await inspectionGate.release()
+        await waitForImport(concurrentLibrary)
+        let concurrentResult = concurrentLibrary.state.wallpapers
+        precondition(concurrentResult.count == 1 && concurrentResult[0].id == concurrentRepair.id,
+            "Repair used the stale array index after removing a preceding wallpaper")
+        precondition(concurrentResult[0].title == "Edited during repair" && concurrentResult[0].tags == "edited tags"
+            && concurrentResult[0].favorite && concurrentResult[0].metadata?.details == "edited details",
+            "Repair overwrote edits made while it was suspended")
+        precondition(concurrentResult[0].file != concurrentRepair.file && concurrentResult[0].dateAdded == concurrentRepair.dateAdded,
+            "Repair did not update only its media fields")
+        let concurrentManifest = try LibraryDisk(root: concurrentRoot).load()
+        precondition(concurrentManifest.wallpapers == concurrentResult,
+            "Concurrent repair result differs from the saved manifest")
+
+        let removedRoot = root.appendingPathComponent("removed-repair", isDirectory: true)
+        let removedLibrary = try Library(root: removedRoot, systemPlaybackEnabled: false)
+        removedLibrary.tick?.invalidate()
+        var removedRepair = concurrentRepair
+        removedRepair.id = "removed-repair"
+        var removedAttribution = concurrentAttribution
+        removedAttribution.catalogItemID = "nasa-removed-repair"
+        removedRepair.sourceAttribution = removedAttribution
+        removedLibrary.state.wallpapers = [removedRepair]
+        precondition(removedLibrary.save())
+        let removalGate = ImportInspectionGate()
+        removedLibrary.mediaInspectionLoader = { url, kind, thumbnail in
+            await removalGate.hold()
+            return await MediaInspection.load(url: url, kind: kind, thumbnail: thumbnail)
+        }
+        removedLibrary.importMedia([source], sourceAttribution: removedAttribution)
+        await removalGate.waitUntilStarted()
+        removedLibrary.remove(removedRepair)
+        await removalGate.release()
+        await waitForImport(removedLibrary)
+        precondition(removedLibrary.state.wallpapers.isEmpty,
+            "Repair resurrected a wallpaper removed while inspection was suspended")
+        let removedManifest = try LibraryDisk(root: removedRoot).load()
+        let remainingAssets = try FileManager.default.contentsOfDirectory(at: removedLibrary.disk.assets,
+            includingPropertiesForKeys: nil)
+        precondition(removedManifest.wallpapers.isEmpty, "Removed repair remained in the saved manifest")
+        precondition(remainingAssets.isEmpty, "Cancelled repair left an unreferenced media file")
+
         let unsafeRoot = root.appendingPathComponent("UnsafeLibrary", isDirectory: true)
         let unsafeLibrary = try Library(root: unsafeRoot, systemPlaybackEnabled: false)
         var unsafeAttribution = attribution
