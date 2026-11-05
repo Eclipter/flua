@@ -110,27 +110,9 @@ struct OnlineDownloadsView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
-            Text("Browse licensed videos and add them directly to your library.")
-                .font(.callout).foregroundStyle(.secondary)
-            HStack(spacing: 12) {
-                TextField("Search videos", text: $browser.searchText)
-                    .textFieldStyle(.roundedBorder)
-                    .onSubmit { runSearch() }
-                Picker("Source", selection: $browser.selectedSource) {
-                    Text("All sources").tag(OnlineWallpaperSource?.none)
-                    ForEach(OnlineWallpaperSource.allCases) { source in
-                        Text(source.title).tag(Optional(source))
-                    }
-                }
-                .frame(width: 230)
-                Button("Search", action: runSearch).fluaProminentButton()
-                if browser.isLoading {
-                    Button("Cancel") { browser.cancel() }.fluaGlassButton()
-                }
-            }
             VStack(alignment: .leading, spacing: 10) {
-                Text("More Wallpaper Sources").font(.headline)
-                Text("Licensing restrictions prevent us from including some free wallpapers with Flua. Download images or videos from these sites yourself, then add them to Flua.")
+                Text("Find a Wallpaper").font(.headline).accessibilityAddTraits(.isHeader)
+                Text("Download an image or video you’d like to use as your wallpaper, then import it into Flua.")
                     .font(.callout).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 HStack(spacing: 16) {
@@ -140,11 +122,33 @@ struct OnlineDownloadsView: View {
                 }
                 .font(.callout)
                 Button("Import…") { library.chooseMedia() }
-                    .fluaGlassButton().disabled(library.importing)
+                    .fluaProminentButton().disabled(library.importing)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(14)
             .fluaGlass(in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Sample Clips").font(.headline).accessibilityAddTraits(.isHeader)
+                Text("Preview stock and archive footage to try video wallpapers in Flua.")
+                    .font(.callout).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                HStack(spacing: 12) {
+                    TextField("Search clips", text: $browser.searchText)
+                        .textFieldStyle(.roundedBorder)
+                        .onSubmit { runSearch() }
+                    Picker("Source", selection: $browser.selectedSource) {
+                        Text("All sources").tag(OnlineWallpaperSource?.none)
+                        ForEach(OnlineWallpaperSource.allCases) { source in
+                            Text(source.title).tag(Optional(source))
+                        }
+                    }
+                    .frame(width: 230)
+                    Button("Search", action: runSearch).fluaGlassButton()
+                    if browser.isLoading {
+                        Button("Cancel") { browser.cancel() }.fluaGlassButton()
+                    }
+                }
+            }
             if browser.isLoading && browser.items.isEmpty {
                 ProgressView("Loading source collections…")
                     .frame(maxWidth: .infinity, minHeight: 220)
@@ -253,7 +257,7 @@ struct OnlineDownloadsView: View {
                 .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                 .overlay(alignment: .bottomTrailing) {
                     if item.previewUnavailableReason == nil {
-                        Button { viewState.previewing = item.id } label: { Label("Preview", systemImage: "play.fill") }
+                        Button { viewState.previewing = item.id } label: { Label("Play Clip", systemImage: "play.fill") }
                             .fluaGlassButton().padding(8)
                     } else {
                         Text("Still image only").font(.caption2).padding(6)
@@ -306,7 +310,8 @@ struct OnlineDownloadsView: View {
     private func downloadStateControl(_ item: OnlineWallpaper) -> some View {
         switch downloads.state(for: item, library: library) {
         case .ready:
-            Button("Download") { downloads.start(item, library: library) }.fluaProminentButton(clear: true)
+            Button("Add Clip to Library") { downloads.start(item, library: library) }
+                .buttonStyle(FluaGlassButtonStyle(clear: true))
         case .downloading(let progress):
             HStack(spacing: 8) {
                 if let progress { ProgressView(value: progress).frame(width: 80) }

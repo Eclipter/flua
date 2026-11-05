@@ -1,6 +1,8 @@
 # Online wallpaper sources
 
-Discover now searches and paginates the live collections of six publishers. The table below records one source-audit example per collection; these examples are not a limit on the items shown. Terms and media were checked on 2026-10-26. Collection requests start when Discover opens or a search is submitted. Full files are fetched only after Download; Preview uses an adaptive stream or a bounded temporary excerpt where supported.
+Discover places **Find a Wallpaper** above **Sample Clips**. Find a Wallpaper links to Pexels, Pixabay and Unsplash for manual image or video downloads, with a prominent **Import…** action. Sample Clips searches and paginates six live collections of stock and archive footage. Collection requests start when Discover opens or a search is submitted. **Play Clip** uses an adaptive stream or a bounded temporary excerpt where supported. **Add Clip to Library** downloads and imports the complete file when available.
+
+The table records one source-audit example per collection. Terms and media were checked on 2026-10-26.
 
 | Source and clip | Creator | License and source page | Preview | Download |
 | --- | --- | --- | --- | --- |
@@ -23,6 +25,6 @@ Source-audit fixtures cover page-two results and no-match searches for the publi
 
 Discover cards and library attribution panels show the license link without a license-name label. A previously downloaded Wikimedia item still plays after the source was removed from Discover; its saved record retains the source ID and URL, creator, license name and URL, and modification notice. Package metadata continues to preserve those fields.
 
-Discover card backgrounds and Download buttons use a translucent fill without backdrop blur or shadows. On macOS 27.2, a disposable Discover window with 96 fixture cards scrolled at 56–57 captured frames per second, up from 25–26 with the previous styling.
+Discover card backgrounds and **Add Clip to Library** buttons use a translucent fill without backdrop blur or shadows. On macOS 27.2, a disposable Discover window with 96 fixture cards scrolled at 56–57 captured frames per second, up from 25–26 with the previous styling.
 
 Discover thumbnails and moving previews share a fixed 16:9 frame. Grid cards align at the top and reserve equal space for descriptions and download controls; the Source and License links share the bottom row. Images are scaled to fill and clipped at the center, so portrait and panoramic media cannot change card height or overlap neighboring cards. Creator attribution remains in saved records and package metadata, not repeated in the card description. The latest real-window check confirmed equal card heights with short and long titles, with and without summaries, and matching Source/License baselines. It also showed equal preview frames for panoramic Solar System 5674 and vertical planet 15103 thumbnails and moving previews; both videos filled the cropped frame and reached Replay. This crop is local display behavior and does not reduce bytes transferred for a thumbnail or source preview.

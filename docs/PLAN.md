@@ -19,3 +19,7 @@ Use disposable libraries and matching catalog builds. Follow the [integration an
 - Currently blocked: verify HDR output on suitable hardware. A dedicated HDR display is unavailable; the built-in display's limited HDR capability is insufficient for full HDR validation.
 
 Update capability claims only after the relevant checks pass. Keep untested OS versions and hardware explicitly unverified.
+
+## Compatibility cleanup
+
+- Retire the `.bdpkg` name across Discover and import UI, user documentation, file associations, package parsing and related tests. Preserve import support for existing valid archives by letting users rename them to `.zip` before importing; remove the extension-specific handling only as part of that coordinated change.

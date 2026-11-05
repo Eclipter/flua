@@ -644,7 +644,11 @@ import UniformTypeIdentifiers
         panel.treatsFilePackagesAsDirectories = true
         panel.title = "Import"
         panel.prompt = "Import"
-        panel.message = "Choose images, videos or supported wallpaper packages. Source files are preserved."
+        panel.message = """
+            Choose images such as JPEG, PNG, or HEIC, or videos such as MP4 or MOV.
+            For wallpaper packages, choose a .flua folder, ZIP archive, or JSON manifest.
+            Flua keeps the originals.
+            """
         panel.begin { [weak self] response in
             if self?.activeOpenPanel === panel { self?.activeOpenPanel = nil }
             if response == .OK { self?.importMedia(panel.urls, playlistID: playlistID) }
