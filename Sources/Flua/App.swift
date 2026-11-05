@@ -185,10 +185,11 @@ private struct FrostedSurface<S: Shape>: ViewModifier {
 
 struct FluaGlassButtonStyle: PrimitiveButtonStyle {
     var prominent = false
+    var clear = false
 
     func makeBody(configuration: Configuration) -> some View {
         Button(configuration)
-            .buttonStyle(GlassPressEffect(prominent: prominent))
+            .buttonStyle(GlassPressEffect(prominent: prominent, clear: clear))
     }
 }
 
@@ -196,12 +197,13 @@ private struct GlassPressEffect: ButtonStyle {
     @Environment(\.isEnabled) private var enabled
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var prominent = false
+    var clear = false
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .foregroundStyle(configuration.role == .destructive ? Color.red : Color.primary)
             .padding(.horizontal, 12).padding(.vertical, 7)
-            .fluaGlass(in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+            .fluaGlass(clear: clear, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
             .overlay {
                 if prominent {
                     RoundedRectangle(cornerRadius: 9, style: .continuous)
@@ -366,8 +368,8 @@ extension View {
     func fluaGlass(clear: Bool = false, in shape: some Shape) -> some View {
         modifier(FrostedSurface(shape: shape, clear: clear))
     }
-    func fluaProminentButton() -> some View {
-        buttonStyle(FluaGlassButtonStyle(prominent: true))
+    func fluaProminentButton(clear: Bool = false) -> some View {
+        buttonStyle(FluaGlassButtonStyle(prominent: true, clear: clear))
     }
     func fluaGlassButton() -> some View {
         buttonStyle(FluaGlassButtonStyle())

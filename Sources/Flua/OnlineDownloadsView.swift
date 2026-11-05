@@ -286,7 +286,7 @@ struct OnlineDownloadsView: View {
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .topLeading)
-        .fluaGlass(in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .fluaGlass(clear: true, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
 
     @ViewBuilder
@@ -306,7 +306,7 @@ struct OnlineDownloadsView: View {
     private func downloadStateControl(_ item: OnlineWallpaper) -> some View {
         switch downloads.state(for: item, library: library) {
         case .ready:
-            Button("Download") { downloads.start(item, library: library) }.fluaProminentButton()
+            Button("Download") { downloads.start(item, library: library) }.fluaProminentButton(clear: true)
         case .downloading(let progress):
             HStack(spacing: 8) {
                 if let progress { ProgressView(value: progress).frame(width: 80) }
