@@ -40,7 +40,7 @@ Control-Command-F enters or exits native fullscreen in the library window. Comma
 
 Settings opens in the main window from the sidebar, app menu, Command-comma or menu bar menu. It replaces the wallpaper content and inspector; selecting a library section returns to browsing. Display mode is selected in the playback controls, and shuffle is set per playlist in Playlist Options. The inspector uses the same native animation in opposite directions when entering and leaving Settings, respecting Reduce Motion.
 
-The right inspector uses a 24-point top margin and shows the selected wallpaper's title above its preview, followed by editable details and playback settings. Tags appear only in the editable text field, without duplicate tag buttons.
+The right inspector uses a 24-point top margin and shows the selected wallpaper's title above its preview. **Library details** groups the editable fields used to find and filter wallpapers. **Wallpaper settings** groups display and playback controls. Tags appear only in the editable text field, without duplicate tag buttons.
 
 The bottom panel centers the display-mode and playback controls without a status line. Previous and Next are gray and disabled unless the selected surface on a targeted display has an active playlist; pausing automatic advancement keeps them available. Stop is always enabled. Import confirmations and Undo appear above the wallpaper list.
 

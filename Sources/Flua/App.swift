@@ -1196,6 +1196,11 @@ struct InspectorView: View {
 
     private func detailsSection(_ w: Wallpaper) -> some View {
         VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Library details").font(.headline).accessibilityAddTraits(.isHeader)
+                Text("Used to find and filter wallpapers in your library.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
             detailsFields(w)
 
             Text("Press Return to save text edits.").font(.caption).foregroundStyle(.tertiary)
@@ -1292,6 +1297,8 @@ struct InspectorView: View {
 
     private func settingsSection(_ w: Wallpaper) -> some View {
         VStack(alignment: .leading, spacing: 12) {
+            Text("Wallpaper settings").font(.headline).accessibilityAddTraits(.isHeader)
+
             Toggle("Mirror all displays", isOn: Binding(
                 get: { library.playbackMode == "mirrored" },
                 set: { library.setPlaybackMode($0 ? "mirrored" : "perDisplay") }
