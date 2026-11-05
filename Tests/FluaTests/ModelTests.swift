@@ -66,6 +66,41 @@ import Foundation
         precondition(!currentVersionRoundTrip.wallpapers.contains { $0.id == "rain" }, "current-version scene deletion was resurrected")
     }
 
+    static func builtInPlaylistTests() throws {
+        let initial = LibraryState.initial
+        let preset = Playlist(id: "after-dark", name: "After Dark", items: ["cosmos", "pelagic", "lanterns", "rain"])
+        precondition(initial.playlist(preset.id) == preset)
+        precondition(initial.browsing(section: "playlist:after-dark").map(\.id) == preset.items)
+
+        let encoder = JSONEncoder()
+        let decoder = JSONDecoder()
+        var legacy = initial
+        legacy.playlists = [Playlist(id: "ambient", name: "My mornings", items: ["ocean"], interval: 300, shuffle: false)]
+        legacy.wallpapers.removeAll { $0.id == "cosmos" || $0.id == "rain" }
+        legacy.wallpapers.append(Wallpaper(id: "rain", title: "My rain", kind: "image", file: "rain.png"))
+        var fixture = try JSONSerialization.jsonObject(with: encoder.encode(legacy)) as! [String: Any]
+        fixture["builtInSceneCatalogVersion"] = 2
+        var upgraded = try decoder.decode(LibraryState.self, from: JSONSerialization.data(withJSONObject: fixture))
+        precondition(upgraded.playlists.dropLast().elementsEqual(legacy.playlists))
+        precondition(upgraded.playlist(preset.id)?.items == ["pelagic", "lanterns"])
+        precondition(upgraded.wallpapers == legacy.wallpapers)
+
+        upgraded.removePlaylist(preset.id)
+        let reopened = try decoder.decode(LibraryState.self, from: encoder.encode(upgraded))
+        precondition(reopened.playlists == legacy.playlists, "upgrade restored a deleted playlist")
+
+        let custom = Playlist(id: preset.id, name: "My nights", items: ["ocean"])
+        fixture["playlists"] = try JSONSerialization.jsonObject(with: encoder.encode(legacy.playlists + [custom]))
+        let collision = try decoder.decode(LibraryState.self, from: JSONSerialization.data(withJSONObject: fixture))
+        precondition(collision.playlists == legacy.playlists + [custom])
+
+        legacy.wallpapers.removeAll { preset.items.contains($0.id) }
+        fixture["wallpapers"] = try JSONSerialization.jsonObject(with: encoder.encode(legacy.wallpapers))
+        fixture["playlists"] = try JSONSerialization.jsonObject(with: encoder.encode(legacy.playlists))
+        let empty = try decoder.decode(LibraryState.self, from: JSONSerialization.data(withJSONObject: fixture))
+        precondition(empty.playlists == legacy.playlists, "upgrade added an empty playlist")
+    }
+
     static func playlistTargetTests() {
         let start = Date(timeIntervalSince1970: 1_000)
         let due = start.addingTimeInterval(60)
@@ -150,6 +185,7 @@ import Foundation
 
     static func main() throws {
         builtInSceneCatalogTests()
+        try builtInPlaylistTests()
         playlistTargetTests()
         var blockedPlaylist = LibraryState.initial
         blockedPlaylist.shuffle = false

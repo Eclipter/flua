@@ -264,7 +264,7 @@ struct ConfigurationDraft {
 }
 
 struct LibraryState: Codable {
-    private(set) var builtInSceneCatalogVersion = 2
+    private(set) var builtInSceneCatalogVersion = 3
     var wallpapers: [Wallpaper] = []
     var playlists: [Playlist] = []
     var displays: [String: DisplayAssignment] = [:]
@@ -367,6 +367,14 @@ struct LibraryState: Codable {
             wallpapers.append(contentsOf: Self.newBuiltInScenes.filter { scene in !wallpapers.contains { $0.id == scene.id } })
             builtInSceneCatalogVersion = 2
         }
+        if builtInSceneCatalogVersion < 3 {
+            var preset = Self.afterDarkPlaylist
+            preset.items.removeAll { item($0)?.kind != $0 }
+            if !preset.items.isEmpty && playlist(preset.id) == nil {
+                playlists.append(preset)
+            }
+            builtInSceneCatalogVersion = 3
+        }
         if !showsMenuBar { hideFromDock = nil }
     }
     static var initial: LibraryState {
@@ -379,7 +387,10 @@ struct LibraryState: Codable {
         ]
         s.wallpapers.append(contentsOf: Self.addedBuiltInScenes)
         s.wallpapers.append(contentsOf: Self.newBuiltInScenes)
-        s.playlists = [Playlist(id: "ambient", name: "Slow mornings", items: ["aurora", "ocean", "cosmos", "ember"])]
+        s.playlists = [
+            Playlist(id: "ambient", name: "Slow mornings", items: ["aurora", "ocean", "cosmos", "ember"]),
+            Self.afterDarkPlaylist
+        ]
         s.displayMode = "mirrored"
         s.interval = 3600
         s.shuffle = true
@@ -387,6 +398,7 @@ struct LibraryState: Codable {
         s.pauseOnLowBattery = true
         return s
     }
+    private static let afterDarkPlaylist = Playlist(id: "after-dark", name: "After Dark", items: ["cosmos", "pelagic", "lanterns", "rain"])
     private static let addedBuiltInScenes: [Wallpaper] = [
         Wallpaper(id: "ink", title: "Ink Mountains", kind: "ink", tags: "ink, mountains, rice paper, warm", metadata: SceneMetadata(category: "Nature", color: "Neutral", motion: "Low")),
         Wallpaper(id: "dunes", title: "Sahara", kind: "dunes", tags: "desert, dunes, terracotta, sand", metadata: SceneMetadata(category: "Nature", color: "Orange", motion: "Low")),
