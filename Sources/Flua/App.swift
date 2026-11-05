@@ -1,6 +1,60 @@
 import SwiftUI
 import AppKit
 import Combine
+#if canImport(Sparkle)
+import Sparkle
+
+@MainActor private final class SparkleUpdateManager: ObservableObject {
+    static private(set) var shared: SparkleUpdateManager?
+
+    @Published private(set) var canCheck = false
+    @Published private(set) var checksAutomatically = false
+    @Published private(set) var installsAutomatically = false
+
+    private let controller: SPUStandardUpdaterController
+    var updater: SPUUpdater { controller.updater }
+
+    private init() {
+        controller = SPUStandardUpdaterController(startingUpdater: true, updaterDelegate: nil, userDriverDelegate: nil)
+        updater.publisher(for: \.canCheckForUpdates).assign(to: &$canCheck)
+        updater.publisher(for: \.automaticallyChecksForUpdates).assign(to: &$checksAutomatically)
+        updater.publisher(for: \.automaticallyDownloadsUpdates).assign(to: &$installsAutomatically)
+    }
+
+    static func startIfEligible(arguments: [String]) {
+        guard !LibraryPaths.isVerification(arguments: arguments),
+              !arguments.contains("--data-dir") else { return }
+        shared = SparkleUpdateManager()
+    }
+
+    func checkForUpdates() { controller.checkForUpdates(nil) }
+}
+
+private struct UpdateSettings: View {
+    @ObservedObject var updates: SparkleUpdateManager
+    let tint: Color?
+
+    var body: some View {
+        let checkLabel = "Check for updates automatically"
+        let installLabel = "Download and install updates automatically"
+        Button("Check for Updates…", action: updates.checkForUpdates)
+            .disabled(!updates.canCheck)
+        Toggle(checkLabel, isOn: Binding(
+            get: { updates.checksAutomatically },
+            set: { updates.updater.automaticallyChecksForUpdates = $0 }
+        ))
+        .accessibilityLabel(Text(checkLabel))
+        .tint(tint)
+        Toggle(installLabel, isOn: Binding(
+            get: { updates.installsAutomatically },
+            set: { updates.updater.automaticallyDownloadsUpdates = $0 }
+        ))
+        .accessibilityLabel(Text(installLabel))
+        .disabled(!updates.checksAutomatically)
+        .tint(tint)
+    }
+}
+#endif
 
 @MainActor final class ViewState: ObservableObject {
     @Published var playlistPicker: String?
@@ -477,6 +531,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         AppContext.library.applyPresence()
     }
     func applicationDidFinishLaunching(_ notification: Notification) {
+        #if canImport(Sparkle)
+        SparkleUpdateManager.startIfEligible(arguments: ProcessInfo.processInfo.arguments)
+        #endif
         for menu in NSApp.mainMenu?.items.compactMap(\.submenu) ?? [] {
             configureFullscreenShortcut(in: menu)
         }
@@ -1640,6 +1697,17 @@ struct SettingsView: View {
                 }
                 Link("GitHub", destination: URL(string: "https://github.com/Eclipter/flua")!)
             }
+            #if canImport(Sparkle)
+            if let updates = SparkleUpdateManager.shared {
+                Section {
+                    UpdateSettings(updates: updates, tint: library.accentOverride)
+                } header: {
+                    Text("Updates")
+                } footer: {
+                    settingsNote("Updates download in the background and install when Flua quits.")
+                }
+            }
+            #endif
         }.formStyle(.grouped).scrollContentBackground(.hidden).padding(8)
             .fluaClearInitialFocus()
             .toggleStyle(.switch)

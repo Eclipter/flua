@@ -42,12 +42,14 @@ Run in Terminal to install the latest release:
 curl -fsSL https://raw.githubusercontent.com/Eclipter/flua/main/install.sh | bash
 ```
 
+Sparkle-enabled releases check for updates automatically. Open **Settings → Updates** to check now, turn off checks, or opt into automatic installation when Flua quits. If your version has no Updates section, run the installer once to switch to an updater-enabled release.
+
 ## • Building from source •
 
 <details>
 <summary>Show build instructions</summary>
 
-Requires Apple’s Swift command-line tools and the macOS 27 SDK. No third-party runtime dependencies.
+Requires Apple’s Swift command-line tools and the macOS 27 SDK. Standard source builds have no third-party runtime dependencies.
 
 ```sh
 git clone https://github.com/Eclipter/flua.git

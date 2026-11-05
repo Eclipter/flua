@@ -9,7 +9,7 @@ make clean          # remove SwiftPM, app, release and standalone provider build
 make test           # model, library path, package security tests
 make smoke          # builds Flua.app for an isolated library, tests, then exits
 make run            # open the app
-make release        # explicitly requested release only: bump version, build, create dist/Flua.zip
+make release        # explicitly requested release only: bump version, build, sign update assets
 make wallpaper-test # isolated wallpaper extension tests, no OS activation
 ```
 
@@ -69,13 +69,19 @@ UI smoke checks jump between window widths across the 1000-point inspector thres
 
 ## Release versions
 
-Flua is unreleased. The app and wallpaper extension both use development version `0.1.0`, build `1`. Keep their `CFBundleShortVersionString` and `CFBundleVersion` values aligned in `Resources/Info.plist` and `Sources/WallpaperExtension/Info.plist`.
+Keep the app and wallpaper extension’s `CFBundleShortVersionString` and `CFBundleVersion` values aligned in `Resources/Info.plist` and `Sources/WallpaperExtension/Info.plist`.
 
 Settings → About reads the app version from its bundle, uses the README description and links to the GitHub repository.
 
-Keep the development version between releases; Git commits identify source changes. Run `make release` only when the user explicitly requests a release, never as part of routine agent implementation or validation. Each successful invocation increments the patch version and build number in both source plists before building and packaging: the current baseline becomes `0.1.1`, build `2`. The version changes remain in the working tree for review and commit. Minor or major version changes require a separate explicit decision.
+Keep the development version between releases. Git commits identify source changes. Run `make release` only when the user explicitly requests a release. Each successful invocation increments the patch version and build number in both source plists before building and packaging. The version changes remain in the working tree for review and commit. Minor or major version changes require a separate explicit decision.
 
-Release builds ignore `FLUA_APP_PATH`, `FLUA_CATALOG_PATH` and `FLUA_WALLPAPER_IDENTIFIER` overrides so the archive contains the standard app and library configuration. A build or packaging failure restores the source version files and preserves any existing `dist/Flua.zip`. A successful release replaces that local archive. The command does not commit, tag, publish or notarize anything. Once a release is published, preserve its tag and artifacts; publish changes under a new version. Tag releases as `v0.1.1`, for example.
+Release builds ignore `FLUA_APP_PATH`, `FLUA_CATALOG_PATH` and `FLUA_WALLPAPER_IDENTIFIER` overrides so the archive contains the standard app and library configuration. The release command builds with `FLUA_ENABLE_UPDATES=1`, embeds the pinned Sparkle distribution and generates `dist/Flua.zip` and the signed `dist/appcast.xml`. The build verifies the downloaded Sparkle archive against its pinned SHA-256 digest. A failure restores the source version files and preserves the previous release assets. The command does not commit, tag, publish or notarize anything.
+
+Release signing uses the `local.flua.desktop` Sparkle key in the maintainer’s login Keychain. Its public key is in `Resources/Updates.plist`. Keep an encrypted offline backup of the private key. On a new release Mac, import the existing backup with `"$(./scripts/sparkle.sh)/bin/generate_keys" --account local.flua.desktop -f /path/to/private-key-backup`. The same tool exports the key with `-x` to a new file. Keep that file out of Git and out of the release assets. If the key is lost, existing ad-hoc builds need a manual reinstall to trust a new key.
+
+Create a draft GitHub Release with the matching `v<version>` tag, attach both files unchanged, then publish it as the latest release. Flua reads `appcast.xml` from the latest release, and the feed points to `Flua.zip` at its specific version tag. Preserve published tags and assets and publish changes under a new version.
+
+Use `FLUA_ENABLE_UPDATES=1 make build` to inspect the updater without bumping versions or signing release assets. Use a disposable app and library for update verification. Keep the test bundle identifier and feed separate from production. The updater skips smoke and explicit `--data-dir` launches. A disposable catalog bound at build time can keep a test relaunch on the same isolated library.
 
 For release tooling changes, run `python3 Tests/Scripts/ReleaseTests.py` (also included in `make test`). These checks exercise version bumps and failure recovery in disposable fixtures without making a release from the checkout.
 
@@ -95,7 +101,7 @@ Keep media and account information out of the repository. Test model/import chan
 
 `make wallpaper-test` also verifies the boxed download-status reply over XPC. It does not register or select a wallpaper. Real-host playback and file-access checks use disposable containing apps, following the [provider verification and restoration procedure](../Sources/WallpaperExtension/README.md#playback-scoped-files-and-restoration). Keep their source copies, fixtures, local settings snapshots and logs outside Git.
 
-Development and validation run locally; pushing changes is a separate developer action. No CI service, signing account or deployment credentials are required. Release bundles are ad-hoc signed, not notarized.
+Development and validation run locally. Pushing changes is a separate developer action. Release bundles use ad-hoc macOS code signing and require a Sparkle key to sign update assets. Apple notarization is unavailable for these builds.
 
 ### Green-button window-management popup
 

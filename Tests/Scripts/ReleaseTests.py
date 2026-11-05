@@ -9,11 +9,13 @@ import zipfile
 
 source = Path(__file__).resolve().parents[2]
 version_paths = ('Resources/Info.plist', 'Sources/WallpaperExtension/Info.plist')
-for failure in ('', 'build', 'codesign', 'ditto', 'mismatch', 'invalid'):
+failures = ('build', 'codesign', 'ditto', 'keys', 'wrong-key', 'appcast', 'verify', 'publish', 'mismatch', 'invalid')
+
+for failure in ('success', *failures):
     with tempfile.TemporaryDirectory(prefix='flua-release-tests-') as temporary:
         root = Path(temporary)
         (root / 'scripts').mkdir()
-        shutil.copy2(source / 'Makefile', root / 'Makefile')
+        (root / 'Makefile').write_text('.PHONY: release build\nrelease:\n\t@./scripts/release.sh\nbuild:\n\t@./scripts/build.sh\n')
         shutil.copy2(source / 'scripts/release.sh', root / 'scripts/release.sh')
         for relative in version_paths:
             path = root / relative
@@ -34,8 +36,11 @@ for failure in ('', 'build', 'codesign', 'ditto', 'mismatch', 'invalid'):
         (root / 'scripts/build.sh').write_text('''#!/usr/bin/env python3
 import os
 from pathlib import Path
+import plistlib
 import shutil
 
+if 'FLUA_RELEASE_TEST_DIRECT_BUILD' not in os.environ:
+    assert os.environ['FLUA_ENABLE_UPDATES'] == '1'
 assert all(key not in os.environ for key in (
     'FLUA_APP_PATH', 'FLUA_CATALOG_PATH', 'FLUA_WALLPAPER_IDENTIFIER'))
 Path('build-called').touch()
@@ -48,6 +53,13 @@ for source, target in (
 ):
     Path(target).parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(source, target)
+app_info = Path('build/Flua.app/Contents/Info.plist')
+metadata = plistlib.loads(app_info.read_bytes())
+metadata['SUPublicEDKey'] = 'test-public-key'
+metadata['SUFeedURL'] = 'https://github.com/Eclipter/flua/releases/latest/download/appcast.xml'
+metadata['SURequireSignedFeed'] = True
+metadata['SUVerifyUpdateBeforeExtraction'] = True
+app_info.write_bytes(plistlib.dumps(metadata))
 ''')
         (root / 'scripts/build.sh').chmod(0o755)
         fake_bin = root / 'bin'
@@ -73,37 +85,95 @@ if stage == 'ditto':
                 archive.write(path, path.relative_to(app.parent))
 ''')
             executable.chmod(0o755)
+        sparkle = root / 'sparkle'
+        sparkle_bin = sparkle / 'bin'
+        sparkle_bin.mkdir(parents=True)
+        (root / 'scripts/sparkle.sh').write_text(f'#!/bin/sh\nprintf "%s\\n" "{sparkle}"\n')
+        (root / 'scripts/sparkle.sh').chmod(0o755)
+        (sparkle_bin / 'generate_keys').write_text('''#!/usr/bin/env python3
+import os
+if os.environ['FLUA_RELEASE_TEST_FAIL'] == 'keys':
+    raise SystemExit(1)
+print('wrong-public-key' if os.environ['FLUA_RELEASE_TEST_FAIL'] == 'wrong-key' else 'test-public-key')
+''')
+        (sparkle_bin / 'generate_keys').chmod(0o755)
+        (sparkle_bin / 'generate_appcast').write_text('''#!/usr/bin/env python3
+import os
+from pathlib import Path
+import sys
+
+args = sys.argv[1:]
+assert args[args.index('--account') + 1] == 'local.flua.desktop'
+assert args[args.index('--maximum-deltas') + 1] == '0'
+prefix = args[args.index('--download-url-prefix') + 1]
+assert prefix.startswith('https://github.com/Eclipter/flua/releases/download/v')
+output = Path(args[args.index('-o') + 1])
+if os.environ['FLUA_RELEASE_TEST_FAIL'] == 'appcast':
+    output.write_text('<rss>partial')
+    raise SystemExit(1)
+length = output.with_name('Flua.zip').stat().st_size
+output.write_text('<rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">'
+                  f'<channel><item><enclosure url="{prefix}Flua.zip" length="{length}" '
+                  'sparkle:edSignature="signed" /></item></channel></rss>')
+''')
+        (sparkle_bin / 'generate_appcast').chmod(0o755)
+        (sparkle_bin / 'sign_update').write_text('''#!/usr/bin/env python3
+import os
+from pathlib import Path
+import sys
+
+assert sys.argv[1:4] == ['--account', 'local.flua.desktop', '--verify']
+assert Path(sys.argv[4]).is_file()
+if Path(sys.argv[4]).name == 'Flua.zip':
+    assert sys.argv[5:] == ['signed']
+    if os.environ['FLUA_RELEASE_TEST_FAIL'] == 'verify':
+        raise SystemExit(1)
+''')
+        (sparkle_bin / 'sign_update').chmod(0o755)
+        (fake_bin / 'mv').write_text('''#!/usr/bin/env python3
+import os
+import sys
+
+if (os.environ['FLUA_RELEASE_TEST_FAIL'] == 'publish' and sys.argv[-1] == 'dist/appcast.xml'
+        and '/previous/' not in sys.argv[-2]):
+    raise SystemExit(1)
+os.execv('/bin/mv', sys.argv)
+''')
+        (fake_bin / 'mv').chmod(0o755)
         archive = root / 'dist/Flua.zip'
+        feed = root / 'dist/appcast.xml'
         archive.parent.mkdir()
         archive.write_bytes(b'previous archive')
+        feed.write_bytes(b'previous feed')
+        originals_assets = (archive.read_bytes(), feed.read_bytes())
         environment = dict(os.environ, PATH=f'{fake_bin}:{os.environ["PATH"]}',
                            FLUA_APP_PATH='/invalid/test-app', FLUA_CATALOG_PATH='/invalid/test-catalog',
                            FLUA_WALLPAPER_IDENTIFIER='invalid.test.provider', FLUA_RELEASE_TEST_FAIL=failure)
-        if not failure:
+        if failure == 'success':
             build_environment = {key: value for key, value in environment.items() if key not in (
                 'FLUA_APP_PATH', 'FLUA_CATALOG_PATH', 'FLUA_WALLPAPER_IDENTIFIER')}
+            build_environment['FLUA_RELEASE_TEST_DIRECT_BUILD'] = '1'
             subprocess.run(['make', 'build'], cwd=root, env=build_environment, check=True)
             assert all((root / relative).read_bytes() == data for relative, data in originals.items())
-            assert archive.read_bytes() == b'previous archive'
-            print('PASS: ordinary builds preserve versions and the release archive')
-        for release in range(1, 3) if not failure else (1,):
-            result = subprocess.run(['make', 'release'], cwd=root, env=environment,
-                                    capture_output=True, text=True)
-            assert (result.returncode == 0) == (not failure), result.stdout + result.stderr
-            assert not list(archive.parent.glob('.release.*'))
-            if failure:
-                assert archive.read_bytes() == b'previous archive'
-                assert all((root / relative).read_bytes() == data for relative, data in originals.items())
-                assert (root / 'build-called').exists() == (failure not in ('mismatch', 'invalid'))
-            else:
-                major, minor, patch = map(int, original_info['CFBundleShortVersionString'].split('.'))
-                expected = (f'{major}.{minor}.{patch + release}', str(int(original_info['CFBundleVersion']) + release))
-                for relative in version_paths:
-                    info = plistlib.loads((root / relative).read_bytes())
-                    assert (info['CFBundleShortVersionString'], info['CFBundleVersion']) == expected
-                with zipfile.ZipFile(archive) as packaged:
-                    assert len(packaged.namelist()) == 2
-                    for name in packaged.namelist():
-                        info = plistlib.loads(packaged.read(name))
-                        assert (info['CFBundleShortVersionString'], info['CFBundleVersion']) == expected
-        print(f'PASS: release {failure or "bumps before building and packaging, including repeated releases"}')
+            assert (archive.read_bytes(), feed.read_bytes()) == originals_assets
+        result = subprocess.run(['make', 'release'], cwd=root, env=environment,
+                                capture_output=True, text=True)
+        assert (result.returncode == 0) == (failure == 'success'), result.stdout + result.stderr
+        assert not list(archive.parent.glob('.release.*'))
+        if failure != 'success':
+            assert (archive.read_bytes(), feed.read_bytes()) == originals_assets
+            assert all((root / relative).read_bytes() == data for relative, data in originals.items())
+            assert (root / 'build-called').exists() == (failure not in ('mismatch', 'invalid'))
+        else:
+            major, minor, patch = original_info['CFBundleShortVersionString'].split('.')
+            expected = (f'{major}.{minor}.{int(patch) + 1}', str(int(original_info['CFBundleVersion']) + 1))
+            for relative in version_paths:
+                info = plistlib.loads((root / relative).read_bytes())
+                assert (info['CFBundleShortVersionString'], info['CFBundleVersion']) == expected
+            with zipfile.ZipFile(archive) as packaged:
+                assert len(packaged.namelist()) == 2
+                app_info = plistlib.loads(packaged.read('Flua.app/Contents/Info.plist'))
+                assert (app_info['CFBundleShortVersionString'], app_info['CFBundleVersion']) == expected, app_info
+            assert b'sparkle:edSignature="signed"' in feed.read_bytes()
+            assert feed.read_bytes() != originals_assets[1]
+        print(f'PASS: release {failure}')
