@@ -1,6 +1,35 @@
 import Foundation
 
 @main struct ModelTests {
+    static func batteryPowerTests() {
+        let battery: [String: Any] = ["Type": "InternalBattery", "Is Present": true,
+                                      "Current Capacity": 20, "Max Capacity": 100]
+        let snapshot = BatteryPower.fromSources([battery], onBattery: true, lowPower: true)
+        precondition(snapshot.hasInternalBattery && snapshot.percentage == 20)
+        var policy = PlaybackPolicy(pauseOnBattery: true, pauseOnLowPower: true,
+                                    pauseOnLowBattery: true, lowPowerThreshold: 20, pauseOnFullscreen: true)
+        precondition(snapshot.pauseReason(for: policy) == .onBattery)
+        policy.pauseOnBattery = false
+        precondition(snapshot.pauseReason(for: policy) == .lowPower)
+        policy.pauseOnLowPower = false
+        precondition(snapshot.pauseReason(for: policy) == .lowBattery(20))
+        policy.lowPowerThreshold = 19
+        precondition(snapshot.pauseReason(for: policy) == nil)
+        policy.lowPowerThreshold = 200
+        let ac = BatteryPower.fromSources([battery], onBattery: false, lowPower: false)
+        precondition(ac.pauseReason(for: policy) == nil)
+        let absent = BatteryPower.fromSources([["Type": "InternalBattery", "Is Present": false]], onBattery: true, lowPower: false)
+        precondition(!absent.hasInternalBattery && absent.percentage == nil && absent.pauseReason(for: policy) == nil)
+        let malformed = BatteryPower.fromSources([battery, ["Type": "InternalBattery", "Is Present": true,
+                                                           "Current Capacity": true, "Max Capacity": 100]],
+                                                 onBattery: true, lowPower: false)
+        precondition(malformed.hasInternalBattery && malformed.percentage == nil && malformed.pauseReason(for: policy) == nil)
+        let external = BatteryPower.fromSources([["Type": "UPS", "Is Present": true,
+                                                  "Current Capacity": 10, "Max Capacity": 100]],
+                                                onBattery: true, lowPower: false)
+        precondition(!external.hasInternalBattery && external.percentage == nil)
+    }
+
     static func builtInSceneCatalogTests() {
         let expected = ["aurora", "cosmos", "ocean", "ember", "ink", "dunes", "contour", "opal", "pelagic", "lanterns", "rain"]
         let initial = LibraryState.initial
@@ -184,6 +213,7 @@ import Foundation
     }
 
     static func main() throws {
+        batteryPowerTests()
         builtInSceneCatalogTests()
         try builtInPlaylistTests()
         playlistTargetTests()
@@ -453,7 +483,14 @@ import Foundation
         let encodedLP = try JSONEncoder().encode(lowPowerTestState)
         let decodedLP = try JSONDecoder().decode(LibraryState.self, from: encodedLP)
         precondition(decodedLP.lowPowerThreshold == 30)
-        precondition(LibraryState.initial.pauseOnLowBattery)
+        precondition(!LibraryState.initial.pauseOnBattery && !LibraryState.initial.pauseOnLowBattery)
+        precondition(LibraryState.initial.batteryPauseTip == nil)
+        for tip in [BatteryPauseTip.offered, .dismissed] {
+            var state = LibraryState.initial
+            state.batteryPauseTip = tip
+            let restored = try JSONDecoder().decode(LibraryState.self, from: JSONEncoder().encode(state))
+            precondition(restored.batteryPauseTip == tip)
+        }
         for lowPower in [false, true] {
             for lowBattery in [false, true] {
                 var independent = LibraryState.initial

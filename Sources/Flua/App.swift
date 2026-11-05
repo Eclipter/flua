@@ -9,6 +9,7 @@ import Combine
     @Published var columnVisibility: NavigationSplitViewVisibility = .all
     @Published var isFullScreen = false
     @Published var transportHeight: CGFloat = 0
+    @Published var opensBatterySettings = false
     @Published var creatingPlaylist = false
     @Published var playlistName = ""
     @Published var deleting: Wallpaper?
@@ -572,6 +573,7 @@ struct TrayView: View {
     @Environment(\.openWindow) var openWindow
     var body: some View {
         Button("Open Flua") { openWindow(id: "library"); NSApp.activate(ignoringOtherApps: true) }
+        if let status = library.batteryPauseStatus { Text(status) }
         Divider()
         Button(library.state.paused ? "Resume playlists" : "Pause playlists") { library.togglePlaylistPause() }
         Button("Next on every display") { library.advancePlaylists(force: true, allDisplays: true) }
@@ -607,7 +609,7 @@ struct LibraryView: View {
                         }
                         .padding(.horizontal, 24)
                         .padding(.top, 24)
-                        SettingsView()
+                        SettingsView(opensBatterySettings: ui.opensBatterySettings)
                     }
                     .frame(maxWidth: 760)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -615,25 +617,35 @@ struct LibraryView: View {
                     GeometryReader { geometry in
                         let isCompact = geometry.size.width < 650
                         VStack(spacing: 0) {
-                            pageHeader(compact: isCompact)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .padding(.horizontal, 24)
-                                .padding(.top, 24)
-                                .background(LibraryHeaderTarget().allowsHitTesting(false))
+                            VStack(spacing: 12) {
+                                pageHeader(compact: isCompact)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                if library.showsBatteryPauseTip { batteryPauseTip }
+                            }
+                            .padding(.horizontal, 24)
+                            .padding(.top, 24)
+                            .background(LibraryHeaderTarget().allowsHitTesting(false))
                             ScrollViewReader { proxy in
                                 ScrollView {
                                     primaryContent(width: geometry.size.width)
                                         .padding(.bottom, ui.transportHeight)
                                 }
                                 .overlay(alignment: .bottom) {
-                                    transport(stackedControls: geometry.size.width < 380)
-                                        .frame(maxWidth: .infinity)
-                                        .fluaGlass(in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-                                        .padding(12)
-                                        .padding(.trailing, NSScroller.scrollerWidth(for: .regular, scrollerStyle: NSScroller.preferredScrollerStyle))
-                                        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: {
-                                            if abs(ui.transportHeight - $0) > 0.5 { ui.transportHeight = $0 }
+                                    VStack(spacing: 0) {
+                                        if let status = library.batteryPauseStatus {
+                                            Label(status, systemImage: "pause.circle")
+                                                .font(.callout).foregroundStyle(.secondary)
+                                                .padding(.horizontal, 12).padding(.top, 12)
                                         }
+                                        transport(stackedControls: geometry.size.width < 380)
+                                    }
+                                    .frame(maxWidth: .infinity)
+                                    .fluaGlass(in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                                    .padding(12)
+                                    .padding(.trailing, NSScroller.scrollerWidth(for: .regular, scrollerStyle: NSScroller.preferredScrollerStyle))
+                                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: {
+                                        if abs(ui.transportHeight - $0) > 0.5 { ui.transportHeight = $0 }
+                                    }
                                 }
                                 .onChange(of: library.lastImportIDs) { _, ids in
                                     if !ids.isEmpty {
@@ -653,6 +665,9 @@ struct LibraryView: View {
             .transaction(value: windowGeometry.size.width) { transaction in
                 transaction.disablesAnimations = true
             }
+        }
+        .onChange(of: library.section) { _, section in
+            if section != "settings" { ui.opensBatterySettings = false }
         }
         .sheet(isPresented: Binding(get: { ui.playlistPicker != nil }, set: { if !$0 { ui.playlistPicker = nil } })) {
             if let id = ui.playlistPicker { PlaylistWallpaperPicker(playlistID: id).environmentObject(library) }
@@ -1006,6 +1021,33 @@ struct LibraryView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(16)
     }
+    private var batteryPauseTip: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label("Save battery with automatic pauses", systemImage: "battery.25percent").font(.headline)
+            Text("Flua can pause wallpaper animation at \(library.state.playbackPolicy.lowPowerThreshold)% battery or less while unplugged. Plug in to clear the low-battery pause.")
+                .font(.callout).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 8) { batteryPauseTipActions }
+                VStack(alignment: .leading, spacing: 8) { batteryPauseTipActions }
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.quaternary, in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    @ViewBuilder private var batteryPauseTipActions: some View {
+        Button("Enable Low Battery Pause") { library.setBatteryPause(\.pauseOnLowBattery, enabled: true) }
+            .fluaProminentButton().tint(library.accentOverride)
+        Button("Battery Settings…") {
+            library.dismissBatteryPauseTip()
+            ui.opensBatterySettings = true
+            library.navigate(to: "settings")
+        }.fluaGlassButton()
+        Button("Not Now") { library.dismissBatteryPauseTip() }.fluaGlassButton()
+    }
+
     private func transport(stackedControls: Bool) -> some View {
         let controlsLayout = stackedControls ? AnyLayout(VStackLayout(spacing: 8)) : AnyLayout(HStackLayout(spacing: 12))
         return controlsLayout {
@@ -1440,11 +1482,45 @@ private final class NumericDraft: ObservableObject {
 struct SettingsView: View {
     @StateObject private var ui = ViewState()
     @EnvironmentObject var library: Library
+    var opensBatterySettings = false
     private func addBlockedTags() {
         library.blockTags(ui.blockedTagDraft)
         ui.blockedTagDraft = ""
     }
     var body: some View {
+        ScrollViewReader { proxy in
+            form.task {
+                if opensBatterySettings { proxy.scrollTo("battery", anchor: .top) }
+            }
+        }
+    }
+
+    private func batteryPauseBinding(_ setting: WritableKeyPath<LibraryState, Bool>) -> Binding<Bool> {
+        Binding(get: { library.state[keyPath: setting] }, set: { library.setBatteryPause(setting, enabled: $0) })
+    }
+
+    private func settingsNote(_ text: String) -> some View {
+        Text(text).font(.callout).foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+
+    private func described<Content: View>(_ note: String, @ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            content()
+            settingsNote(note)
+        }
+    }
+
+    private func describedToggle(_ title: String, note: String, isOn: Binding<Bool>) -> some View {
+        Toggle(isOn: isOn) {
+            described(note) { Text(title) }
+        }
+        .accessibilityLabel(Text(title))
+        .accessibilityHint(Text(note))
+        .tint(library.accentOverride)
+    }
+
+    private var form: some View {
         Form {
             Section("Appearance") {
                 Picker("Theme", selection: Binding(
@@ -1455,25 +1531,33 @@ struct SettingsView: View {
                     Text("Light").tag(String?.some("light"))
                     Text("Dark").tag(String?.some("dark"))
                 }.fluaMenuPicker()
-                Picker("Accent color", selection: Binding(
-                    get: { AppAccent(rawValue: library.state.accentColor ?? "") ?? .system },
-                    set: { library.state.accentColor = $0 == .system ? nil : $0.rawValue; library.save() }
-                )) {
-                    ForEach(AppAccent.allCases, id: \.self) { choice in
-                        Label {
-                            Text(choice.rawValue)
-                        } icon: {
-                            Image(nsImage: choice.swatch).renderingMode(.original)
-                        }.tag(choice)
-                    }
-                }.fluaMenuPicker()
-                Text("System follows the accent color selected in macOS settings.").font(.caption).foregroundStyle(.secondary)
+                described("System follows the accent color in macOS Settings.") {
+                    Picker("Accent color", selection: Binding(
+                        get: { AppAccent(rawValue: library.state.accentColor ?? "") ?? .system },
+                        set: { library.state.accentColor = $0 == .system ? nil : $0.rawValue; library.save() }
+                    )) {
+                        ForEach(AppAccent.allCases, id: \.self) { choice in
+                            Label {
+                                Text(choice.rawValue)
+                            } icon: {
+                                Image(nsImage: choice.swatch).renderingMode(.original)
+                            }.tag(choice)
+                        }
+                    }.fluaMenuPicker()
+                }
             }
             Section("Playback") {
-                Toggle("Pause behind fullscreen apps", isOn: $library.state.pauseOnFullscreen).tint(library.accentOverride)
-                Toggle("Pause while running on battery", isOn: $library.state.pauseOnBattery).tint(library.accentOverride)
-                Toggle("Pause in Low Power Mode", isOn: Binding(get: { library.state.pauseOnLowPower ?? false }, set: { library.state.pauseOnLowPower = $0; library.settingChanged() })).tint(library.accentOverride)
-                Toggle("Pause when battery is low", isOn: Binding(get: { library.state.pauseOnLowBattery }, set: { library.state.pauseOnLowBattery = $0; library.settingChanged() })).tint(library.accentOverride)
+                describedToggle("Pause behind fullscreen apps",
+                                note: "Pauses animation only on the display showing the fullscreen app.",
+                                isOn: $library.state.pauseOnFullscreen)
+            }
+            Section {
+                describedToggle("Pause whenever unplugged",
+                                note: "Pauses animation as soon as you unplug your Mac.",
+                                isOn: batteryPauseBinding(\.pauseOnBattery))
+                describedToggle("Pause when battery is low",
+                                note: "Pauses animation while unplugged at or below your chosen battery percentage.",
+                                isOn: batteryPauseBinding(\.pauseOnLowBattery))
                 if library.state.pauseOnLowBattery {
                     Picker("Pause on battery at or below", selection: Binding(get: { library.state.lowPowerThreshold }, set: { library.state.lowPowerThreshold = $0; library.settingChanged() })) {
                         Text("10%").tag(10)
@@ -1482,9 +1566,14 @@ struct SettingsView: View {
                         Text("50%").tag(50)
                     }.fluaMenuPicker()
                 }
-                Text("Power preferences apply to Desktop and Lock Screen playback. Fullscreen pause affects only the display showing the fullscreen app.").font(.caption).foregroundStyle(.secondary)
+                Toggle("Pause in Low Power Mode", isOn: Binding(get: { library.state.pauseOnLowPower ?? false }, set: { library.state.pauseOnLowPower = $0; library.settingChanged() })).tint(library.accentOverride)
+            } header: {
+                Text("Battery")
+            } footer: {
+                settingsNote("Battery settings apply to Desktop and Lock Screen animation.")
             }
-            Section("Blocked tags") {
+            .id("battery")
+            Section {
                 HStack {
                     TextField("", text: $ui.blockedTagDraft, prompt: Text("Tags, separated by commas")).accessibilityLabel("Blocked tags").onSubmit { addBlockedTags() }
                     Button("Block") { addBlockedTags() }.disabled(normalizedTags(ui.blockedTagDraft).isEmpty)
@@ -1502,36 +1591,53 @@ struct SettingsView: View {
                         }
                     }.frame(maxHeight: 110)
                 }
-                Text("Matching tags hide wallpapers throughout the library. Files, playlists and playback assignments are preserved.").font(.caption).foregroundStyle(.secondary)
+            } header: {
+                Text("Blocked tags")
+            } footer: {
+                settingsNote("Matching tags hide wallpapers throughout the library. Your files, playlists and wallpaper assignments stay intact.")
             }
-            Section("General") {
+            Section {
                 Toggle("Show in menu bar", isOn: Binding(get: { library.state.showsMenuBar }, set: { library.setShowsMenuBar($0) })).tint(library.accentOverride)
-                Toggle("Hide from Dock", isOn: Binding(get: { library.state.hidesDockIcon }, set: { library.setHidesDockIcon($0) }))
-                    .disabled(!library.state.showsMenuBar)
-                    .tint(library.accentOverride)
-                Text("The Dock icon can be hidden while Flua remains in the menu bar.").font(.caption).foregroundStyle(.secondary)
-                Toggle("Show window on startup", isOn: Binding(get: { library.state.showWindowOnStartup }, set: { library.state.showWindowOnStartup = $0; library.save() })).tint(library.accentOverride)
-                Toggle("Open at login", isOn: Binding(get: { library.loginEnabled() }, set: { library.setLogin($0) })).tint(library.accentOverride)
-                Button("Show wallpaper folder in Finder") { NSWorkspace.shared.open(library.disk.assets) }
-                Text("Flua stores its own copies of imported wallpapers. Wallpapers play natively through macOS and continue playing after quitting Flua.").font(.caption).foregroundStyle(.secondary)
+                describedToggle("Hide from Dock", note: "Available when Flua is shown in the menu bar.",
+                                isOn: Binding(get: { library.state.hidesDockIcon }, set: { library.setHidesDockIcon($0) }))
+                .disabled(!library.state.showsMenuBar)
+                describedToggle("Show window on startup", note: "Shows the library window when Flua launches.",
+                                isOn: Binding(get: { library.state.showWindowOnStartup }, set: { library.state.showWindowOnStartup = $0; library.save() }))
+                describedToggle("Open at login", note: "Launches Flua automatically when you log in to your Mac.",
+                                isOn: Binding(get: { library.loginEnabled() }, set: { library.setLogin($0) }))
+                described("Flua stores its own copies of imported wallpapers here.") {
+                    Button("Show wallpaper folder in Finder") { NSWorkspace.shared.open(library.disk.assets) }
+                }
+            } header: {
+                Text("General")
+            } footer: {
+                settingsNote("Your wallpapers continue playing after you quit Flua.")
             }
-            Section("Lock Screen") {
-                Text(NativeWallpaper.explanation).font(.caption).foregroundStyle(.secondary)
+            Section {
                 if NativeWallpaper.available {
-                    Button("Remove native provider…", role: .destructive) { ui.confirmingNativeRemoval = true }
-                        .disabled(library.nativeSetupBusy)
-                        .confirmationDialog("Remove native wallpaper provider?", isPresented: $ui.confirmingNativeRemoval) {
-                            Button("Restore wallpapers and remove provider", role: .destructive) { library.removeNativeProvider() }
-                        } message: {
-                            Text("Restores the saved system wallpapers wherever Flua is still selected, then unregisters this copy of the provider. Your library and wallpapers are kept. Set Wallpaper again to set it up later.")
-                        }
-                    Text("Removal restores saved system wallpapers and stops native playback. Keep this app and your library in place while Flua is selected.")
-                        .font(.caption).foregroundStyle(.secondary)
+                    described("Restores your previous system wallpapers and stops Flua playback.") {
+                        Button("Remove native provider…", role: .destructive) { ui.confirmingNativeRemoval = true }
+                            .disabled(library.nativeSetupBusy)
+                            .confirmationDialog("Remove native wallpaper provider?", isPresented: $ui.confirmingNativeRemoval) {
+                                Button("Restore wallpapers and remove provider", role: .destructive) { library.removeNativeProvider() }
+                            } message: {
+                                Text("Restores the saved system wallpapers wherever Flua is still selected, then unregisters this copy of the provider. Your library and wallpapers are kept. Set Wallpaper again to set it up later.")
+                            }
+                    }
+                } else {
+                    settingsNote(NativeWallpaper.explanation)
+                }
+            } header: {
+                Text("Lock Screen")
+            } footer: {
+                if NativeWallpaper.available {
+                    settingsNote(NativeWallpaper.explanation + " Keep Flua and your library in place while its wallpapers are selected.")
                 }
             }
             Section("About") {
-                Text("Flua \(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.1.0")").font(.callout)
-                Text("Completely free live wallpapers for your Mac Desktop, Lock Screen and Screen Saver.").font(.caption).foregroundStyle(.secondary)
+                described("Completely free live wallpapers for your Mac Desktop, Lock Screen and Screen Saver.") {
+                    Text("Flua \(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.1.0")").font(.callout)
+                }
                 Link("GitHub", destination: URL(string: "https://github.com/Eclipter/flua")!)
             }
         }.formStyle(.grouped).scrollContentBackground(.hidden).padding(8)
@@ -1540,7 +1646,6 @@ struct SettingsView: View {
             .buttonStyle(FluaGlassButtonStyle())
             .textFieldStyle(FluaGlassTextFieldStyle())
             .onChange(of: library.state.pauseOnFullscreen) { _, _ in library.settingChanged() }
-            .onChange(of: library.state.pauseOnBattery) { _, _ in library.settingChanged() }
     }
 }
 

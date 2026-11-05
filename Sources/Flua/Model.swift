@@ -263,6 +263,10 @@ struct ConfigurationDraft {
     }
 }
 
+enum BatteryPauseTip: String, Codable {
+    case offered, dismissed
+}
+
 struct LibraryState: Codable {
     private(set) var builtInSceneCatalogVersion = 3
     var wallpapers: [Wallpaper] = []
@@ -274,6 +278,7 @@ struct LibraryState: Codable {
     var pauseOnLowPower: Bool?
     var pauseOnLowBattery: Bool = false
     var lowPowerThreshold: Int = 20
+    var batteryPauseTip: BatteryPauseTip?
     var pauseOnFullscreen: Bool = true
     var paused: Bool = false
     var displayMode: String?
@@ -331,7 +336,7 @@ struct LibraryState: Codable {
 
     private enum CodingKeys: String, CodingKey {
         case wallpapers, playlists, displays, interval, shuffle, pauseOnBattery, pauseOnLowPower, pauseOnLowBattery
-        case lowPowerThreshold, pauseOnFullscreen, paused, displayMode, blockedTags, accentColor, theme, nativePlayback, nativeCleanupDisplays
+        case lowPowerThreshold, batteryPauseTip, pauseOnFullscreen, paused, displayMode, blockedTags, accentColor, theme, nativePlayback, nativeCleanupDisplays
         case showInMenuBar, hideFromDock, showWindowOnStartup
         case builtInSceneCatalogVersion
     }
@@ -347,6 +352,7 @@ struct LibraryState: Codable {
         pauseOnLowPower = try c.decodeIfPresent(Bool.self, forKey: .pauseOnLowPower)
         pauseOnLowBattery = try c.decodeIfPresent(Bool.self, forKey: .pauseOnLowBattery) ?? (pauseOnLowPower ?? false)
         lowPowerThreshold = try c.decodeIfPresent(Int.self, forKey: .lowPowerThreshold) ?? 20
+        batteryPauseTip = try c.decodeIfPresent(BatteryPauseTip.self, forKey: .batteryPauseTip)
         pauseOnFullscreen = try c.decode(Bool.self, forKey: .pauseOnFullscreen)
         paused = try c.decode(Bool.self, forKey: .paused)
         displayMode = try c.decodeIfPresent(String.self, forKey: .displayMode)
@@ -395,7 +401,6 @@ struct LibraryState: Codable {
         s.interval = 3600
         s.shuffle = true
         s.pauseOnLowPower = true
-        s.pauseOnLowBattery = true
         return s
     }
     private static let afterDarkPlaylist = Playlist(id: "after-dark", name: "After Dark", items: ["cosmos", "pelagic", "lanterns", "rain"])
@@ -411,6 +416,17 @@ struct LibraryState: Codable {
         Wallpaper(id: "rain", title: "After Hours", kind: "rain", tags: "rain, city, night, neon", metadata: SceneMetadata(category: "Nature", color: "Blue", motion: "High"))
     ]
     func item(_ id: String?) -> Wallpaper? { wallpapers.first { $0.id == id } }
+    func hasAnimatedWallpaper(on display: String, surface: WallpaperSurface) -> Bool {
+        guard let selection = displays[display]?.selection(for: surface), selection.mode == .animated,
+              let wallpaper = item(selection.wallpaperID) else { return false }
+        return wallpaper.kind == "video" || builtInSceneKinds.contains(wallpaper.kind)
+    }
+
+    var playbackPolicy: PlaybackPolicy {
+        PlaybackPolicy(pauseOnBattery: pauseOnBattery, pauseOnLowPower: pauseOnLowPower ?? false,
+                       pauseOnLowBattery: pauseOnLowBattery, lowPowerThreshold: lowPowerThreshold,
+                       pauseOnFullscreen: pauseOnFullscreen).clampedForExport
+    }
     func playlist(_ id: String?) -> Playlist? { playlists.first { $0.id == id } }
     func isPlayable(_ wallpaper: Wallpaper) -> Bool {
         guard !isBlocked(wallpaper) else { return false }
@@ -621,13 +637,7 @@ func publishedSurfaceMode(_ surface: WallpaperSurface, wallpaper id: String, in 
 let builtInSceneKinds: Set<String> = ["aurora", "cosmos", "ocean", "ember", "ink", "dunes", "contour", "opal", "pelagic", "lanterns", "rain"]
 
 func providerCatalog(from state: LibraryState) -> ProviderCatalog {
-    let playbackPolicy = PlaybackPolicy(
-        pauseOnBattery: state.pauseOnBattery,
-        pauseOnLowPower: state.pauseOnLowPower ?? false,
-        pauseOnLowBattery: state.pauseOnLowBattery,
-        lowPowerThreshold: state.lowPowerThreshold,
-        pauseOnFullscreen: state.pauseOnFullscreen
-    ).clampedForExport
+    let playbackPolicy = state.playbackPolicy
     return ProviderCatalog(items: state.wallpapers.compactMap { wallpaper in
         guard state.isPlayable(wallpaper) else { return nil }
         // The provider draws these scenes, so a choice needs no media file. Still is the desktop thumbnail time.

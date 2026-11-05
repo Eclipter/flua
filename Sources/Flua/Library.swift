@@ -22,6 +22,7 @@ import UniformTypeIdentifiers
     @Published var importNotice: String?
     private(set) var lastImportIDs: [String] = []
     @Published var nativeSetupBusy = false
+    @Published var batteryPower = BatteryPower.current
     @Published var activity = "Choose a wallpaper to preview and set on your desktop."
     @Published var thumbnails: [String: NSImage] = [:]
     let disk: LibraryDisk
@@ -71,7 +72,11 @@ import UniformTypeIdentifiers
             }
         }
         tick = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
-            Task { @MainActor [weak self] in self?.advancePlaylists(force: false) }
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.refreshBatteryPower()
+                self.advancePlaylists(force: false)
+            }
         }
         RunLoop.main.add(tick!, forMode: .common)
         DispatchQueue.main.async { [weak self] in
@@ -231,6 +236,41 @@ import UniformTypeIdentifiers
         }
     }
     func settingChanged() { save() }
+    var showsBatteryPauseTip: Bool {
+        batteryPower.hasInternalBattery && state.batteryPauseTip == .offered && !state.pauseOnBattery && !state.pauseOnLowBattery
+    }
+    func dismissBatteryPauseTip() {
+        commitStateMutation { state.batteryPauseTip = .dismissed }
+    }
+    func setBatteryPause(_ setting: WritableKeyPath<LibraryState, Bool>, enabled: Bool) {
+        commitStateMutation {
+            state[keyPath: setting] = enabled
+            if enabled { state.batteryPauseTip = .dismissed }
+        }
+    }
+    private var hasAppliedAnimatedWallpaper: Bool {
+        screens.contains { screen in
+            let id = displayID(screen)
+            return state.nativePlayback[id] == true && WallpaperSurface.allCases.contains {
+                state.hasAnimatedWallpaper(on: id, surface: $0)
+            }
+        }
+    }
+    var batteryPauseStatus: String? {
+        guard let reason = batteryPower.pauseReason(for: state.playbackPolicy), hasAppliedAnimatedWallpaper else { return nil }
+        return "Wallpaper paused · \(reason.detail)"
+    }
+    private func refreshBatteryPower() {
+        guard (state.pauseOnBattery || state.pauseOnLowPower == true || state.pauseOnLowBattery), hasAppliedAnimatedWallpaper else { return }
+        let power = BatteryPower.current
+        if power != batteryPower { batteryPower = power }
+    }
+    private func offerBatteryPauseTip(after assignments: [String: NativeWallpaperStore.Assignment], surface: WallpaperSurface?) {
+        guard state.batteryPauseTip == nil, !state.pauseOnBattery, !state.pauseOnLowBattery,
+              batteryPower.hasInternalBattery, let surface,
+              assignments.keys.contains(where: { state.hasAnimatedWallpaper(on: $0, surface: surface) }) else { return }
+        commitStateMutation { state.batteryPauseTip = .offered }
+    }
     @MainActor func applySelected() {
         guard !nativeSetupBusy, let w = selected else { return }
         let previousState = state
@@ -410,6 +450,7 @@ import UniformTypeIdentifiers
             // Isolated smoke runs validate real descriptors without touching the system wallpaper store.
             guard systemPlaybackEnabled else {
                 automaticPlaylistPlaybackEnabled = true
+                offerBatteryPauseTip(after: assignments, surface: surface)
                 activity = "Validated saved wallpaper choices. System playback is disabled for verification."
                 return
             }
@@ -421,6 +462,8 @@ import UniformTypeIdentifiers
                 try await Task.detached { try NativeWallpaper.apply(snapshot.assignments(), targeting: displays, mirrored: mirrored, root: root, reloadUnchanged: reloadUnchanged, clearingUnassigned: clearingUnassigned) }.value
                 if clearingUnassigned { state.nativeCleanupDisplays.subtract(displays) }
                 rememberNativeAssignments(assignments, displays: displays)
+                refreshBatteryPower()
+                offerBatteryPauseTip(after: assignments, surface: surface)
                 activity = assignments.isEmpty
                     ? "Previous system wallpapers restored; no saved native choices remain for the targeted displays."
                     : "Applied saved wallpaper choices to \(assignments.count) display(s). Native playback continues after Flua quits."

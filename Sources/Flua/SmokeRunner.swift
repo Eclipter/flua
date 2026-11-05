@@ -246,7 +246,7 @@ enum SmokeRunner {
         var startupControlPassed = await waitForAudit {
             checkboxValue(settings.title, named: "Show window on startup") == true
                 && checkboxValue(settings.title, named: "Pause in Low Power Mode") == true
-                && checkboxValue(settings.title, named: "Pause when battery is low") == true
+                && checkboxValue(settings.title, named: "Pause when battery is low") == false
         }
         for shown in [false, true] {
             if let checkbox = checkboxElement(settings.title, named: "Show window on startup") {
@@ -268,10 +268,10 @@ enum SmokeRunner {
                 && checkboxValue(settings.title, named: "Pause when battery is low") == lowBattery
         }
         var powerControlsPassed = true
-        for (name, lowPower, lowBattery) in [("Pause in Low Power Mode", false, true),
-                                             ("Pause when battery is low", false, false),
-                                             ("Pause in Low Power Mode", true, false),
-                                             ("Pause when battery is low", true, true)] {
+        for (name, lowPower, lowBattery) in [("Pause in Low Power Mode", false, false),
+                                             ("Pause when battery is low", false, true),
+                                             ("Pause in Low Power Mode", true, true),
+                                             ("Pause when battery is low", true, false)] {
             await requireAudit(name + " is available") {
                 checkboxValue(settings.title, named: name) != nil && checkboxEnabled(settings.title, named: name) == true
             }
@@ -298,6 +298,68 @@ enum SmokeRunner {
                 && checkboxEnabled(settings.title, named: "Hide from Dock") == false
         }
         library.state.setShowsMenuBar(true)
+        library.tick?.invalidate()
+        library.state = .initial
+        library.navigate(to: "all")
+        library.selection = "aurora"
+        library.surface = .desktop
+        library.clearFilters()
+        let enableTip = "Enable Low Battery Pause"
+        let batterySettings = "Battery Settings…"
+        let dismissTip = "Not Now"
+        func press(_ name: String) {
+            guard let target = auditElement(auditTitle, named: name),
+                  AXUIElementPerformAction(target, kAXPressAction as CFString) == .success else {
+                missing.append("Press \(name)")
+                return
+            }
+        }
+        func tipReady() -> Bool { missingNames(auditTitle, [enableTip, batterySettings, dismissTip]).isEmpty }
+        library.batteryPower = BatteryPower(hasInternalBattery: false, onBattery: false, lowPower: false, percentage: nil)
+        library.applySelected()
+        await requireAudit("An animated wallpaper on a Mac without a battery leaves the tip unoffered") {
+            !library.nativeSetupBusy && library.state.batteryPauseTip == nil && !tipReady()
+        }
+        library.batteryPower = BatteryPower(hasInternalBattery: true, onBattery: false, lowPower: false, percentage: 99)
+        library.setSurfaceMode(.still)
+        library.applySelected()
+        await requireAudit("Applying a Still wallpaper leaves the tip unoffered") {
+            !library.nativeSetupBusy && library.state.batteryPauseTip == nil && !tipReady()
+        }
+        library.setSurfaceMode(.animated)
+        library.applySelected()
+        await requireAudit("Applying an animated wallpaper offers low-battery pause without enabling it") {
+            !library.nativeSetupBusy && library.state.batteryPauseTip == .offered && !library.state.pauseOnLowBattery && tipReady()
+        }
+        press(batterySettings)
+        await requireAudit("Battery Settings opens the battery controls without enabling a pause") {
+            library.section == "settings" && library.state.batteryPauseTip == .dismissed
+                && checkboxValue(auditTitle, named: "Pause whenever unplugged") == false
+                && checkboxValue(auditTitle, named: "Pause when battery is low") == false
+        }
+        library.navigate(to: "all")
+        library.state.batteryPauseTip = .offered
+        await requireAudit("Dismiss action is available") { tipReady() }
+        press(dismissTip)
+        library.applySelected()
+        await requireAudit("Dismissing the tip persists across later applications") {
+            !library.nativeSetupBusy && (try? library.disk.load())?.batteryPauseTip == .dismissed && !tipReady()
+        }
+        library.state.batteryPauseTip = .offered
+        await requireAudit("Enable action is available") { tipReady() }
+        press(enableTip)
+        await requireAudit("Opting in saves the low-battery rule and dismisses the tip") {
+            (try? library.disk.load())?.pauseOnLowBattery == true && library.state.batteryPauseTip == .dismissed && !tipReady()
+        }
+        for screen in library.screens { library.state.nativePlayback[displayID(screen)] = true }
+        library.batteryPower = BatteryPower(hasInternalBattery: true, onBattery: true, lowPower: false, percentage: 18)
+        await requireAudit("The library announces a low-battery wallpaper pause") {
+            auditElement(auditTitle, named: "Wallpaper paused · Battery at 18%") != nil
+        }
+        library.batteryPower = BatteryPower(hasInternalBattery: true, onBattery: false, lowPower: false, percentage: 18)
+        await requireAudit("Plugging in clears the low-battery status") {
+            library.batteryPauseStatus == nil && auditElement(auditTitle, named: "Wallpaper paused · Battery at 18%") == nil
+        }
         let report: [String: Any] = ["passed": missing.isEmpty, "missing": missing]
         if let data = try? JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys]) {
             try? data.write(to: destination)
@@ -478,6 +540,7 @@ enum SmokeRunner {
         func find(_ element: AXUIElement, _ depth: Int) -> AXUIElement? {
             guard depth <= 16 else { return nil }
             if ax(element, kAXDescriptionAttribute) == name || ax(element, kAXTitleAttribute) == name { return element }
+            if ax(element, kAXRoleAttribute) == kAXStaticTextRole && ax(element, kAXValueAttribute) == name { return element }
             var childrenRef: CFTypeRef?
             guard AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &childrenRef) == .success,
                   let children = childrenRef as? [AXUIElement] else { return nil }
