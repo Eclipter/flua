@@ -11,7 +11,7 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Test the policy checker
         run: python3 Tests/Scripts/LintTests.py
       - name: Check Swift whitespace
