@@ -112,15 +112,12 @@ struct OnlineDownloadsView: View {
         VStack(alignment: .leading, spacing: 20) {
             VStack(alignment: .leading, spacing: 10) {
                 Text("Find a Wallpaper").font(.headline).accessibilityAddTraits(.isHeader)
-                Text("Download an image or video you’d like to use as your wallpaper, then import it into Flua.")
+                Text("Flua is free and has no distribution agreements with wallpaper providers, so we can’t offer many popular free wallpapers directly in the app.")
                     .font(.callout).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
-                HStack(spacing: 16) {
-                    Link("Pexels", destination: URL(string: "https://www.pexels.com/videos/")!)
-                    Link("Pixabay", destination: URL(string: "https://pixabay.com/videos/")!)
-                    Link("Unsplash", destination: URL(string: "https://unsplash.com/")!)
-                }
-                .font(.callout)
+                Text("Start with [**MoeWalls**](https://moewalls.com/) or [**MotionBGs**](https://motionbgs.com/) for animated wallpapers. You can also find videos on [**Pexels**](https://www.pexels.com/videos/) and [**Pixabay**](https://pixabay.com/videos/). Download videos you like, then import them into Flua.")
+                    .font(.callout).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
                 Button("Import…") { library.chooseMedia() }
                     .fluaProminentButton().disabled(library.importing)
             }
@@ -129,7 +126,7 @@ struct OnlineDownloadsView: View {
             .fluaGlass(in: RoundedRectangle(cornerRadius: 14, style: .continuous))
             VStack(alignment: .leading, spacing: 10) {
                 Text("Sample Clips").font(.headline).accessibilityAddTraits(.isHeader)
-                Text("Preview stock and archive footage to try video wallpapers in Flua.")
+                Text("The sources below allow redistribution, but mostly offer general video footage rather than animated wallpapers. Some results may be a little unusual. Treat them as examples to try Flua before finding your own wallpapers.")
                     .font(.callout).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 HStack(spacing: 12) {
