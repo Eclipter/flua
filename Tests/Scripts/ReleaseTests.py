@@ -39,8 +39,6 @@ from pathlib import Path
 import plistlib
 import shutil
 
-if 'FLUA_RELEASE_TEST_DIRECT_BUILD' not in os.environ:
-    assert os.environ['FLUA_ENABLE_UPDATES'] == '1'
 assert all(key not in os.environ for key in (
     'FLUA_APP_PATH', 'FLUA_CATALOG_PATH', 'FLUA_WALLPAPER_IDENTIFIER'))
 Path('build-called').touch()
@@ -152,7 +150,6 @@ os.execv('/bin/mv', sys.argv)
         if failure == 'success':
             build_environment = {key: value for key, value in environment.items() if key not in (
                 'FLUA_APP_PATH', 'FLUA_CATALOG_PATH', 'FLUA_WALLPAPER_IDENTIFIER')}
-            build_environment['FLUA_RELEASE_TEST_DIRECT_BUILD'] = '1'
             subprocess.run(['make', 'build'], cwd=root, env=build_environment, check=True)
             assert all((root / relative).read_bytes() == data for relative, data in originals.items())
             assert (archive.read_bytes(), feed.read_bytes()) == originals_assets

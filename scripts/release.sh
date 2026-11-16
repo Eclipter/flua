@@ -69,7 +69,6 @@ PY
 env -u FLUA_APP_PATH \
     -u FLUA_CATALOG_PATH \
     -u FLUA_WALLPAPER_IDENTIFIER \
-    FLUA_ENABLE_UPDATES=1 \
     make build
 mkdir -p dist
 archive_dir=$(mktemp -d "$PWD/dist/.release.XXXXXX")

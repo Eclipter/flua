@@ -2,13 +2,10 @@
 set -euo pipefail
 cd "${0:A:h:h}"
 swift_args=(-c release --triple arm64-apple-macosx27.0)
-sparkle=""
-if [[ "${FLUA_ENABLE_UPDATES:-0}" == 1 ]]; then
-    sparkle=$(./scripts/sparkle.sh)
-    swift_args+=(--scratch-path .build/updates -Xswiftc -F -Xswiftc "$sparkle" \
-        -Xlinker -F -Xlinker "$sparkle" \
-        -Xlinker -rpath -Xlinker '@loader_path/../Frameworks')
-fi
+sparkle=$(./scripts/sparkle.sh)
+swift_args+=(--scratch-path .build/updates -Xswiftc -F -Xswiftc "$sparkle" \
+    -Xlinker -F -Xlinker "$sparkle" \
+    -Xlinker -rpath -Xlinker '@loader_path/../Frameworks')
 swift build "${swift_args[@]}"
 bin_dir=$(swift build "${swift_args[@]}" --show-bin-path)
 app="${FLUA_APP_PATH:-$PWD/build/Flua.app}"
@@ -22,12 +19,10 @@ cp -R "$bin_dir/Flua_Flua.bundle" "$app/Contents/Resources/"
 framework="$app/Contents/Frameworks/Sparkle.framework"
 rm -rf "$framework"
 rm -f "$app/Contents/Resources/Sparkle-LICENSE.txt"
-if [[ -n "$sparkle" ]]; then
-    mkdir -p "$app/Contents/Frameworks"
-    ditto "$sparkle/Sparkle.framework" "$framework"
-    cp "$sparkle/LICENSE" "$app/Contents/Resources/Sparkle-LICENSE.txt"
-    /usr/libexec/PlistBuddy -c 'Merge Resources/Updates.plist' "$app/Contents/Info.plist"
-fi
+mkdir -p "$app/Contents/Frameworks"
+ditto "$sparkle/Sparkle.framework" "$framework"
+cp "$sparkle/LICENSE" "$app/Contents/Resources/Sparkle-LICENSE.txt"
+/usr/libexec/PlistBuddy -c 'Merge Resources/Updates.plist' "$app/Contents/Info.plist"
 sh Sources/WallpaperExtension/build-and-test.sh "$extension_build" --build-only
 xcrun clang -target arm64-apple-macosx27.0 -Wall -Wextra -Werror \
     Sources/WallpaperExtension/AgentGuard.c -o "$app/Contents/Helpers/FluaWallpaperGuard"

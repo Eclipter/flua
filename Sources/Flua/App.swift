@@ -1,7 +1,6 @@
 import SwiftUI
 import AppKit
 import Combine
-#if canImport(Sparkle)
 import Sparkle
 
 @MainActor private final class SparkleUpdateManager: ObservableObject {
@@ -22,12 +21,20 @@ import Sparkle
     }
 
     static func startIfEligible(arguments: [String]) {
-        guard !LibraryPaths.isVerification(arguments: arguments),
-              !arguments.contains("--data-dir") else { return }
+        guard !LibraryPaths.isVerification(arguments: arguments) else { return }
         shared = SparkleUpdateManager()
     }
 
     func checkForUpdates() { controller.checkForUpdates(nil) }
+}
+
+private struct CheckForUpdatesButton: View {
+    @ObservedObject var updates: SparkleUpdateManager
+
+    var body: some View {
+        Button("Check for Updates…", action: updates.checkForUpdates)
+            .disabled(!updates.canCheck)
+    }
 }
 
 private struct UpdateSettings: View {
@@ -37,8 +44,7 @@ private struct UpdateSettings: View {
     var body: some View {
         let checkLabel = "Check for updates automatically"
         let installLabel = "Download and install updates automatically"
-        Button("Check for Updates…", action: updates.checkForUpdates)
-            .disabled(!updates.canCheck)
+        CheckForUpdatesButton(updates: updates)
         Toggle(checkLabel, isOn: Binding(
             get: { updates.checksAutomatically },
             set: { updates.updater.automaticallyChecksForUpdates = $0 }
@@ -54,7 +60,6 @@ private struct UpdateSettings: View {
         .tint(tint)
     }
 }
-#endif
 
 @MainActor final class ViewState: ObservableObject {
     @Published var playlistPicker: String?
@@ -531,9 +536,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         AppContext.library.applyPresence()
     }
     func applicationDidFinishLaunching(_ notification: Notification) {
-        #if canImport(Sparkle)
         SparkleUpdateManager.startIfEligible(arguments: ProcessInfo.processInfo.arguments)
-        #endif
         for menu in NSApp.mainMenu?.items.compactMap(\.submenu) ?? [] {
             configureFullscreenShortcut(in: menu)
         }
@@ -640,6 +643,9 @@ struct TrayView: View {
             library.navigate(to: "settings")
             openWindow(id: "library")
             NSApp.activate(ignoringOtherApps: true)
+        }
+        if let updates = SparkleUpdateManager.shared {
+            CheckForUpdatesButton(updates: updates)
         }
         Button("Quit Flua") { NSApp.terminate(nil) }.keyboardShortcut("q")
     }
@@ -1695,19 +1701,20 @@ struct SettingsView: View {
                 described("Completely free live wallpapers for your Mac Desktop, Lock Screen and Screen Saver.") {
                     Text("Flua \(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.1.0")").font(.callout)
                 }
+                if let updates = SparkleUpdateManager.shared {
+                    CheckForUpdatesButton(updates: updates)
+                }
                 Link("GitHub", destination: URL(string: "https://github.com/Eclipter/flua")!)
             }
-            #if canImport(Sparkle)
             if let updates = SparkleUpdateManager.shared {
                 Section {
                     UpdateSettings(updates: updates, tint: library.accentOverride)
                 } header: {
                     Text("Updates")
                 } footer: {
-                    settingsNote("Updates download in the background and install when Flua quits.")
+                    settingsNote("Manual checks ask before downloading or installing updates. Automatic installation is opt-in and happens when Flua quits.")
                 }
             }
-            #endif
         }.formStyle(.grouped).scrollContentBackground(.hidden).padding(8)
             .fluaClearInitialFocus()
             .toggleStyle(.switch)
