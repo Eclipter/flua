@@ -1179,6 +1179,8 @@ struct WallpaperCard: View {
                     .fill(Color(nsColor: .windowBackgroundColor))
                     .shadow(color: .black.opacity(0.12), radius: 8, y: 3)
             }
+            // Render the thumbnail and its overlays together as the card scrolls.
+            .drawingGroup()
             .contentShape(Rectangle())
     }
 }

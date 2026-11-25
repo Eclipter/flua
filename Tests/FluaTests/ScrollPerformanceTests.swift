@@ -3,11 +3,29 @@ import ScreenCaptureKit
 
 private final class ScrollFrames: NSObject, SCStreamOutput {
     var times: [Double] = []
+    var gridTimes: [Double] = []
+    private var previousGridSignature: UInt64?
 
     func stream(_ stream: SCStream, didOutputSampleBuffer sample: CMSampleBuffer, of type: SCStreamOutputType) {
         guard let attachments = CMSampleBufferGetSampleAttachmentsArray(sample, createIfNecessary: false) as? [[SCStreamFrameInfo: Any]],
               attachments.first?[.status] as? Int == SCFrameStatus.complete.rawValue else { return }
-        times.append(CMSampleBufferGetPresentationTimeStamp(sample).seconds)
+        let time = CMSampleBufferGetPresentationTimeStamp(sample).seconds
+        times.append(time)
+        guard let pixels = sample.imageBuffer, CVPixelBufferLockBaseAddress(pixels, .readOnly) == kCVReturnSuccess else { return }
+        defer { CVPixelBufferUnlockBaseAddress(pixels, .readOnly) }
+        guard let base = CVPixelBufferGetBaseAddress(pixels) else { return }
+        let width = CVPixelBufferGetWidth(pixels)
+        let height = CVPixelBufferGetHeight(pixels)
+        let rowBytes = CVPixelBufferGetBytesPerRow(pixels)
+        // Inspector animation can deliver whole-window frames while the grid is stalled.
+        var signature: UInt64 = 0
+        for row in stride(from: height * 2 / 5, to: height * 3 / 5, by: 7) {
+            for column in stride(from: width * 2 / 5, to: width * 3 / 5, by: 7) {
+                signature = signature &* 31 &+ UInt64(base.load(fromByteOffset: row * rowBytes + column * 4, as: UInt32.self))
+            }
+        }
+        if signature != previousGridSignature { gridTimes.append(time) }
+        previousGridSignature = signature
     }
 }
 
@@ -42,6 +60,7 @@ private final class ScrollFrames: NSObject, SCStreamOutput {
         configuration.height = 480
         configuration.minimumFrameInterval = CMTime(value: 1, timescale: 60)
         configuration.showsCursor = false
+        configuration.pixelFormat = kCVPixelFormatType_32BGRA
         let frames = ScrollFrames()
         let queue = DispatchQueue(label: "Flua.ScrollFrameCapture")
         let stream = SCStream(filter: SCContentFilter(desktopIndependentWindow: window), configuration: configuration, delegate: nil)
@@ -52,7 +71,7 @@ private final class ScrollFrames: NSObject, SCStreamOutput {
         while app.isRunning, Date() < completion { try await Task.sleep(for: .milliseconds(50)) }
         // Closing the benchmark window can stop the stream before this call.
         try? await stream.stopCapture()
-        let times = queue.sync { frames.times }
+        let timesByPane = queue.sync { [frames.gridTimes, frames.times] }
         guard !app.isRunning else {
             throw NSError(domain: "ScrollPerformanceTests", code: 3, userInfo: [NSLocalizedDescriptionKey: "Scroll benchmark exceeded 45 seconds"])
         }
@@ -61,7 +80,7 @@ private final class ScrollFrames: NSObject, SCStreamOutput {
         let phases = try JSONDecoder().decode([[Double]].self, from: Data(contentsOf: phasesURL))
         precondition(phases.count == 2, "Expected grid and inspector scroll phases")
         var metrics: [[String: Any]] = []
-        for (name, phase) in zip(["grid", "inspector"], phases) {
+        for (name, (phase, times)) in zip(["grid", "inspector"], zip(phases, timesByPane)) {
             let samples = times.filter { $0 >= phase[0] + 0.5 && $0 < phase[1] - 0.5 }
             guard samples.count > 1 else {
                 throw NSError(domain: "ScrollPerformanceTests", code: 2, userInfo: [NSLocalizedDescriptionKey: "No captured frames for the " + name + " scroll phase"])
