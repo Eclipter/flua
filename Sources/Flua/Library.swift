@@ -36,6 +36,7 @@ import UniformTypeIdentifiers
     private var nativeRefreshTask: Task<Void, Never>?
     private var nativeRefreshDebouncing = false
     private var nativeRefreshRevision = 0
+    private let imageThumbnailQueue = DispatchQueue(label: "Flua.ImageThumbnails", qos: .utility)
     private var thumbnailPublicationTask: Task<Void, Never>?
     private var automaticPlaylistPlaybackEnabled = false
     private var stoppedNativeDisplays = Set<String>()
@@ -1018,7 +1019,11 @@ import UniformTypeIdentifiers
         guard let url = disk.url(for: w) else { return }
         Task { @MainActor [weak self] in
             if w.kind == "image" {
-                if let image = ImageThumbnail.create(url: url) { self?.publishThumbnail(NSImage(cgImage: image, size: .zero), for: w) }
+                guard let queue = self?.imageThumbnailQueue else { return }
+                let image = await withCheckedContinuation { continuation in
+                    queue.async { continuation.resume(returning: ImageThumbnail.create(url: url)) }
+                }
+                if let image { self?.publishThumbnail(NSImage(cgImage: image, size: .zero), for: w) }
             } else {
                 let generator = AVAssetImageGenerator(asset: AVURLAsset(url: url))
                 generator.appliesPreferredTrackTransform = true

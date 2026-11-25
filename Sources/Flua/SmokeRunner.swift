@@ -605,6 +605,36 @@ enum SmokeRunner {
             return true
         }
     }
+    @MainActor private static func imageThumbnailLoadingCheck(in directory: URL) async throws -> Bool {
+        let disk = try LibraryDisk(root: directory.appendingPathComponent("image-thumbnails"))
+        let size = NSSize(width: 6144, height: 3456)
+        let image = AmbientSceneView.thumbnail(scene: "ocean", size: size)
+        let data = try png(image)
+        try data.write(to: disk.assets.appendingPathComponent("wallpaper.png"))
+
+        var state = LibraryState()
+        state.wallpapers = (0..<48).map { index in
+            Wallpaper(id: "image-\(index)", title: "Image \(index)", kind: "image", file: "wallpaper.png",
+                      mediaFacts: MediaFacts(width: Int(size.width), height: Int(size.height), bytes: Int64(data.count)))
+        }
+        try disk.saveManifest(state)
+        let started = CACurrentMediaTime()
+        let library = try Library(root: disk.root, systemPlaybackEnabled: false)
+        defer { library.tick?.invalidate() }
+
+        var last = started
+        var longestGap = 0.0
+        while library.thumbnails.count < state.wallpapers.count, last - started < 20 {
+            await pause(0.02)
+            let now = CACurrentMediaTime()
+            longestGap = max(longestGap, now - last)
+            last = now
+        }
+        await library.finishCatalogWrites()
+        return longestGap < 0.5 && library.thumbnails.count == state.wallpapers.count
+            && library.disk.thumbnails.count == state.wallpapers.count
+    }
+
     @MainActor static func runIfRequested(library: Library) async {
         let args = ProcessInfo.processInfo.arguments
         if let i = args.firstIndex(of: "--startup-smoke"), args.indices.contains(i + 1), args.contains("--data-dir") {
@@ -908,6 +938,8 @@ enum SmokeRunner {
             if results["discoverSystemScrollers"] as? Bool != true { failures.append("discoverSystemScrollers") }
             results["inspectorSceneInteraction"] = await verifyInspectorInteraction(library: library)
             library.stop()
+            results["responsiveImageThumbnailLoading"] = try await imageThumbnailLoadingCheck(in: out)
+            if results["responsiveImageThumbnailLoading"] as? Bool != true { failures.append("responsiveImageThumbnailLoading") }
             let image = AmbientSceneView.thumbnail(scene: "ocean", size: NSSize(width: 640, height: 360))
             let imageURL = out.appendingPathComponent("sample.png")
             try png(image).write(to: imageURL)
