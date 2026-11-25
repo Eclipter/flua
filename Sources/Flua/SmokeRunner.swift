@@ -455,7 +455,12 @@ enum SmokeRunner {
             styleMask: [.titled, .nonactivatingPanel], backing: .buffered, defer: false)
         window.title = "Flua Scroll Benchmark"
         window.isReleasedWhenClosed = false
-        let root = NSHostingView(rootView: LibraryView().environmentObject(library))
+        let thumbnails = ["contour", "dunes", "ink", "lanterns", "opal", "pelagic", "rain"].compactMap {
+            Bundle.module.url(forResource: $0, withExtension: "png", subdirectory: "SceneAssets")
+        }
+        guard !thumbnails.isEmpty else { exit(1) }
+        let root = NSHostingView(rootView: LibraryView(catalogLoader: ScrollCatalog(thumbnails: thumbnails))
+            .environmentObject(library))
         window.contentView = root
         await pause(1)
         window.alphaValue = 1
@@ -470,30 +475,60 @@ enum SmokeRunner {
         let deadline = Date().addingTimeInterval(30)
         while !FileManager.default.fileExists(atPath: start.path), Date() < deadline { await pause(0.05) }
         guard FileManager.default.fileExists(atPath: start.path) else { window.close(); exit(1) }
-        var scrolls: [NSScrollView] = []
-        func visit(_ view: NSView) {
+        func verticalScrolls(in view: NSView) -> [NSScrollView] {
             if let scroll = view as? NSScrollView, scroll.hasVerticalScroller, scroll.bounds.width > 260 {
-                scrolls.append(scroll)
+                return [scroll]
             }
-            view.subviews.forEach(visit)
+            return view.subviews.flatMap(verticalScrolls(in:))
         }
-        visit(root)
-        var phases: [[Double]] = []
-        for scroll in scrolls {
+        func scrollPhase(_ scroll: NSScrollView, distance: CGFloat = .greatestFiniteMagnitude) async -> [Double] {
             let began = CACurrentMediaTime()
             for step in 0..<360 {
                 let clip = scroll.contentView
-                let maximum = max(0, (scroll.documentView?.bounds.height ?? 0) - clip.bounds.height)
+                let maximum = min(distance, max(0, (scroll.documentView?.bounds.height ?? 0) - clip.bounds.height))
                 let phase = Double(step % 120) / 119
                 clip.scroll(to: NSPoint(x: 0, y: maximum * (1 - cos(phase * 2 * .pi)) / 2))
                 scroll.reflectScrolledClipView(clip)
                 await pause(1.0 / 60)
             }
-            phases.append([began, CACurrentMediaTime()])
+            return [began, CACurrentMediaTime()]
         }
+
+        let scrolls = verticalScrolls(in: root)
+        guard scrolls.count == 2 else { window.close(); exit(1) }
+        var phases: [[Double]] = []
+        for scroll in scrolls { phases.append(await scrollPhase(scroll)) }
+
+        library.navigate(to: "downloads")
+        let catalogDeadline = Date().addingTimeInterval(5)
+        var discover = verticalScrolls(in: root).max { $0.bounds.width < $1.bounds.width }
+        while (discover?.documentView?.bounds.height ?? 0) < 2000, Date() < catalogDeadline {
+            await pause(0.05)
+            discover = verticalScrolls(in: root).max { $0.bounds.width < $1.bounds.width }
+        }
+        guard let discover, (discover.documentView?.bounds.height ?? 0) >= 2000 else { window.close(); exit(1) }
+        phases.append(await scrollPhase(discover, distance: 1800))
+        capture(window, to: destination.deletingLastPathComponent().appendingPathComponent("discover.png"))
         if let data = try? JSONSerialization.data(withJSONObject: phases) { try? data.write(to: destination) }
         window.close()
-        exit(phases.count == 2 ? 0 : 1)
+        exit(0)
+    }
+
+    private struct ScrollCatalog: OnlineCatalogPageLoading {
+        let thumbnails: [URL]
+
+        func load(_ request: OnlineCatalogPageRequest) async throws -> OnlineCatalogPage {
+            guard request.source == .nasaSVS else { return OnlineCatalogPage(items: [], nextCursor: nil) }
+            let items = (0..<48).map { index in
+                var item = OnlineCatalog.items[index % OnlineCatalog.items.count]
+                item.id = "scroll-clip-\(index)"
+                item.title = "Sample Clip \(index)"
+                item.thumbnailURL = thumbnails[index % thumbnails.count]
+                if index.isMultiple(of: 4) { item.previewUnavailableReason = "Preview unavailable for this clip." }
+                return item
+            }
+            return OnlineCatalogPage(items: items, nextCursor: nil)
+        }
     }
     private static func checkboxValue(_ title: String, named name: String) -> Bool? {
         checkboxAttribute(title, named: name, kAXValueAttribute)

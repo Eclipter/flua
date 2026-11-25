@@ -71,16 +71,16 @@ private final class ScrollFrames: NSObject, SCStreamOutput {
         while app.isRunning, Date() < completion { try await Task.sleep(for: .milliseconds(50)) }
         // Closing the benchmark window can stop the stream before this call.
         try? await stream.stopCapture()
-        let timesByPane = queue.sync { [frames.gridTimes, frames.times] }
+        let timesByPane = queue.sync { [frames.gridTimes, frames.times, frames.gridTimes] }
         guard !app.isRunning else {
             throw NSError(domain: "ScrollPerformanceTests", code: 3, userInfo: [NSLocalizedDescriptionKey: "Scroll benchmark exceeded 45 seconds"])
         }
         precondition(app.terminationStatus == 0, "Scroll benchmark did not complete")
         precondition(NSWorkspace.shared.frontmostApplication?.processIdentifier == foreground, "Benchmark activated Flua")
         let phases = try JSONDecoder().decode([[Double]].self, from: Data(contentsOf: phasesURL))
-        precondition(phases.count == 2, "Expected grid and inspector scroll phases")
+        precondition(phases.count == 3, "Expected grid, inspector and Discover scroll phases")
         var metrics: [[String: Any]] = []
-        for (name, (phase, times)) in zip(["grid", "inspector"], zip(phases, timesByPane)) {
+        for (name, (phase, times)) in zip(["grid", "inspector", "discover"], zip(phases, timesByPane)) {
             let samples = times.filter { $0 >= phase[0] + 0.5 && $0 < phase[1] - 0.5 }
             guard samples.count > 1 else {
                 throw NSError(domain: "ScrollPerformanceTests", code: 2, userInfo: [NSLocalizedDescriptionKey: "No captured frames for the " + name + " scroll phase"])
@@ -97,6 +97,6 @@ private final class ScrollFrames: NSObject, SCStreamOutput {
         print(String(decoding: try Data(contentsOf: report), as: UTF8.self))
         fflush(stdout)
         precondition(metrics.allSatisfy { $0["passed"] as? Bool == true }, "Scrolling fell below 45 fps or stalled for 100 ms; see \(report.path)")
-        print("PASS: visible grid and inspector scrolling; results:", report.path)
+        print("PASS: visible library grid, inspector and Discover scrolling; results:", report.path)
     }
 }

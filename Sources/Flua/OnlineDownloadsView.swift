@@ -255,10 +255,10 @@ struct OnlineDownloadsView: View {
                 .overlay(alignment: .bottomTrailing) {
                     if item.previewUnavailableReason == nil {
                         Button { viewState.previewing = item.id } label: { Label("Play Clip", systemImage: "play.fill") }
-                            .fluaGlassButton().padding(8)
+                            .buttonStyle(FluaGlassButtonStyle(solid: true)).padding(8)
                     } else {
                         Text("Still image only").font(.caption2).padding(6)
-                            .background(.regularMaterial, in: Capsule()).padding(8)
+                            .background(Color(nsColor: .windowBackgroundColor), in: Capsule()).padding(8)
                     }
                 }
             }

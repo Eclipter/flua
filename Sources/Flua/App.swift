@@ -213,12 +213,13 @@ private struct FrostedSurface<S: Shape>: ViewModifier {
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     let shape: S
     let clear: Bool
+    let solid: Bool
 
     func body(content: Content) -> some View {
         content
             .background {
                 let background = Group {
-                    if reduceTransparency {
+                    if reduceTransparency || solid {
                         shape.fill(Color(nsColor: .windowBackgroundColor))
                     } else if clear {
                         shape.fill(scheme == .dark ? Color.white.opacity(0.14) : Color.white.opacity(0.35))
@@ -230,7 +231,7 @@ private struct FrostedSurface<S: Shape>: ViewModifier {
                     }
                 }
                 // Shadow the shape without flattening the scrolling control subtree.
-                if clear {
+                if clear || solid {
                     background
                 } else {
                     background.shadow(color: .black.opacity(scheme == .dark ? 0.16 : 0.06), radius: 12, y: 4)
@@ -246,10 +247,11 @@ private struct FrostedSurface<S: Shape>: ViewModifier {
 struct FluaGlassButtonStyle: PrimitiveButtonStyle {
     var prominent = false
     var clear = false
+    var solid = false
 
     func makeBody(configuration: Configuration) -> some View {
         Button(configuration)
-            .buttonStyle(GlassPressEffect(prominent: prominent, clear: clear))
+            .buttonStyle(GlassPressEffect(prominent: prominent, clear: clear, solid: solid))
     }
 }
 
@@ -258,12 +260,13 @@ private struct GlassPressEffect: ButtonStyle {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var prominent = false
     var clear = false
+    var solid = false
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .foregroundStyle(configuration.role == .destructive ? Color.red : Color.primary)
             .padding(.horizontal, 12).padding(.vertical, 7)
-            .fluaGlass(clear: clear, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+            .fluaGlass(clear: clear, solid: solid, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
             .overlay {
                 if prominent {
                     RoundedRectangle(cornerRadius: 9, style: .continuous)
@@ -425,8 +428,8 @@ struct LibraryColorOption: View {
 }
 
 extension View {
-    func fluaGlass(clear: Bool = false, in shape: some Shape) -> some View {
-        modifier(FrostedSurface(shape: shape, clear: clear))
+    func fluaGlass(clear: Bool = false, solid: Bool = false, in shape: some Shape) -> some View {
+        modifier(FrostedSurface(shape: shape, clear: clear, solid: solid))
     }
     func fluaProminentButton(clear: Bool = false) -> some View {
         buttonStyle(FluaGlassButtonStyle(prominent: true, clear: clear))
@@ -656,8 +659,13 @@ struct LibraryView: View {
     @FocusState private var searchFocused: Bool
     @StateObject private var ui = ViewState()
     @StateObject private var onlineDownloads = OnlineDownloadCoordinator()
-    @StateObject private var onlineCatalogBrowser = OnlineCatalogBrowser(loader: OnlineCatalogProviderService())
+    @StateObject private var onlineCatalogBrowser: OnlineCatalogBrowser
     @EnvironmentObject var library: Library
+
+    init(catalogLoader: any OnlineCatalogPageLoading = OnlineCatalogProviderService()) {
+        _onlineCatalogBrowser = StateObject(wrappedValue: OnlineCatalogBrowser(loader: catalogLoader))
+    }
+
     var body: some View {
         GeometryReader { windowGeometry in
             NavigationSplitView(columnVisibility: $ui.columnVisibility) {
