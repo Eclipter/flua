@@ -44,11 +44,53 @@ enum NativeWallpaper {
         try run(registrationTool, ["-f", Bundle.main.bundlePath])
         try run("/usr/bin/pluginkit", ["-a", extensionURL.path])
         try run("/usr/bin/pluginkit", ["-e", "use", "-i", identifier])
-        let elected = try run("/usr/bin/pluginkit", ["-m", "-v", "-i", identifier])
-        guard pluginPaths(in: elected).contains(current) else {
+        guard try isRegistered() else {
             throw NativeWallpaperError("macOS did not register this copy of Flua. Keep the app in a permanent folder and retry setup.")
         }
     }
+    private static func isRegistered() throws -> Bool {
+        let elected = try run("/usr/bin/pluginkit", ["-m", "-v", "-i", identifier], allowedStatuses: [0, 1])
+        return pluginPaths(in: elected).contains(extensionURL.resolvingSymlinksInPath().path)
+    }
+
+    static func recoverPlayback(root: URL) throws {
+        let store = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/com.apple.wallpaper/Store/Index.plist")
+        guard FileManager.default.fileExists(atPath: store.path) else { return }
+        guard let current = readBaseline(at: store) else {
+            throw NativeWallpaperError("The macOS wallpaper store could not be read safely.")
+        }
+        let executable = extensionURL.appendingPathComponent("Contents/MacOS/FluaWallpaperExtension")
+        func needsRecovery(_ data: Data) throws -> Bool {
+            try NativeWallpaperStore.containsProvider(identifier, in: data) && !isExecutableRunning(executable)
+        }
+        guard try needsRecovery(current) else { return }
+        if try !isRegistered() { try register() }
+        // Bundle replacement can stop the extension while the host still treats the wallpaper session as active.
+        try updateStore(root: root, reloadIfUnchanged: needsRecovery, transform: { $0 }, verify: { actual, expected in
+            NativeWallpaperStore.restorationMatches(expected, in: actual)
+        })
+    }
+
+    static func isExecutableRunning(_ executable: URL) throws -> Bool {
+        let path = executable.resolvingSymlinksInPath()
+        let scope = UInt32(PROC_UID_ONLY)
+        let size = proc_listpids(scope, getuid(), nil, 0)
+        guard size > 0 else { throw NativeWallpaperError("The running wallpaper provider could not be checked.") }
+        let stride = MemoryLayout<pid_t>.stride
+        var pids = [pid_t](repeating: 0, count: Int(size) / stride)
+        let bytes = proc_listpids(scope, getuid(), &pids, size)
+        guard bytes > 0 else { throw NativeWallpaperError("The running wallpaper provider could not be checked.") }
+        var buffer = [CChar](repeating: 0, count: 4 * Int(MAXPATHLEN))
+        return pids.prefix(Int(bytes) / stride).contains { pid in
+            guard pid > 0 else { return false }
+            let length = proc_pidpath(pid, &buffer, UInt32(buffer.count))
+            guard length > 0 else { return false }
+            let runningPath = FileManager.default.string(withFileSystemRepresentation: buffer, length: Int(length))
+            let running = URL(fileURLWithPath: runningPath)
+            return running.lastPathComponent == path.lastPathComponent && running.resolvingSymlinksInPath().path == path.path
+        }
+    }
+
     static func apply(_ assignments: [String: NativeWallpaperStore.Assignment], targeting displays: [String], mirrored: Bool, root: URL, reloadUnchanged: Bool = true, clearingUnassigned: Bool = false) throws {
         guard !assignments.isEmpty else {
             guard clearingUnassigned else { return }
@@ -68,10 +110,8 @@ enum NativeWallpaper {
             let baseline = readBaseline(at: baselineURL)
             let expected = try NativeWallpaperStore.replacing(assignments, displays: displays, provider: identifier,
                 mirrored: mirrored, in: current, baseline: baseline, clearingUnassigned: clearingUnassigned, spaceIDs: spaceIDs)
-            if NativeWallpaperStore.applicationMatches(assignments, mirrored: mirrored, expected: expected, in: current) {
-                let elected = try run("/usr/bin/pluginkit", ["-m", "-v", "-i", identifier], allowedStatuses: [0, 1])
-                if pluginPaths(in: elected).contains(extensionURL.resolvingSymlinksInPath().path) { return }
-            }
+            if NativeWallpaperStore.applicationMatches(assignments, mirrored: mirrored, expected: expected, in: current),
+               try isRegistered() { return }
         }
         try register()
         try updateStore(root: root, baselineDisplays: displays, transform: { current in
@@ -172,7 +212,7 @@ enum NativeWallpaper {
         return try? Data(contentsOf: url)
     }
 
-    private static func updateStore(root: URL, storeName: String = "Index.plist", baselineDisplays: [String]? = nil, transform: (Data) throws -> Data, verify: (Data, Data) -> Bool) throws {
+    private static func updateStore(root: URL, storeName: String = "Index.plist", baselineDisplays: [String]? = nil, reloadIfUnchanged: (Data) throws -> Bool = { _ in false }, transform: (Data) throws -> Data, verify: (Data, Data) -> Bool) throws {
         let store = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/com.apple.wallpaper/Store").appendingPathComponent(storeName)
         let lockURL = store.deletingLastPathComponent().appendingPathComponent(".flua-apply.lock")
         let lock = open(lockURL.path, O_CREAT | O_RDWR | O_CLOEXEC | O_NOFOLLOW, 0o600)
@@ -210,21 +250,25 @@ enum NativeWallpaper {
             try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
         }
         let updated = try transform(previous)
-        guard updated != previous else { return }
+        let changed = updated != previous
+        guard try changed || reloadIfUnchanged(previous) else { return }
         let backup = root.appendingPathComponent(storeName == "Index.plist" ? "NativeWallpaperBackup.plist" : "NativeWallpaperBackup-v2.plist")
-        try previous.write(to: backup, options: .atomic)
-        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: backup.path)
+        if changed {
+            try previous.write(to: backup, options: .atomic)
+            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: backup.path)
+        }
         guard process.isRunning else { throw NativeWallpaperError("Applying took too long. Your wallpaper was preserved; retry shortly.") }
-        try updated.write(to: store, options: .atomic)
+        if changed { try updated.write(to: store, options: .atomic) }
         try input.fileHandleForWriting.write(contentsOf: Data("k".utf8))
         process.waitUntilExit()
+        let location = changed ? " The previous settings are saved in \(backup.lastPathComponent) in your library." : ""
         guard process.terminationStatus == 0 else {
-            throw NativeWallpaperError("macOS could not reload the wallpaper. The previous settings are saved in \(backup.lastPathComponent) in your library.")
+            throw NativeWallpaperError("macOS could not reload the wallpaper." + location)
         }
         // The restarted host rewrites rejected stores after decoding them.
         Thread.sleep(forTimeInterval: 1)
         guard verify(try Data(contentsOf: store), updated) else {
-            throw NativeWallpaperError("macOS did not keep the selected wallpaper. The previous settings are saved in \(backup.lastPathComponent) in your library.")
+            throw NativeWallpaperError("macOS did not keep the selected wallpaper." + location)
         }
     }
     static func agentPID(_ status: String) -> pid_t? {

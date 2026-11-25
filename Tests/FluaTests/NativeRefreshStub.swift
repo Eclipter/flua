@@ -19,6 +19,8 @@ enum NativeWallpaper {
     static var item: ProviderCatalog.Item? { lock.lock(); defer { lock.unlock() }; return storedItem }
     static var completed: Bool { lock.lock(); defer { lock.unlock() }; return storedCompleted }
     static func hasStarted() -> Bool { started.wait(timeout: .now()) == .success }
+    static func recoverPlayback(root: URL) throws {}
+
     static func apply(_ assignments: [String: NativeWallpaperStore.Assignment], targeting displays: [String], mirrored: Bool, root: URL, reloadUnchanged: Bool = true, clearingUnassigned: Bool = false) throws {}
     static func stop(displays: [String], mirrored: Bool, root: URL) throws -> Bool { true }
     static func remove(root: URL) throws {}

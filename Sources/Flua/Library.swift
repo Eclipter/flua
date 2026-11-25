@@ -398,6 +398,16 @@ import UniformTypeIdentifiers
     private var nativeRoutingAvailable: Bool {
         systemPlaybackEnabled && NativeWallpaper.available && NativeWallpaper.catalogURL.resolvingSymlinksInPath() == disk.catalog.resolvingSymlinksInPath()
     }
+    func recoverNativeWallpaperOnLaunch() {
+        guard !saveBlocked, nativeRoutingAvailable, !nativeSetupBusy else { return }
+        let root = disk.root
+        nativeSetupBusy = true
+        Task { @MainActor in
+            defer { nativeSetupBusy = false }
+            do { try await Task.detached { try NativeWallpaper.recoverPlayback(root: root) }.value }
+            catch { self.error = error.localizedDescription }
+        }
+    }
     @MainActor private func restoreNativeAssignments(displays: [String]? = nil) {
         guard !saveBlocked, nativeRoutingAvailable else { return }
         let ids = state.nativeRestorationDisplays(connected: screens.map(displayID)).filter { displays?.contains($0) ?? true }

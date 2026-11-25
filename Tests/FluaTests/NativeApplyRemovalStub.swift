@@ -14,6 +14,8 @@ enum NativeWallpaper {
     static let started = DispatchSemaphore(value: 0)
     static let release = DispatchSemaphore(value: 0)
     static func hasStarted() -> Bool { started.wait(timeout: .now()) == .success }
+    static func recoverPlayback(root: URL) throws {}
+
     static func apply(_ assignments: [String: NativeWallpaperStore.Assignment], targeting displays: [String], mirrored: Bool, root: URL, reloadUnchanged: Bool = true, clearingUnassigned: Bool = false) throws {
         started.signal()
         release.wait()

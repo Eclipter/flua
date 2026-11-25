@@ -536,6 +536,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         AppContext.library.applyPresence()
     }
     func applicationDidFinishLaunching(_ notification: Notification) {
+        AppContext.library.recoverNativeWallpaperOnLaunch()
         SparkleUpdateManager.startIfEligible(arguments: ProcessInfo.processInfo.arguments)
         for menu in NSApp.mainMenu?.items.compactMap(\.submenu) ?? [] {
             configureFullscreenShortcut(in: menu)
